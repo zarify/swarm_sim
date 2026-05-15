@@ -9,11 +9,10 @@ import {
 } from '../runtime/programLoader';
 import type {
   MicrobitRuntimeAdapter,
-  MicroPythonRuntimeProgram,
   RuntimeAdapterEvent,
   RuntimeRadioPacket,
 } from '../runtime/runtimeAdapter';
-import type { DeviceRadioState, DeviceRuntimeState } from '../simulation/simulationEngine';
+import type { DeviceRuntimeState } from '../simulation/simulationEngine';
 
 export const MICRO_PYTHON_SIMULATOR_URL =
   'https://python-simulator.usermbit.org/v/0.1/simulator.html?color=%23b7ff4a';
@@ -34,10 +33,6 @@ interface MicroPythonRuntimeHostProps {
     type: Extract<RuntimeAdapterEvent['type'], 'serial-output' | 'internal-error'>,
     message: string,
   ) => void;
-  onRuntimeRadioConfig?: (
-    deviceId: DeviceId,
-    radio: Partial<Pick<DeviceRadioState, 'group' | 'channel' | 'signalStrength'>>,
-  ) => void;
   onLoadResultsChange?: (results: DeviceProgramLoadResult[]) => void;
   loadPrograms?: RuntimeLoadPrograms;
   createAdapter?: (
@@ -54,7 +49,6 @@ export function MicroPythonRuntimeHost({
   scenarioResetSignal = 0,
   onRadioPacket,
   onRuntimeLog,
-  onRuntimeRadioConfig,
   onLoadResultsChange,
   loadPrograms = loadProjectRuntimePrograms,
   createAdapter = createMicroPythonIframeAdapter,
@@ -69,7 +63,7 @@ export function MicroPythonRuntimeHost({
   const lastSensorValues = useRef(new Map<DeviceId, string>());
   const scenarioResetRef = useRef(scenarioResetSignal);
   const loadRequestId = useRef(0);
-  const callbacks = useRef({ onRadioPacket, onRuntimeLog, onRuntimeRadioConfig });
+  const callbacks = useRef({ onRadioPacket, onRuntimeLog });
   const [readyDeviceIds, setReadyDeviceIds] = useState<Set<DeviceId>>(() => new Set());
 
   useEffect(() => {
@@ -77,8 +71,8 @@ export function MicroPythonRuntimeHost({
   }, [loadResults, onLoadResultsChange]);
 
   useEffect(() => {
-    callbacks.current = { onRadioPacket, onRuntimeLog, onRuntimeRadioConfig };
-  }, [onRadioPacket, onRuntimeLog, onRuntimeRadioConfig]);
+    callbacks.current = { onRadioPacket, onRuntimeLog };
+  }, [onRadioPacket, onRuntimeLog]);
 
   useEffect(() => () => disposeAdapters(adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current), []);
 
@@ -285,15 +279,6 @@ export function MicroPythonRuntimeHost({
         ...current.filter((result) => !resultDeviceIds.has(result.deviceId)),
         ...results,
       ]);
-      for (const result of results) {
-        if (result.status !== 'prepared' || result.program?.source !== 'micropython') {
-          continue;
-        }
-        const radioConfig = extractMicroPythonRadioConfig(result.program);
-        if (Object.keys(radioConfig).length > 0) {
-          callbacks.current.onRuntimeRadioConfig?.(result.deviceId, radioConfig);
-        }
-      }
     } catch (error) {
       if (loadRequestId.current !== requestId) {
         disposeRequestAdapters(requestAdapters, adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current);
@@ -475,33 +460,6 @@ function normalizeDeferredFlashResults(results: DeviceProgramLoadResult[]): Devi
         }
       : result,
   );
-}
-
-function extractMicroPythonRadioConfig(
-  program: MicroPythonRuntimeProgram,
-): Partial<Pick<DeviceRadioState, 'group' | 'channel' | 'signalStrength'>> {
-  const main = program.filesystem['main.py'];
-  if (!main) {
-    return {};
-  }
-
-  const source = new TextDecoder().decode(main);
-  const config: Partial<Pick<DeviceRadioState, 'group' | 'channel' | 'signalStrength'>> = {};
-  for (const match of source.matchAll(/radio\s*\.\s*config\s*\(([^)]*)\)/g)) {
-    const args = match[1] ?? '';
-    for (const arg of args.matchAll(/\b(group|channel|power)\s*=\s*(\d+)\b/g)) {
-      const value = Number(arg[2]);
-      if (arg[1] === 'group') {
-        config.group = value;
-      } else if (arg[1] === 'channel') {
-        config.channel = value;
-      } else {
-        config.signalStrength = value;
-      }
-    }
-  }
-
-  return config;
 }
 
 function disposeAdapters(

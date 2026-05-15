@@ -30,14 +30,12 @@ describe('MicroPythonRuntimeHost', () => {
 
   it('loads prepared MicroPython programs through iframe-backed adapters', async () => {
     const flashed: RuntimeProgram[] = [];
-    const radioConfigs: string[] = [];
 
     render(
       <MicroPythonRuntimeHost
         project={makeProject()}
         onRadioPacket={() => []}
         onRuntimeLog={() => {}}
-        onRuntimeRadioConfig={(deviceId, radio) => radioConfigs.push(`${deviceId}:${radio.group ?? 'none'}`)}
         loadPrograms={async (_project, options) => {
           const adapter = await options.createAdapter?.({
             device: makeProject().devices[0]!,
@@ -68,10 +66,9 @@ describe('MicroPythonRuntimeHost', () => {
     dispatchReadyFor('MicroPython simulator for Alpha');
 
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
-
     await waitFor(() => expect(screen.getByText(/prepared/)).toBeInTheDocument());
     expect(flashed).toHaveLength(1);
-    expect(radioConfigs).toEqual([]);
+    expect(flashed).toHaveLength(1);
   });
 
   it('keeps loading disabled until the simulator posts its ready handshake', () => {
@@ -221,28 +218,6 @@ describe('MicroPythonRuntimeHost', () => {
     await waitFor(() =>
       expect(sensorValues).toEqual(['lightLevel:17', 'soundLevel:23', 'lightLevel:81', 'soundLevel:5']),
     );
-  });
-
-  it('reports statically declared MicroPython radio group metadata after preparation', async () => {
-    const radioConfigs: string[] = [];
-    render(
-      <MicroPythonRuntimeHost
-        project={makeProject()}
-        selectedDeviceId="device-alpha"
-        onRadioPacket={() => []}
-        onRuntimeLog={() => {}}
-        onRuntimeRadioConfig={(deviceId, radio) =>
-          radioConfigs.push(`${deviceId}:${radio.group}:${radio.channel ?? 'default'}:${radio.signalStrength ?? 'default'}`)
-        }
-        loadPrograms={loadTargetProjectDevices}
-        createAdapter={() => makeAdapter([], true)}
-      />,
-    );
-    dispatchReadyFor('MicroPython simulator for Alpha');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
-
-    await waitFor(() => expect(radioConfigs).toEqual(['device-alpha:42:default:default']));
   });
 
   it('disposes adapter listeners when MicroPython devices are removed from the runtime set', async () => {

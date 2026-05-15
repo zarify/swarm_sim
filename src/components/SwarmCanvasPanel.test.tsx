@@ -36,6 +36,9 @@ describe('SwarmCanvasPanel', () => {
     render(<SwarmCanvasPanel />);
 
     expect(screen.queryByRole('button', { name: /Press A|Press B|Send ping/ })).not.toBeInTheDocument();
+    expect(screen.getByText('Runtime group')).toBeInTheDocument();
+    expect(screen.getByText('Runtime channel')).toBeInTheDocument();
+    expect(screen.getAllByText('Not exposed')).toHaveLength(2);
     expect(screen.getByLabelText('Event log for Alpha')).not.toHaveAttribute('open');
     expect(screen.getByLabelText('Radio message inspector')).not.toHaveAttribute('open');
   });

@@ -18,10 +18,8 @@ import {
   resumeSimulation,
   resetSimulation,
   routeRadioPacket,
-  setDeviceRadioConfig,
   startSimulation,
   type DeviceRuntimeState,
-  type DeviceRadioState,
   type SimulationState,
   type SimulationMode,
 } from '../simulation/simulationEngine';
@@ -252,16 +250,6 @@ export function SwarmCanvasPanel() {
       modelRef.current = next;
       return next;
     });
-  }
-
-  function handleRuntimeRadioConfig(
-    deviceId: DeviceId,
-    radio: Partial<Pick<DeviceRadioState, 'group' | 'channel' | 'signalStrength'>>,
-  ) {
-    setModel((current) => ({
-      ...current,
-      simulationState: setDeviceRadioConfig(current.simulationState, deviceId, radio),
-    }));
   }
 
   function updateDragPosition(clientX: number, clientY: number) {
@@ -511,7 +499,6 @@ export function SwarmCanvasPanel() {
             scenarioResetSignal={scenarioResetSignal}
             onRadioPacket={handleRuntimeRadioPacket}
             onRuntimeLog={handleRuntimeLog}
-            onRuntimeRadioConfig={handleRuntimeRadioConfig}
             onLoadResultsChange={setRuntimeLoadResults}
           />
 
@@ -607,12 +594,12 @@ function DeviceSelection({
         <>
           <dl className="radio-summary">
             <div>
-              <dt>Route group</dt>
-              <dd>{runtime.radio.group}</dd>
+              <dt>Runtime group</dt>
+              <dd>Not exposed</dd>
             </div>
             <div>
-              <dt>Route channel</dt>
-              <dd>{runtime.radio.channel}</dd>
+              <dt>Runtime channel</dt>
+              <dd>Not exposed</dd>
             </div>
             <div>
               <dt>Range</dt>
