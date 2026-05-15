@@ -22,6 +22,7 @@ The spike records the current technical position:
 - The app accepts `.hex` metadata for spike evaluation only; real execution remains blocked until byte-level adapter checks can distinguish MakeCode/MicroPython artifacts and prove the required hooks.
 - The runtime contract includes an explicit `runtimeSource` field so a future byte-level adapter can report `makecode-pxt` or `micropython` without relying on filenames.
 - Package availability reinforces the split: `pxt-microbit` and `pxt-core` are published on npm, while `microbit-micropython-js` is not available as an npm package.
+- Fixture-backed detection now parses Intel HEX data records and classifies the provided `hex_files/mc_beacon.hex` as `makecode-pxt` and `hex_files/mp_beacon.hex` as `micropython`; both remain non-executable until a runtime adapter proves radio/display hooks.
 
 ## Design direction
 

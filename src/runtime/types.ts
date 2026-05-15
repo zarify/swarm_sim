@@ -12,7 +12,9 @@ export interface RuntimeCapability {
 export interface RuntimeReadiness {
   artifactKind: ArtifactKind;
   runtimeSource: RuntimeSource;
+  sourceEvidence: string[];
   canExecuteNow: boolean;
   verdict: string;
   capabilities: RuntimeCapability[];
+  diagnostic?: string;
 }
