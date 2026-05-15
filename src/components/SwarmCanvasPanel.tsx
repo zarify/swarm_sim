@@ -18,9 +18,10 @@ import {
   resumeSimulation,
   resetSimulation,
   routeRadioPacket,
-  setDeviceButton,
+  setDeviceRadioConfig,
   startSimulation,
   type DeviceRuntimeState,
+  type DeviceRadioState,
   type SimulationState,
   type SimulationMode,
 } from '../simulation/simulationEngine';
@@ -56,6 +57,7 @@ export function SwarmCanvasPanel() {
   const [showRadioRange, setShowRadioRange] = useState(true);
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
   const [runtimeLoadResults, setRuntimeLoadResults] = useState<DeviceProgramLoadResult[]>([]);
+  const [scenarioResetSignal, setScenarioResetSignal] = useState(0);
   const [artifactUploadErrors, setArtifactUploadErrors] = useState<Record<DeviceId, string>>({});
   const svgRef = useRef<SVGSVGElement | null>(null);
   const modelRef = useRef(model);
@@ -79,6 +81,10 @@ export function SwarmCanvasPanel() {
   }, [model]);
 
   function setSimulationMode(nextMode: SimulationMode) {
+    if (nextMode === 'idle') {
+      setScenarioResetSignal((current) => current + 1);
+    }
+
     setModel((current) => {
       if (nextMode === 'idle') {
         return {
@@ -159,30 +165,6 @@ export function SwarmCanvasPanel() {
       environmentSources: current.environmentSources.map((source) =>
         source.id === sourceId ? { ...source, ...patch } : source,
       ),
-    }));
-  }
-
-  function sendPingFromSelected() {
-    if (selected.type !== 'device') {
-      return;
-    }
-
-    setModel((current) => ({
-      ...current,
-      simulationState: routeRadioPacket(current.simulationState, selected.id, {
-        data: new TextEncoder().encode('ping'),
-      }),
-    }));
-  }
-
-  function setSelectedDeviceButton(button: 'A' | 'B', pressed: boolean) {
-    if (selected.type !== 'device') {
-      return;
-    }
-
-    setModel((current) => ({
-      ...current,
-      simulationState: setDeviceButton(current.simulationState, selected.id, button, pressed),
     }));
   }
 
@@ -270,6 +252,16 @@ export function SwarmCanvasPanel() {
       modelRef.current = next;
       return next;
     });
+  }
+
+  function handleRuntimeRadioConfig(
+    deviceId: DeviceId,
+    radio: Partial<Pick<DeviceRadioState, 'group' | 'channel' | 'signalStrength'>>,
+  ) {
+    setModel((current) => ({
+      ...current,
+      simulationState: setDeviceRadioConfig(current.simulationState, deviceId, radio),
+    }));
   }
 
   function updateDragPosition(clientX: number, clientY: number) {
@@ -388,6 +380,28 @@ export function SwarmCanvasPanel() {
               })}
 
             {project.environmentSources.map((source) => (
+              <circle
+                key={`${source.id}-radius`}
+                className={`source-radius source-radius--${source.type}`}
+                cx={source.position.x}
+                cy={source.position.y}
+                r={source.radius}
+              />
+            ))}
+
+            {showRadioRange
+              ? Object.values(simulationState.devices).map((device) => (
+                  <circle
+                    key={`${device.deviceId}-radius`}
+                    className="radio-radius"
+                    cx={device.position.x}
+                    cy={device.position.y}
+                    r={device.radio.rangeRadius}
+                  />
+                ))
+              : null}
+
+            {project.environmentSources.map((source) => (
               <g
                 key={source.id}
                 className={`source-node source-node--${source.type}`}
@@ -398,7 +412,6 @@ export function SwarmCanvasPanel() {
                   setDragTarget({ type: 'source', id: source.id });
                 }}
               >
-                <circle className="source-radius" r={source.radius} />
                 <circle className="source-core" r="16" />
                 <text y="5" textAnchor="middle">
                   {source.type === 'light' ? 'L' : 'S'}
@@ -419,9 +432,6 @@ export function SwarmCanvasPanel() {
                     setDragTarget({ type: 'device', id: device.deviceId });
                   }}
                 >
-                  {showRadioRange ? (
-                    <circle className="radio-radius" r={device.radio.rangeRadius} />
-                  ) : null}
                   <rect className="microbit-body" x="-34" y="-24" width="68" height="48" rx="12" />
                   <circle className="button-dot" cx="-23" cy="-1" r="5" />
                   <circle className="button-dot" cx="23" cy="-1" r="5" />
@@ -485,15 +495,6 @@ export function SwarmCanvasPanel() {
                   uploadError={artifactUploadErrors[selectedDevice.id]}
                   logs={simulationState.deviceLogs.filter((log) => log.deviceId === selectedDevice.id)}
                   onArtifactUpload={uploadArtifactForDevice}
-                  onButtonChange={setSelectedDeviceButton}
-                  onSendPing={sendPingFromSelected}
-                />
-                <MicroPythonRuntimeHost
-                  project={project}
-                  selectedDeviceId={selectedDevice.id}
-                  onRadioPacket={handleRuntimeRadioPacket}
-                  onRuntimeLog={handleRuntimeLog}
-                  onLoadResultsChange={setRuntimeLoadResults}
                 />
               </>
             ) : selectedSource ? (
@@ -502,6 +503,17 @@ export function SwarmCanvasPanel() {
               <p className="hint">Select a node or environmental source.</p>
             )}
           </div>
+
+          <MicroPythonRuntimeHost
+            project={project}
+            selectedDeviceId={selectedDevice?.id}
+            deviceRuntimeStates={simulationState.devices}
+            scenarioResetSignal={scenarioResetSignal}
+            onRadioPacket={handleRuntimeRadioPacket}
+            onRuntimeLog={handleRuntimeLog}
+            onRuntimeRadioConfig={handleRuntimeRadioConfig}
+            onLoadResultsChange={setRuntimeLoadResults}
+          />
 
           <div className="telemetry-card" aria-live="polite">
             <span className="metric-label">Engine telemetry</span>
@@ -512,25 +524,30 @@ export function SwarmCanvasPanel() {
             </p>
           </div>
 
-          <div className="radio-inspector-card" aria-label="Radio message inspector">
-            <span className="metric-label">Radio inspector</span>
-            {simulationState.radioEvents.length === 0 ? (
-              <p className="hint">No packets sent yet.</p>
-            ) : (
-              simulationState.radioEvents
-                .slice(-4)
-                .reverse()
-                .map((event) => (
-                  <article key={event.id} className="radio-event">
-                    <strong>{new TextDecoder().decode(event.data)}</strong>
-                    <p>
-                      {event.senderId} to {event.recipients.length} received /{' '}
-                      {event.blockedTargets.length} blocked
-                    </p>
-                  </article>
-                ))
-            )}
-          </div>
+          <details className="radio-inspector-card compact-inspector" aria-label="Radio message inspector">
+            <summary>
+              <span className="metric-label">Radio inspector</span>
+              <strong>{simulationState.radioEvents.length}</strong>
+            </summary>
+            <div className="compact-inspector__body">
+              {simulationState.radioEvents.length === 0 ? (
+                <p className="hint">No packets sent yet.</p>
+              ) : (
+                simulationState.radioEvents
+                  .slice(-6)
+                  .reverse()
+                  .map((event) => (
+                    <article key={event.id} className="radio-event">
+                      <strong>{decodePacketPreview(event.data)}</strong>
+                      <p>
+                        {event.senderId} to {event.recipients.length} received /{' '}
+                        {event.blockedTargets.length} blocked
+                      </p>
+                    </article>
+                  ))
+              )}
+            </div>
+          </details>
         </aside>
       </div>
     </section>
@@ -545,8 +562,6 @@ function DeviceSelection({
   uploadError,
   logs,
   onArtifactUpload,
-  onButtonChange,
-  onSendPing,
 }: {
   project: SwarmProject;
   deviceId: DeviceId;
@@ -555,8 +570,6 @@ function DeviceSelection({
   uploadError?: string;
   logs: SimulationState['deviceLogs'];
   onArtifactUpload: (deviceId: DeviceId, file: File) => void;
-  onButtonChange: (button: 'A' | 'B', pressed: boolean) => void;
-  onSendPing: () => void;
 }) {
   const device = project.devices.find((candidate) => candidate.id === deviceId);
   if (!device) {
@@ -594,11 +607,11 @@ function DeviceSelection({
         <>
           <dl className="radio-summary">
             <div>
-              <dt>Group</dt>
+              <dt>Route group</dt>
               <dd>{runtime.radio.group}</dd>
             </div>
             <div>
-              <dt>Channel</dt>
+              <dt>Route channel</dt>
               <dd>{runtime.radio.channel}</dd>
             </div>
             <div>
@@ -614,39 +627,28 @@ function DeviceSelection({
               <dd>{runtime.sensors.soundLevel}</dd>
             </div>
           </dl>
-          <div className="button-controls" aria-label={`Button controls for ${device.name}`}>
-            {(['A', 'B'] as const).map((button) => (
-              <button
-                key={button}
-                type="button"
-                onPointerDown={() => onButtonChange(button, true)}
-                onPointerUp={() => onButtonChange(button, false)}
-                onPointerCancel={() => onButtonChange(button, false)}
-              >
-                {runtime.buttons[button] ? `Release ${button}` : `Press ${button}`}
-              </button>
-            ))}
-          </div>
-          <button type="button" onClick={onSendPing}>
-            Send ping
-          </button>
         </>
       ) : null}
-      <div className="device-log" aria-label={`Event log for ${device.name}`}>
-        <span className="metric-label">Device log</span>
-        {logs.length === 0 ? (
-          <p className="hint">No device events yet.</p>
-        ) : (
-          logs
-            .slice(-5)
-            .reverse()
-            .map((log) => (
-              <p key={log.id}>
-                <strong>{log.type}</strong> {log.message}
-              </p>
-            ))
-        )}
-      </div>
+      <details className="device-log compact-inspector" aria-label={`Event log for ${device.name}`}>
+        <summary>
+          <span className="metric-label">Device log</span>
+          <strong>{logs.length}</strong>
+        </summary>
+        <div className="compact-inspector__body">
+          {logs.length === 0 ? (
+            <p className="hint">No device events yet.</p>
+          ) : (
+            logs
+              .slice(-6)
+              .reverse()
+              .map((log) => (
+                <p key={log.id}>
+                  <strong>{log.type}</strong> {log.message}
+                </p>
+              ))
+          )}
+        </div>
+      </details>
     </>
   );
 }
@@ -709,6 +711,18 @@ function createDemoProject(): SwarmProject {
 
 function artifactName(project: SwarmProject, artifactId: string): string {
   return project.artifacts.find((artifact) => artifact.id === artifactId)?.name ?? artifactId;
+}
+
+function decodePacketPreview(data: Uint8Array): string {
+  if (data[0] === 0x01 && data[1] === 0x00 && data[2] === 0x01) {
+    const microPythonString = new TextDecoder().decode(data.subarray(3));
+    if (microPythonString.trim() !== '') {
+      return microPythonString;
+    }
+  }
+
+  const decoded = new TextDecoder().decode(data);
+  return decoded.trim() === '' ? `${data.byteLength} byte packet` : decoded;
 }
 
 function makeArtifactId(deviceId: DeviceId, filename: string, timestamp: string): string {

@@ -9,9 +9,11 @@ import {
 } from '../runtime/programLoader';
 import type {
   MicrobitRuntimeAdapter,
+  MicroPythonRuntimeProgram,
   RuntimeAdapterEvent,
   RuntimeRadioPacket,
 } from '../runtime/runtimeAdapter';
+import type { DeviceRadioState, DeviceRuntimeState } from '../simulation/simulationEngine';
 
 export const MICRO_PYTHON_SIMULATOR_URL =
   'https://python-simulator.usermbit.org/v/0.1/simulator.html?color=%23b7ff4a';
@@ -24,11 +26,17 @@ type RuntimeLoadPrograms = (
 interface MicroPythonRuntimeHostProps {
   project: SwarmProject;
   selectedDeviceId?: DeviceId;
+  deviceRuntimeStates?: Record<DeviceId, DeviceRuntimeState>;
+  scenarioResetSignal?: number;
   onRadioPacket: (deviceId: DeviceId, packet: RuntimeRadioPacket) => DeviceId[];
   onRuntimeLog: (
     deviceId: DeviceId,
     type: Extract<RuntimeAdapterEvent['type'], 'serial-output' | 'internal-error'>,
     message: string,
+  ) => void;
+  onRuntimeRadioConfig?: (
+    deviceId: DeviceId,
+    radio: Partial<Pick<DeviceRadioState, 'group' | 'channel' | 'signalStrength'>>,
   ) => void;
   onLoadResultsChange?: (results: DeviceProgramLoadResult[]) => void;
   loadPrograms?: RuntimeLoadPrograms;
@@ -42,8 +50,11 @@ interface MicroPythonRuntimeHostProps {
 export function MicroPythonRuntimeHost({
   project,
   selectedDeviceId,
+  deviceRuntimeStates,
+  scenarioResetSignal = 0,
   onRadioPacket,
   onRuntimeLog,
+  onRuntimeRadioConfig,
   onLoadResultsChange,
   loadPrograms = loadProjectRuntimePrograms,
   createAdapter = createMicroPythonIframeAdapter,
@@ -55,8 +66,10 @@ export function MicroPythonRuntimeHost({
   const adapters = useRef(new Map<DeviceId, MicrobitRuntimeAdapter>());
   const adapterArtifactIds = useRef(new Map<DeviceId, string>());
   const adapterUnsubscribes = useRef(new Map<DeviceId, () => void>());
+  const lastSensorValues = useRef(new Map<DeviceId, string>());
+  const scenarioResetRef = useRef(scenarioResetSignal);
   const loadRequestId = useRef(0);
-  const callbacks = useRef({ onRadioPacket, onRuntimeLog });
+  const callbacks = useRef({ onRadioPacket, onRuntimeLog, onRuntimeRadioConfig });
   const [readyDeviceIds, setReadyDeviceIds] = useState<Set<DeviceId>>(() => new Set());
 
   useEffect(() => {
@@ -64,34 +77,27 @@ export function MicroPythonRuntimeHost({
   }, [loadResults, onLoadResultsChange]);
 
   useEffect(() => {
-    callbacks.current = { onRadioPacket, onRuntimeLog };
-  }, [onRadioPacket, onRuntimeLog]);
+    callbacks.current = { onRadioPacket, onRuntimeLog, onRuntimeRadioConfig };
+  }, [onRadioPacket, onRuntimeLog, onRuntimeRadioConfig]);
 
   useEffect(() => () => disposeAdapters(adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current), []);
 
   const devices = useMemo(
     () =>
       project.devices.filter((device) => {
-        if (selectedDeviceId && device.id !== selectedDeviceId) {
-          return false;
-        }
-        const artifact = project.artifacts.find(
-          (candidate) => candidate.id === device.programArtifactId,
-        );
+        const artifact = project.artifacts.find((candidate) => candidate.id === device.programArtifactId);
         return artifact?.runtimeSource === 'micropython';
       }),
-    [project, selectedDeviceId],
+    [project],
   );
 
+  const selectedRuntimeDevice = devices.find((device) => device.id === selectedDeviceId);
+
+  const loadTargetDevices = selectedRuntimeDevice ? [selectedRuntimeDevice] : devices;
+
   const runtimeProject = useMemo(
-    () => ({
-      ...project,
-      devices,
-      artifacts: project.artifacts.filter((artifact) =>
-        devices.some((device) => device.programArtifactId === artifact.id),
-      ),
-    }),
-    [devices, project],
+    () => makeRuntimeProject(project, loadTargetDevices),
+    [loadTargetDevices, project],
   );
 
   useEffect(() => {
@@ -108,6 +114,7 @@ export function MicroPythonRuntimeHost({
           deviceId,
           adapter,
         );
+        lastSensorValues.current.delete(deviceId);
       }
     }
     setReadyDeviceIds((current) => {
@@ -119,6 +126,45 @@ export function MicroPythonRuntimeHost({
       current.filter((result) => activeArtifactIds.get(result.deviceId) === result.artifactId),
     );
   }, [devices]);
+
+  useEffect(() => {
+    if (!deviceRuntimeStates) {
+      return;
+    }
+
+    for (const [deviceId, adapter] of adapters.current.entries()) {
+      const runtime = deviceRuntimeStates[deviceId];
+      if (!runtime) {
+        continue;
+      }
+
+      const sensorKey = `${runtime.sensors.lightLevel}:${runtime.sensors.soundLevel}`;
+      if (lastSensorValues.current.get(deviceId) === sensorKey) {
+        continue;
+      }
+
+      lastSensorValues.current.set(deviceId, sensorKey);
+      void Promise.all([
+        adapter.setSensor('lightLevel', runtime.sensors.lightLevel),
+        adapter.setSensor('soundLevel', runtime.sensors.soundLevel),
+      ]).catch((error: unknown) => {
+        callbacks.current.onRuntimeLog(
+          deviceId,
+          'internal-error',
+          error instanceof Error ? error.message : 'Unable to update MicroPython simulator sensors',
+        );
+      });
+    }
+  }, [deviceRuntimeStates, loadResults]);
+
+  useEffect(() => {
+    if (scenarioResetRef.current === scenarioResetSignal) {
+      return;
+    }
+
+    scenarioResetRef.current = scenarioResetSignal;
+    resetRuntimeAdapters([...adapters.current.keys()], 'scenario reset');
+  }, [scenarioResetSignal]);
 
   useEffect(() => {
     function handleReadyMessage(event: MessageEvent) {
@@ -188,10 +234,15 @@ export function MicroPythonRuntimeHost({
     const requestId = loadRequestId.current + 1;
     loadRequestId.current = requestId;
     setIsLoading(true);
-    disposeAdapters(adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current);
-    adapters.current.clear();
-    adapterUnsubscribes.current.clear();
-    adapterArtifactIds.current.clear();
+    for (const device of loadTargetDevices) {
+      disposeAdapterForDevice(
+        adapters.current,
+        adapterUnsubscribes.current,
+        adapterArtifactIds.current,
+        device.id,
+      );
+      lastSensorValues.current.delete(device.id);
+    }
     const requestAdapters: { deviceId: DeviceId; adapter: MicrobitRuntimeAdapter }[] = [];
 
     try {
@@ -229,26 +280,61 @@ export function MicroPythonRuntimeHost({
         return;
       }
 
-      setLoadResults(results);
+      const resultDeviceIds = new Set(results.map((result) => result.deviceId));
+      setLoadResults((current) => [
+        ...current.filter((result) => !resultDeviceIds.has(result.deviceId)),
+        ...results,
+      ]);
+      for (const result of results) {
+        if (result.status !== 'prepared' || result.program?.source !== 'micropython') {
+          continue;
+        }
+        const radioConfig = extractMicroPythonRadioConfig(result.program);
+        if (Object.keys(radioConfig).length > 0) {
+          callbacks.current.onRuntimeRadioConfig?.(result.deviceId, radioConfig);
+        }
+      }
     } catch (error) {
       if (loadRequestId.current !== requestId) {
         disposeRequestAdapters(requestAdapters, adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current);
         return;
       }
       const diagnostic = error instanceof Error ? error.message : 'Unable to load MicroPython runtimes';
-      const results: DeviceProgramLoadResult[] = devices.map((device) => ({
+      const results: DeviceProgramLoadResult[] = loadTargetDevices.map((device) => ({
         deviceId: device.id,
         artifactId: device.programArtifactId,
         status: 'failed',
         runtimeSource: 'micropython',
         diagnostic,
       }));
-      setLoadResults(results);
+      const resultDeviceIds = new Set(results.map((result) => result.deviceId));
+      setLoadResults((current) => [
+        ...current.filter((result) => !resultDeviceIds.has(result.deviceId)),
+        ...results,
+      ]);
     } finally {
       if (loadRequestId.current === requestId) {
         setIsLoading(false);
       }
     }
+  }
+
+  function resetRuntimeAdapters(deviceIds: DeviceId[], actionLabel: string) {
+    void Promise.all(
+      deviceIds.map(async (deviceId) => {
+        const adapter = adapters.current.get(deviceId);
+        if (!adapter) {
+          return;
+        }
+        await adapter.reset();
+      }),
+    ).catch((error: unknown) => {
+      callbacks.current.onRuntimeLog(
+        deviceIds[0] ?? 'runtime',
+        'internal-error',
+        error instanceof Error ? error.message : `Unable to complete ${actionLabel}`,
+      );
+    });
   }
 
   function handleRuntimeEvent(deviceId: DeviceId, event: RuntimeAdapterEvent) {
@@ -278,6 +364,12 @@ export function MicroPythonRuntimeHost({
   }
 
   const readyFrames = devices.filter((device) => readyDeviceIds.has(device.id)).length;
+  const targetReadyFrames = loadTargetDevices.filter((device) => readyDeviceIds.has(device.id)).length;
+  const preparedDeviceIds = new Set(adapters.current.keys());
+  const selectedPrepared = selectedDeviceId ? preparedDeviceIds.has(selectedDeviceId) : false;
+  const hasPreparedRuntime = preparedDeviceIds.size > 0;
+  const canPrepareTarget =
+    loadTargetDevices.length > 0 && targetReadyFrames === loadTargetDevices.length;
 
   return (
     <div className="runtime-host-card" aria-label="MicroPython runtime host">
@@ -293,13 +385,35 @@ export function MicroPythonRuntimeHost({
           frame after preparing the runtime.
         </p>
       </div>
-      <button
-        type="button"
-        onClick={loadRuntimes}
-        disabled={isLoading || devices.length === 0 || readyFrames !== devices.length}
-      >
-        {isLoading ? 'Preparing runtime...' : devices.length === 1 ? 'Prepare runtime' : 'Prepare runtimes'}
-      </button>
+      <div className="runtime-host-actions">
+        <button
+          type="button"
+          onClick={loadRuntimes}
+          disabled={isLoading || !canPrepareTarget}
+        >
+          {isLoading
+            ? 'Preparing runtime...'
+            : selectedRuntimeDevice
+              ? 'Prepare runtime'
+              : devices.length === 1
+                ? 'Prepare runtime'
+                : 'Prepare all runtimes'}
+        </button>
+        <button
+          type="button"
+          onClick={() => selectedDeviceId && resetRuntimeAdapters([selectedDeviceId], 'device reset')}
+          disabled={!selectedPrepared}
+        >
+          Reset selected runtime
+        </button>
+        <button
+          type="button"
+          onClick={() => resetRuntimeAdapters([...preparedDeviceIds], 'runtime reset')}
+          disabled={!hasPreparedRuntime}
+        >
+          Reset all runtimes
+        </button>
+      </div>
       <div className="runtime-frame-grid" data-frame-version={frameVersion}>
         {devices.map((device) => (
           <iframe
@@ -324,6 +438,15 @@ export function MicroPythonRuntimeHost({
       ) : null}
     </div>
   );
+}
+
+function makeRuntimeProject(project: SwarmProject, devices: SwarmProject['devices']): SwarmProject {
+  const artifactIds = new Set(devices.map((device) => device.programArtifactId).filter(Boolean));
+  return {
+    ...project,
+    devices,
+    artifacts: project.artifacts.filter((artifact) => artifactIds.has(artifact.id)),
+  };
 }
 
 function createMicroPythonIframeAdapter(
@@ -352,6 +475,33 @@ function normalizeDeferredFlashResults(results: DeviceProgramLoadResult[]): Devi
         }
       : result,
   );
+}
+
+function extractMicroPythonRadioConfig(
+  program: MicroPythonRuntimeProgram,
+): Partial<Pick<DeviceRadioState, 'group' | 'channel' | 'signalStrength'>> {
+  const main = program.filesystem['main.py'];
+  if (!main) {
+    return {};
+  }
+
+  const source = new TextDecoder().decode(main);
+  const config: Partial<Pick<DeviceRadioState, 'group' | 'channel' | 'signalStrength'>> = {};
+  for (const match of source.matchAll(/radio\s*\.\s*config\s*\(([^)]*)\)/g)) {
+    const args = match[1] ?? '';
+    for (const arg of args.matchAll(/\b(group|channel|power)\s*=\s*(\d+)\b/g)) {
+      const value = Number(arg[2]);
+      if (arg[1] === 'group') {
+        config.group = value;
+      } else if (arg[1] === 'channel') {
+        config.channel = value;
+      } else {
+        config.signalStrength = value;
+      }
+    }
+  }
+
+  return config;
 }
 
 function disposeAdapters(

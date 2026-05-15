@@ -32,17 +32,12 @@ describe('SwarmCanvasPanel', () => {
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(3);
   });
 
-  it('shows selected-device controls, logs, and radio inspector events', () => {
+  it('keeps device interaction honest and inspection panels compact', () => {
     render(<SwarmCanvasPanel />);
 
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Press A' }));
-    expect(screen.getByRole('button', { name: 'Release A' })).toBeInTheDocument();
-    expect(screen.getByText(/Button A pressed/)).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Send ping' }));
-
-    expect(screen.getByText('ping')).toBeInTheDocument();
-    expect(screen.getByText(/device-alpha to 0 received/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Press A|Press B|Send ping/ })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Event log for Alpha')).not.toHaveAttribute('open');
+    expect(screen.getByLabelText('Radio message inspector')).not.toHaveAttribute('open');
   });
 
   it('assigns uploaded code to the selected device and then shows its MicroPython runtime frame', async () => {
@@ -74,14 +69,13 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.queryByText('Assigned: slow.hex')).not.toBeInTheDocument();
   });
 
-  it('preserves logs and radio inspector history when topology changes', () => {
+  it('keeps runtime host mounted when topology changes', () => {
     render(<SwarmCanvasPanel />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Send ping' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
 
     expect(screen.getByText(/2 nodes \//)).toBeInTheDocument();
-    expect(screen.getByText('ping')).toBeInTheDocument();
+    expect(screen.getByLabelText('MicroPython runtime host')).toBeInTheDocument();
   });
 });
 

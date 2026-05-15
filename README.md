@@ -13,14 +13,14 @@ npm run build
 
 ## Current implementation
 
-The app now includes the React + TypeScript + Vite shell, schema-versioned project persistence, source extraction for editor-generated HEX files, a runtime program loading pipeline, a MicroPython iframe adapter for the Foundation simulator API, a pure TypeScript swarm simulation engine, and an interactive SVG swarm canvas with selected-device code upload, radio telemetry, button controls, per-device logs, a radio message inspector, and embedded MicroPython simulator frames for assigned devices.
+The app now includes the React + TypeScript + Vite shell, schema-versioned project persistence, source extraction for editor-generated HEX files, a runtime program loading pipeline, a MicroPython iframe adapter for the Foundation simulator API, a pure TypeScript swarm simulation engine, and an interactive SVG swarm canvas with selected-device code upload, radio telemetry, compact per-device logs, a radio message inspector, and persistent embedded MicroPython simulator frames for assigned devices.
 
 It intentionally does **not** claim full compiled artifact execution yet.
 
 The spike records the current technical position:
 
 - MakeCode `.hex` support is likely best approached through the official PXT simulator, but it must be isolated behind an adapter before the main simulator depends on it.
-- MicroPython `.hex` execution is now wired through selected-device upload, source extraction, and Foundation simulator iframes for flash/radio/serial/error hooks; display-state extraction and full live-browser validation remain open.
+- MicroPython `.hex` execution is now wired through selected-device upload, source extraction, and per-device Foundation simulator iframes for flash/radio/serial/error hooks; display-state extraction and full live-browser validation remain open.
 - The app accepts `.hex` uploads from the selected device panel and can now prepare assigned MicroPython device programs from uploaded artifacts; full execution remains blocked for MakeCode and partially proven for MicroPython.
 - The runtime contract includes an explicit `runtimeSource` field so a future byte-level adapter can report `makecode-pxt` or `micropython` without relying on filenames.
 - Package availability reinforces the split: `pxt-microbit` and `pxt-core` are published on npm, while `microbit-micropython-js` is not available as an npm package.
@@ -29,7 +29,7 @@ The spike records the current technical position:
 - Device runtime loading now resolves each `programArtifactId`, extracts the source-specific runtime program, and prepares it through a matching adapter when one is provided. Without an adapter the result is explicitly marked `prepared`, not falsely executed.
 - A concrete MicroPython iframe adapter waits for the simulator `ready` handshake, can defer `flash` until the simulator sends `request_flash`, posts `reset`, `stop`, `set_value`, and `radio_input` messages, and converts `radio_output`, `serial_output`, and `internal_error` iframe messages into runtime adapter events.
 - Project persistence now has a schema-versioned domain model, self-contained JSON export/import with artifact bytes encoded inline, and browser local-storage helpers for save/reopen flows.
-- The simulation engine covers run/pause/resume/reset, 6-10 device radio routing, signal-strength-to-radius mapping, group/channel filtering, movement recalculation, light/sound source influence, button input logs, and radio message events.
+- The simulation engine covers run/pause/resume/reset, 6-10 device radio routing, signal-strength-to-radius mapping, group/channel filtering, movement recalculation, light/sound source influence, and radio message events. MicroPython runtime reset can target one prepared device or all prepared devices in the scenario.
 
 ## Simulator adapter decision
 
