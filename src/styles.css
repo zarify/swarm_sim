@@ -447,7 +447,8 @@ button:disabled {
 
 .toolbar-card,
 .selection-card,
-.telemetry-card {
+.telemetry-card,
+.radio-inspector-card {
   border: 1px solid rgba(147, 169, 134, 0.24);
   padding: 16px;
   background: rgba(0, 0, 0, 0.22);
@@ -455,7 +456,8 @@ button:disabled {
 
 .toolbar-card .metric-label,
 .selection-card .metric-label,
-.telemetry-card .metric-label {
+.telemetry-card .metric-label,
+.radio-inspector-card .metric-label {
   flex-basis: 100%;
   margin-bottom: 2px;
 }
@@ -470,9 +472,66 @@ button:disabled {
 }
 
 .selection-card p,
-.telemetry-card p {
+.telemetry-card p,
+.radio-inspector-card p {
   margin: 10px 0 0;
   color: var(--muted);
+}
+
+.radio-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.radio-summary div {
+  border: 1px solid rgba(183, 255, 74, 0.16);
+  padding: 8px;
+  background: rgba(183, 255, 74, 0.04);
+}
+
+.radio-summary dt {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.radio-summary dd {
+  margin: 4px 0 0;
+  color: var(--phosphor);
+  font-size: 1.1rem;
+  font-weight: 900;
+}
+
+.button-controls {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.device-log {
+  margin-top: 16px;
+  border-top: 1px solid rgba(147, 169, 134, 0.2);
+  padding-top: 12px;
+}
+
+.device-log p,
+.radio-event {
+  border-left: 2px solid rgba(105, 247, 255, 0.36);
+  padding-left: 10px;
+}
+
+.device-log strong,
+.radio-event strong {
+  color: var(--cyan);
+  text-transform: uppercase;
+}
+
+.radio-event {
+  margin-top: 12px;
 }
 
 .toggle-field,

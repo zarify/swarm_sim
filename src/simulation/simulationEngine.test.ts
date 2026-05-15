@@ -5,9 +5,11 @@ import {
   moveDevice,
   pauseSimulation,
   radioRangeForSignalStrength,
+  reconcileSimulationProject,
   resetSimulation,
   resumeSimulation,
   routeRadioPacket,
+  setDeviceButton,
   setDeviceRadioConfig,
   startSimulation,
 } from './simulationEngine';
@@ -59,6 +61,54 @@ describe('simulation engine', () => {
       'out-of-range',
     ]);
     expect(routed.deviceLogs.some((log) => log.type === 'radio-received')).toBe(true);
+  });
+
+  it('records button input state and per-device logs', () => {
+    const state = setDeviceButton(createSimulationState(makeProject()), 'device-a', 'A', true);
+
+    expect(state.devices['device-a']?.buttons.A).toBe(true);
+    expect(state.deviceLogs.at(-1)).toMatchObject({
+      deviceId: 'device-a',
+      type: 'button-input',
+      message: 'Button A pressed',
+    });
+  });
+
+  it('preserves observability state while reconciling project topology changes', () => {
+    const project = makeProject();
+    let state = createSimulationState(project);
+    state = setDeviceRadioConfig(state, 'device-a', { group: 42, signalStrength: 0 });
+    state = setDeviceRadioConfig(state, 'device-b', { group: 42 });
+    state = setDeviceButton(state, 'device-a', 'A', true);
+    state = routeRadioPacket(state, 'device-a', { data: new TextEncoder().encode('ping') });
+
+    const reconciled = reconcileSimulationProject(state, {
+      ...project,
+      devices: [
+        ...project.devices,
+        { id: 'device-new', name: 'New', position: { x: 30, y: 0 } },
+      ],
+      environmentSources: [
+        {
+          id: 'light-new',
+          type: 'light',
+          position: { x: 30, y: 0 },
+          radius: 120,
+          intensity: 1,
+        },
+      ],
+    });
+
+    expect(reconciled.deviceLogs).toEqual(state.deviceLogs);
+    expect(reconciled.radioEvents).toEqual(state.radioEvents);
+    expect(reconciled.devices['device-a']?.buttons.A).toBe(true);
+    expect(reconciled.devices['device-a']?.radio.group).toBe(42);
+    expect(reconciled.devices['device-new']?.sensors.lightLevel).toBe(255);
+    const linkToNewDevice = reconciled.radioLinks.find(
+      (link) => link.sourceDeviceId === 'device-a' && link.targetDeviceId === 'device-new',
+    );
+    expect(linkToNewDevice).toBeDefined();
+    expect(linkToNewDevice?.groupMatches).toBe(false);
   });
 
   it('maps signal strength to radio radius and recalculates links when devices move', () => {

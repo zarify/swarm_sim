@@ -24,11 +24,17 @@ export interface EnvironmentSensorState {
   soundLevel: number;
 }
 
+export interface DeviceButtonState {
+  A: boolean;
+  B: boolean;
+}
+
 export interface DeviceRuntimeState {
   deviceId: DeviceId;
   lifecycle: DeviceLifecycleState;
   position: Point;
   radio: DeviceRadioState;
+  buttons: DeviceButtonState;
   sensors: EnvironmentSensorState;
 }
 
@@ -67,7 +73,7 @@ export interface DeviceLogEvent {
   sequence: number;
   timestampMs: number;
   deviceId: DeviceId;
-  type: 'lifecycle' | 'radio-sent' | 'radio-received' | 'radio-blocked';
+  type: 'lifecycle' | 'button-input' | 'radio-sent' | 'radio-received' | 'radio-blocked';
   message: string;
 }
 
@@ -110,6 +116,7 @@ export function createSimulationState(
           channel: DEFAULT_RADIO_CHANNEL,
           rangeRadius: resolvedOptions.defaultRadioRangeRadius,
         },
+        buttons: { A: false, B: false },
         sensors: calculateEnvironmentSensors(device.position, project.environmentSources),
       };
 
@@ -153,6 +160,39 @@ export function resumeSimulation(state: SimulationState): SimulationState {
 
 export function resetSimulation(project: SwarmProject, options: SimulationOptions = {}): SimulationState {
   return createSimulationState(project, options);
+}
+
+export function reconcileSimulationProject(
+  state: SimulationState,
+  project: SwarmProject,
+): SimulationState {
+  const reset = createSimulationState(project, state.options);
+  const devices = Object.fromEntries(
+    Object.entries(reset.devices).map(([deviceId, resetDevice]) => {
+      const previousDevice = state.devices[deviceId];
+      return [
+        deviceId,
+        previousDevice
+          ? {
+              ...resetDevice,
+              lifecycle: previousDevice.lifecycle,
+              radio: previousDevice.radio,
+              buttons: previousDevice.buttons,
+            }
+          : resetDevice,
+      ];
+    }),
+  );
+
+  return recalculateDerivedState({
+    ...reset,
+    mode: state.mode,
+    clockMs: state.clockMs,
+    sequence: state.sequence,
+    devices,
+    radioEvents: state.radioEvents,
+    deviceLogs: state.deviceLogs,
+  });
 }
 
 export function advanceSimulation(state: SimulationState, deltaMs: number): SimulationState {
@@ -210,6 +250,43 @@ export function setDeviceRadioConfig(
   };
 
   return recalculateDerivedState({ ...state, devices });
+}
+
+export function setDeviceButton(
+  state: SimulationState,
+  deviceId: DeviceId,
+  button: keyof DeviceButtonState,
+  pressed: boolean,
+): SimulationState {
+  const device = requireDevice(state, deviceId);
+  const sequence = state.sequence + 1;
+  const devices = {
+    ...state.devices,
+    [deviceId]: {
+      ...device,
+      buttons: {
+        ...device.buttons,
+        [button]: pressed,
+      },
+    },
+  };
+
+  return {
+    ...state,
+    sequence,
+    devices,
+    deviceLogs: [
+      ...state.deviceLogs,
+      {
+        id: `log-${sequence}-${deviceId}-button-${button}`,
+        sequence,
+        timestampMs: state.clockMs,
+        deviceId,
+        type: 'button-input',
+        message: `Button ${button} ${pressed ? 'pressed' : 'released'}`,
+      },
+    ],
+  };
 }
 
 export function routeRadioPacket(

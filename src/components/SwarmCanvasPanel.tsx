@@ -8,10 +8,15 @@ import {
   type SwarmProject,
 } from '../domain/project';
 import {
+  moveDevice,
   pauseSimulation,
+  reconcileSimulationProject,
   resumeSimulation,
   resetSimulation,
+  routeRadioPacket,
+  setDeviceButton,
   startSimulation,
+  type DeviceRuntimeState,
   type SimulationState,
   type SimulationMode,
 } from '../simulation/simulationEngine';
@@ -141,13 +146,48 @@ export function SwarmCanvasPanel() {
     }));
   }
 
+  function sendPingFromSelected() {
+    if (selected.type !== 'device') {
+      return;
+    }
+
+    setModel((current) => ({
+      ...current,
+      simulationState: routeRadioPacket(current.simulationState, selected.id, {
+        data: new TextEncoder().encode('ping'),
+      }),
+    }));
+  }
+
+  function setSelectedDeviceButton(button: 'A' | 'B', pressed: boolean) {
+    if (selected.type !== 'device') {
+      return;
+    }
+
+    setModel((current) => ({
+      ...current,
+      simulationState: setDeviceButton(current.simulationState, selected.id, button, pressed),
+    }));
+  }
+
   function updateDragPosition(clientX: number, clientY: number) {
     if (!dragTarget || !svgRef.current) {
       return;
     }
 
     const position = clientPointToCanvasPoint(svgRef.current, clientX, clientY);
-    updateProject((current) => moveProjectObject(current, dragTarget, clampPoint(position)));
+    const nextPosition = clampPoint(position);
+    const target = dragTarget;
+    setModel((current) => ({
+      project: moveProjectObject(current.project, target, nextPosition),
+      simulationState:
+        target.type === 'device'
+          ? moveDevice(current.simulationState, target.id, nextPosition)
+          : reconcileSimulationProject(
+              current.simulationState,
+              moveProjectObject(current.project, target, nextPosition),
+            ),
+    }));
   }
 
   function updateProject(updater: (current: SwarmProject) => SwarmProject) {
@@ -155,7 +195,7 @@ export function SwarmCanvasPanel() {
       const project = updater(current.project);
       return {
         project,
-        simulationState: rebuildSimulationForProject(project, current.simulationState.mode),
+        simulationState: reconcileSimulationProject(current.simulationState, project),
       };
     });
   }
@@ -332,7 +372,14 @@ export function SwarmCanvasPanel() {
           <div className="selection-card">
             <span className="metric-label">Selection</span>
             {selectedDevice ? (
-              <DeviceSelection project={project} deviceId={selectedDevice.id} />
+              <DeviceSelection
+                project={project}
+                runtime={simulationState.devices[selectedDevice.id]}
+                deviceId={selectedDevice.id}
+                logs={simulationState.deviceLogs.filter((log) => log.deviceId === selectedDevice.id)}
+                onButtonChange={setSelectedDeviceButton}
+                onSendPing={sendPingFromSelected}
+              />
             ) : selectedSource ? (
               <SourceSelection source={selectedSource} updateSource={updateSource} />
             ) : (
@@ -348,13 +395,47 @@ export function SwarmCanvasPanel() {
               active directed radio links
             </p>
           </div>
+
+          <div className="radio-inspector-card" aria-label="Radio message inspector">
+            <span className="metric-label">Radio inspector</span>
+            {simulationState.radioEvents.length === 0 ? (
+              <p className="hint">No packets sent yet.</p>
+            ) : (
+              simulationState.radioEvents
+                .slice(-4)
+                .reverse()
+                .map((event) => (
+                  <article key={event.id} className="radio-event">
+                    <strong>{new TextDecoder().decode(event.data)}</strong>
+                    <p>
+                      {event.senderId} to {event.recipients.length} received /{' '}
+                      {event.blockedTargets.length} blocked
+                    </p>
+                  </article>
+                ))
+            )}
+          </div>
         </aside>
       </div>
     </section>
   );
 }
 
-function DeviceSelection({ project, deviceId }: { project: SwarmProject; deviceId: DeviceId }) {
+function DeviceSelection({
+  project,
+  deviceId,
+  runtime,
+  logs,
+  onButtonChange,
+  onSendPing,
+}: {
+  project: SwarmProject;
+  deviceId: DeviceId;
+  runtime?: DeviceRuntimeState;
+  logs: SimulationState['deviceLogs'];
+  onButtonChange: (button: 'A' | 'B', pressed: boolean) => void;
+  onSendPing: () => void;
+}) {
   const device = project.devices.find((candidate) => candidate.id === deviceId);
   if (!device) {
     return <p className="hint">Device missing from project.</p>;
@@ -367,6 +448,63 @@ function DeviceSelection({ project, deviceId }: { project: SwarmProject; deviceI
         x {Math.round(device.position.x)} / y {Math.round(device.position.y)}
       </p>
       <p>{device.programArtifactId ? `Artifact: ${device.programArtifactId}` : 'No artifact assigned yet'}</p>
+      {runtime ? (
+        <>
+          <dl className="radio-summary">
+            <div>
+              <dt>Group</dt>
+              <dd>{runtime.radio.group}</dd>
+            </div>
+            <div>
+              <dt>Channel</dt>
+              <dd>{runtime.radio.channel}</dd>
+            </div>
+            <div>
+              <dt>Range</dt>
+              <dd>{Math.round(runtime.radio.rangeRadius)}</dd>
+            </div>
+            <div>
+              <dt>Light</dt>
+              <dd>{runtime.sensors.lightLevel}</dd>
+            </div>
+            <div>
+              <dt>Sound</dt>
+              <dd>{runtime.sensors.soundLevel}</dd>
+            </div>
+          </dl>
+          <div className="button-controls" aria-label={`Button controls for ${device.name}`}>
+            {(['A', 'B'] as const).map((button) => (
+              <button
+                key={button}
+                type="button"
+                onPointerDown={() => onButtonChange(button, true)}
+                onPointerUp={() => onButtonChange(button, false)}
+                onPointerCancel={() => onButtonChange(button, false)}
+              >
+                {runtime.buttons[button] ? `Release ${button}` : `Press ${button}`}
+              </button>
+            ))}
+          </div>
+          <button type="button" onClick={onSendPing}>
+            Send ping
+          </button>
+        </>
+      ) : null}
+      <div className="device-log" aria-label={`Event log for ${device.name}`}>
+        <span className="metric-label">Device log</span>
+        {logs.length === 0 ? (
+          <p className="hint">No device events yet.</p>
+        ) : (
+          logs
+            .slice(-5)
+            .reverse()
+            .map((log) => (
+              <p key={log.id}>
+                <strong>{log.type}</strong> {log.message}
+              </p>
+            ))
+        )}
+      </div>
     </>
   );
 }
@@ -438,20 +576,6 @@ function createDemoProject(): SwarmProject {
       },
     ],
   };
-}
-
-function rebuildSimulationForProject(project: SwarmProject, mode: SimulationMode): SimulationState {
-  const reset = resetSimulation(project, defaultRadioOptions);
-
-  if (mode === 'running') {
-    return startSimulation(reset);
-  }
-
-  if (mode === 'paused') {
-    return pauseSimulation(startSimulation(reset));
-  }
-
-  return reset;
 }
 
 function moveProjectObject(project: SwarmProject, target: DragTarget, position: Point): SwarmProject {

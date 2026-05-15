@@ -26,4 +26,29 @@ describe('SwarmCanvasPanel', () => {
 
     expect(screen.getByText(/5 nodes \//)).toBeInTheDocument();
   });
+
+  it('shows selected-device controls, logs, and radio inspector events', () => {
+    render(<SwarmCanvasPanel />);
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Press A' }));
+    expect(screen.getByRole('button', { name: 'Release A' })).toBeInTheDocument();
+    expect(screen.getByText(/Button A pressed/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send ping' }));
+
+    expect(screen.getByText('ping')).toBeInTheDocument();
+    expect(screen.getByText(/device-alpha to 1 received/)).toBeInTheDocument();
+    expect(screen.getByText(/Sent radio packet to 1 recipient/)).toBeInTheDocument();
+  });
+
+  it('preserves logs and radio inspector history when topology changes', () => {
+    render(<SwarmCanvasPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send ping' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
+
+    expect(screen.getByText(/5 nodes \//)).toBeInTheDocument();
+    expect(screen.getByText('ping')).toBeInTheDocument();
+    expect(screen.getByText(/Sent radio packet to 1 recipient/)).toBeInTheDocument();
+  });
 });
