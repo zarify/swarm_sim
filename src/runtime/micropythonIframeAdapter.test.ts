@@ -112,6 +112,7 @@ describe('MicroPython iframe runtime adapter', () => {
       eventTarget,
       messageSource: trustedMessageSource,
     });
+
     const program = makeMicroPythonProgram();
 
     eventTarget.dispatchMessage({ kind: 'ready' });
@@ -120,6 +121,26 @@ describe('MicroPython iframe runtime adapter', () => {
 
     expect(targetWindow.messages).toHaveLength(2);
     expect(targetWindow.messages[1]?.message).toMatchObject({ kind: 'flash' });
+  });
+
+  it('can defer iframe flashing until the simulator requests it', async () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+      deferFlashUntilRequest: true,
+    });
+
+    eventTarget.dispatchMessage({ kind: 'ready' });
+    await adapter.flash(makeMicroPythonProgram());
+    expect(targetWindow.messages).toEqual([]);
+
+    eventTarget.dispatchMessage({ kind: 'request_flash' });
+    expect(targetWindow.messages).toHaveLength(1);
+    expect(targetWindow.messages[0]?.message).toMatchObject({ kind: 'flash' });
   });
 
   it('rejects non-MicroPython programs and invalid sensor values before posting messages', async () => {

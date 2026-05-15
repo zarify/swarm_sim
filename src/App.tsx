@@ -1,4 +1,3 @@
-import { RuntimeSpikePanel } from './components/RuntimeSpikePanel';
 import { SwarmCanvasPanel } from './components/SwarmCanvasPanel';
 
 export function App() {
@@ -9,9 +8,9 @@ export function App() {
           <p className="eyebrow">Local-first / compiled-artifact spike</p>
           <h1 id="page-title">Micro:bit Swarm Simulator</h1>
           <p className="lede">
-            A browser lab bench for proving the hard part first: whether uploaded
-            MakeCode and MicroPython artifacts can drive trustworthy virtual
-            micro:bits before the swarm canvas is built around them.
+            A focused lab bench for selecting a virtual micro:bit, loading editor
+            artifacts onto it, and watching spatial radio behaviour without noise
+            from unrelated panels.
           </p>
         </div>
         <div className="signal-card" aria-label="Simulation target summary">
@@ -21,7 +20,6 @@ export function App() {
         </div>
       </section>
 
-      <RuntimeSpikePanel />
       <SwarmCanvasPanel />
     </main>
   );

@@ -27,6 +27,7 @@ export interface MicroPythonIframeRuntimeAdapterOptions {
   eventTarget?: MessageEventTargetLike;
   messageSource?: MessageEventSource | null;
   initialReady?: boolean;
+  deferFlashUntilRequest?: boolean;
   readyTimeoutMs?: number;
   name?: string;
 }
@@ -40,6 +41,7 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   private readonly eventTarget?: MessageEventTargetLike;
   private readonly messageSource?: MessageEventSource | null;
   private readonly readyTimeoutMs: number;
+  private readonly deferFlashUntilRequest: boolean;
   private readonly listeners = new Set<(event: RuntimeAdapterEvent) => void>();
   private readonly handleMessage = (event: MessageEvent) => this.receiveMessage(event);
   private lastProgram?: MicroPythonRuntimeProgram;
@@ -56,6 +58,7 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     this.eventTarget = options.eventTarget;
     this.messageSource = this.eventTarget ? requireMessageSource(options.messageSource) : options.messageSource;
     this.readyTimeoutMs = options.readyTimeoutMs ?? 5000;
+    this.deferFlashUntilRequest = options.deferFlashUntilRequest ?? false;
     if (!this.eventTarget || options.initialReady) {
       this.markReady();
     }
@@ -70,6 +73,9 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     assertMicroPythonProgram(program);
     this.lastProgram = program;
     await this.waitUntilReady();
+    if (this.deferFlashUntilRequest) {
+      return;
+    }
     this.postFlash(program);
   }
 

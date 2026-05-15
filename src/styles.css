@@ -1,6 +1,6 @@
 :root {
   color-scheme: dark;
-  font-family: "Avenir Next Condensed", "Bahnschrift", "Gill Sans", sans-serif;
+  font-family: ui-sans-serif, system-ui, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   --ink: #ecf7df;
@@ -102,7 +102,7 @@ h2 {
   max-width: 720px;
   margin: 28px 0 0;
   color: var(--muted);
-  font-family: "Iowan Old Style", "Palatino Linotype", serif;
+  font-family: ui-serif, Georgia, serif;
   font-size: clamp(1.08rem, 2vw, 1.42rem);
   line-height: 1.55;
 }
@@ -196,6 +196,14 @@ h2 {
 .artifact-field input:focus {
   border-color: var(--cyan);
   box-shadow: 0 0 0 4px rgba(105, 247, 255, 0.12);
+}
+
+.artifact-field--compact {
+  margin-top: 18px;
+}
+
+.artifact-field--compact input {
+  padding: 12px;
 }
 
 .hint {
@@ -376,6 +384,7 @@ button:disabled {
   fill: url("#source-glow");
   stroke: rgba(255, 176, 46, 0.24);
   stroke-dasharray: 6 10;
+  pointer-events: none;
 }
 
 .source-node--sound .source-radius {
@@ -404,6 +413,7 @@ button:disabled {
   fill: url("#radio-glow");
   stroke: rgba(105, 247, 255, 0.18);
   stroke-width: 1.5;
+  pointer-events: none;
 }
 
 .microbit-body {

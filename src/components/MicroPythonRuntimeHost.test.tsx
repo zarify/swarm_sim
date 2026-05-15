@@ -63,9 +63,9 @@ describe('MicroPythonRuntimeHost', () => {
     );
     dispatchReadyFor('MicroPython simulator for Alpha');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Load MicroPython runtimes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
 
-    await waitFor(() => expect(screen.getByText(/loaded/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/prepared/)).toBeInTheDocument());
     expect(flashed).toHaveLength(1);
   });
 
@@ -78,13 +78,27 @@ describe('MicroPythonRuntimeHost', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Load MicroPython runtimes' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Prepare runtime' })).toBeDisabled();
     expect(screen.getByText('0/1 simulator(s) ready')).toBeInTheDocument();
 
     dispatchReadyFor('MicroPython simulator for Alpha');
 
-    expect(screen.getByRole('button', { name: 'Load MicroPython runtimes' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Prepare runtime' })).toBeEnabled();
     expect(screen.getByText('1/1 simulator(s) ready')).toBeInTheDocument();
+  });
+
+  it('can scope simulator frames to the selected device', () => {
+    render(
+      <MicroPythonRuntimeHost
+        project={makeTwoMicroPythonDeviceProject()}
+        selectedDeviceId="device-beta"
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTitle('MicroPython simulator for Alpha')).not.toBeInTheDocument();
+    expect(screen.getByTitle('MicroPython simulator for Beta')).toBeInTheDocument();
   });
 
   it('disposes adapter listeners when MicroPython devices are removed from the runtime set', async () => {
@@ -116,8 +130,8 @@ describe('MicroPythonRuntimeHost', () => {
       />,
     );
     dispatchReadyFor('MicroPython simulator for Alpha');
-    fireEvent.click(screen.getByRole('button', { name: 'Load MicroPython runtimes' }));
-    await waitFor(() => expect(screen.getByText(/loaded/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(screen.getByText(/prepared/)).toBeInTheDocument());
 
     rerender(
       <MicroPythonRuntimeHost
@@ -133,6 +147,116 @@ describe('MicroPythonRuntimeHost', () => {
       expect(disposed).toEqual(['device-alpha']);
     });
   });
+
+  it('disposes prepared adapters and clears runtime results when a device artifact changes', async () => {
+    const disposed: string[] = [];
+    const unsubscribed: string[] = [];
+    const resultChanges: string[][] = [];
+    const project = makeProject();
+    const { rerender } = render(
+      <MicroPythonRuntimeHost
+        project={project}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        onLoadResultsChange={(results) => resultChanges.push(results.map((result) => result.artifactId ?? 'none'))}
+        loadPrograms={async (_project, options) => {
+          await options.createAdapter?.({
+            device: project.devices[0]!,
+            artifact: project.artifacts[0]!,
+            runtimeSource: 'micropython',
+            program: { source: 'micropython', filesystem: {} },
+          });
+          return [
+            {
+              deviceId: 'device-alpha',
+              artifactId: 'artifact-mp',
+              status: 'loaded',
+              runtimeSource: 'micropython',
+            },
+          ];
+        }}
+        createAdapter={(prepared) => makeDisposableAdapter(disposed, unsubscribed, prepared.device.id)}
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(screen.getByText(/prepared/)).toBeInTheDocument());
+
+    rerender(
+      <MicroPythonRuntimeHost
+        project={withReplacementArtifact(project)}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        onLoadResultsChange={(results) => resultChanges.push(results.map((result) => result.artifactId ?? 'none'))}
+        createAdapter={(prepared) => makeDisposableAdapter(disposed, unsubscribed, prepared.device.id)}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(unsubscribed).toEqual(['device-alpha']);
+      expect(disposed).toEqual(['device-alpha']);
+      expect(screen.queryByText(/prepared/)).not.toBeInTheDocument();
+      expect(resultChanges.at(-1)).toEqual([]);
+    });
+  });
+
+  it('ignores in-flight runtime preparation after a device artifact changes', async () => {
+    const continueLoad = deferred<void>();
+    const createdAdapters: string[] = [];
+    const resultChanges: string[][] = [];
+    const project = makeProject();
+    const { rerender } = render(
+      <MicroPythonRuntimeHost
+        project={project}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        onLoadResultsChange={(results) => resultChanges.push(results.map((result) => result.artifactId ?? 'none'))}
+        loadPrograms={async (_project, options) => {
+          await continueLoad.promise;
+          await options.createAdapter?.({
+            device: project.devices[0]!,
+            artifact: project.artifacts[0]!,
+            runtimeSource: 'micropython',
+            program: { source: 'micropython', filesystem: {} },
+          });
+          return [
+            {
+              deviceId: 'device-alpha',
+              artifactId: 'artifact-mp',
+              status: 'loaded',
+              runtimeSource: 'micropython',
+            },
+          ];
+        }}
+        createAdapter={(prepared) => {
+          createdAdapters.push(prepared.artifact.id);
+          return makeAdapter([], true);
+        }}
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+
+    rerender(
+      <MicroPythonRuntimeHost
+        project={withReplacementArtifact(project)}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        onLoadResultsChange={(results) => resultChanges.push(results.map((result) => result.artifactId ?? 'none'))}
+        createAdapter={(prepared) => {
+          createdAdapters.push(prepared.artifact.id);
+          return makeAdapter([], true);
+        }}
+      />,
+    );
+    continueLoad.resolve();
+
+    await waitFor(() => {
+      expect(createdAdapters).toEqual([]);
+      expect(screen.queryByText(/prepared/)).not.toBeInTheDocument();
+      expect(resultChanges.at(-1)).toEqual([]);
+    });
+  });
 });
 
 function dispatchReadyFor(title: string) {
@@ -145,6 +269,22 @@ function dispatchReadyFor(title: string) {
       data: { kind: 'ready' },
     }),
   );
+}
+
+function makeTwoMicroPythonDeviceProject(): SwarmProject {
+  const project = makeProject();
+  return {
+    ...project,
+    devices: [
+      project.devices[0]!,
+      {
+        id: 'device-beta',
+        name: 'Beta',
+        position: { x: 160, y: 100 },
+        programArtifactId: 'artifact-mp',
+      },
+    ],
+  };
 }
 
 function makeProject(): SwarmProject {
@@ -175,6 +315,36 @@ function makeProject(): SwarmProject {
     ],
     environmentSources: [],
   };
+}
+
+function withReplacementArtifact(project: SwarmProject): SwarmProject {
+  return {
+    ...project,
+    artifacts: [
+      ...project.artifacts,
+      {
+        id: 'artifact-mp-replacement',
+        name: 'mp_replacement.hex',
+        artifactKind: 'hex',
+        runtimeSource: 'micropython',
+        bytes: new Uint8Array([4, 5, 6]),
+        createdAt: now,
+      },
+    ],
+    devices: project.devices.map((device) =>
+      device.id === 'device-alpha'
+        ? { ...device, programArtifactId: 'artifact-mp-replacement' }
+        : device,
+    ),
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return { promise, resolve };
 }
 
 function makeAdapter(flashed: RuntimeProgram[], ready: boolean): MicrobitRuntimeAdapter {

@@ -23,6 +23,7 @@ type RuntimeLoadPrograms = (
 
 interface MicroPythonRuntimeHostProps {
   project: SwarmProject;
+  selectedDeviceId?: DeviceId;
   onRadioPacket: (deviceId: DeviceId, packet: RuntimeRadioPacket) => DeviceId[];
   onRuntimeLog: (
     deviceId: DeviceId,
@@ -40,6 +41,7 @@ interface MicroPythonRuntimeHostProps {
 
 export function MicroPythonRuntimeHost({
   project,
+  selectedDeviceId,
   onRadioPacket,
   onRuntimeLog,
   onLoadResultsChange,
@@ -51,25 +53,34 @@ export function MicroPythonRuntimeHost({
   const [frameVersion, setFrameVersion] = useState(0);
   const frames = useRef(new Map<DeviceId, HTMLIFrameElement>());
   const adapters = useRef(new Map<DeviceId, MicrobitRuntimeAdapter>());
+  const adapterArtifactIds = useRef(new Map<DeviceId, string>());
   const adapterUnsubscribes = useRef(new Map<DeviceId, () => void>());
+  const loadRequestId = useRef(0);
   const callbacks = useRef({ onRadioPacket, onRuntimeLog });
   const [readyDeviceIds, setReadyDeviceIds] = useState<Set<DeviceId>>(() => new Set());
+
+  useEffect(() => {
+    onLoadResultsChange?.(loadResults);
+  }, [loadResults, onLoadResultsChange]);
 
   useEffect(() => {
     callbacks.current = { onRadioPacket, onRuntimeLog };
   }, [onRadioPacket, onRuntimeLog]);
 
-  useEffect(() => () => disposeAdapters(adapters.current, adapterUnsubscribes.current), []);
+  useEffect(() => () => disposeAdapters(adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current), []);
 
   const devices = useMemo(
     () =>
       project.devices.filter((device) => {
+        if (selectedDeviceId && device.id !== selectedDeviceId) {
+          return false;
+        }
         const artifact = project.artifacts.find(
           (candidate) => candidate.id === device.programArtifactId,
         );
         return artifact?.runtimeSource === 'micropython';
       }),
-    [project],
+    [project, selectedDeviceId],
   );
 
   const runtimeProject = useMemo(
@@ -84,21 +95,29 @@ export function MicroPythonRuntimeHost({
   );
 
   useEffect(() => {
-    const activeDeviceIds = new Set(devices.map((device) => device.id));
+    loadRequestId.current += 1;
+    setIsLoading(false);
+    const activeArtifactIds = new Map(devices.map((device) => [device.id, device.programArtifactId]));
     for (const [deviceId, adapter] of adapters.current.entries()) {
-      if (!activeDeviceIds.has(deviceId)) {
-        adapterUnsubscribes.current.get(deviceId)?.();
-        adapterUnsubscribes.current.delete(deviceId);
-        if ('dispose' in adapter && typeof adapter.dispose === 'function') {
-          adapter.dispose();
-        }
-        adapters.current.delete(deviceId);
+      const activeArtifactId = activeArtifactIds.get(deviceId);
+      if (!activeArtifactId || adapterArtifactIds.current.get(deviceId) !== activeArtifactId) {
+        disposeAdapterForDevice(
+          adapters.current,
+          adapterUnsubscribes.current,
+          adapterArtifactIds.current,
+          deviceId,
+          adapter,
+        );
       }
     }
     setReadyDeviceIds((current) => {
+      const activeDeviceIds = new Set(activeArtifactIds.keys());
       const next = new Set([...current].filter((deviceId) => activeDeviceIds.has(deviceId)));
       return next.size === current.size ? current : next;
     });
+    setLoadResults((current) =>
+      current.filter((result) => activeArtifactIds.get(result.deviceId) === result.artifactId),
+    );
   }, [devices]);
 
   useEffect(() => {
@@ -166,13 +185,17 @@ export function MicroPythonRuntimeHost({
   );
 
   async function loadRuntimes() {
+    const requestId = loadRequestId.current + 1;
+    loadRequestId.current = requestId;
     setIsLoading(true);
-    disposeAdapters(adapters.current, adapterUnsubscribes.current);
+    disposeAdapters(adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current);
     adapters.current.clear();
     adapterUnsubscribes.current.clear();
+    adapterArtifactIds.current.clear();
+    const requestAdapters: { deviceId: DeviceId; adapter: MicrobitRuntimeAdapter }[] = [];
 
     try {
-      const results = await loadPrograms(runtimeProject, {
+      const results = normalizeDeferredFlashResults(await loadPrograms(runtimeProject, {
         createAdapter: (prepared) => {
           if (prepared.runtimeSource !== 'micropython') {
             return undefined;
@@ -182,6 +205,9 @@ export function MicroPythonRuntimeHost({
           if (!frameWindow) {
             throw new Error(`Simulator iframe is not ready for ${prepared.device.name}`);
           }
+          if (loadRequestId.current !== requestId) {
+            return undefined;
+          }
 
           const adapter = createAdapter(
             prepared,
@@ -189,17 +215,26 @@ export function MicroPythonRuntimeHost({
             readyDeviceIds.has(prepared.device.id),
           );
           adapters.current.set(prepared.device.id, adapter);
+          requestAdapters.push({ deviceId: prepared.device.id, adapter });
+          adapterArtifactIds.current.set(prepared.device.id, prepared.artifact.id);
           adapterUnsubscribes.current.set(
             prepared.device.id,
             adapter.onEvent((event) => handleRuntimeEvent(prepared.device.id, event)),
           );
           return adapter;
         },
-      });
+      }));
+      if (loadRequestId.current !== requestId) {
+        disposeRequestAdapters(requestAdapters, adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current);
+        return;
+      }
 
       setLoadResults(results);
-      onLoadResultsChange?.(results);
     } catch (error) {
+      if (loadRequestId.current !== requestId) {
+        disposeRequestAdapters(requestAdapters, adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current);
+        return;
+      }
       const diagnostic = error instanceof Error ? error.message : 'Unable to load MicroPython runtimes';
       const results: DeviceProgramLoadResult[] = devices.map((device) => ({
         deviceId: device.id,
@@ -209,9 +244,10 @@ export function MicroPythonRuntimeHost({
         diagnostic,
       }));
       setLoadResults(results);
-      onLoadResultsChange?.(results);
     } finally {
-      setIsLoading(false);
+      if (loadRequestId.current === requestId) {
+        setIsLoading(false);
+      }
     }
   }
 
@@ -249,12 +285,12 @@ export function MicroPythonRuntimeHost({
         <span className="metric-label">MicroPython runtime host</span>
         <strong>
           {devices.length === 0
-            ? 'No MicroPython devices'
+            ? 'No MicroPython runtime'
             : `${readyFrames}/${devices.length} simulator(s) ready`}
         </strong>
         <p className="hint">
-          Foundation simulator iframes are isolated per device and flashed from extracted
-          MicroPython filesystems.
+          Prepared code is sent when the simulator frame asks for it. Press Play in the
+          frame after preparing the runtime.
         </p>
       </div>
       <button
@@ -262,7 +298,7 @@ export function MicroPythonRuntimeHost({
         onClick={loadRuntimes}
         disabled={isLoading || devices.length === 0 || readyFrames !== devices.length}
       >
-        {isLoading ? 'Loading runtimes...' : 'Load MicroPython runtimes'}
+        {isLoading ? 'Preparing runtime...' : devices.length === 1 ? 'Prepare runtime' : 'Prepare runtimes'}
       </button>
       <div className="runtime-frame-grid" data-frame-version={frameVersion}>
         {devices.map((device) => (
@@ -301,13 +337,27 @@ function createMicroPythonIframeAdapter(
     eventTarget: window,
     messageSource: frameWindow,
     initialReady: ready,
+    deferFlashUntilRequest: true,
     name: `MicroPython iframe for ${prepared.device.name}`,
   });
+}
+
+function normalizeDeferredFlashResults(results: DeviceProgramLoadResult[]): DeviceProgramLoadResult[] {
+  return results.map((result) =>
+    result.status === 'loaded'
+      ? {
+          ...result,
+          status: 'prepared',
+          diagnostic: 'Prepared; press Play in the simulator frame to start.',
+        }
+      : result,
+  );
 }
 
 function disposeAdapters(
   adapters: Map<DeviceId, MicrobitRuntimeAdapter>,
   unsubscribes: Map<DeviceId, () => void>,
+  artifactIds: Map<DeviceId, string>,
 ): void {
   for (const unsubscribe of unsubscribes.values()) {
     unsubscribe();
@@ -320,6 +370,39 @@ function disposeAdapters(
     }
   }
   adapters.clear();
+  artifactIds.clear();
+}
+
+function disposeRequestAdapters(
+  requestAdapters: { deviceId: DeviceId; adapter: MicrobitRuntimeAdapter }[],
+  adapters: Map<DeviceId, MicrobitRuntimeAdapter>,
+  unsubscribes: Map<DeviceId, () => void>,
+  artifactIds: Map<DeviceId, string>,
+): void {
+  for (const { deviceId, adapter } of requestAdapters) {
+    disposeAdapterForDevice(adapters, unsubscribes, artifactIds, deviceId, adapter);
+  }
+}
+
+function disposeAdapterForDevice(
+  adapters: Map<DeviceId, MicrobitRuntimeAdapter>,
+  unsubscribes: Map<DeviceId, () => void>,
+  artifactIds: Map<DeviceId, string>,
+  deviceId: DeviceId,
+  expectedAdapter?: MicrobitRuntimeAdapter,
+): void {
+  const adapter = adapters.get(deviceId);
+  if (!adapter || (expectedAdapter && adapter !== expectedAdapter)) {
+    return;
+  }
+
+  unsubscribes.get(deviceId)?.();
+  unsubscribes.delete(deviceId);
+  if ('dispose' in adapter && typeof adapter.dispose === 'function') {
+    adapter.dispose();
+  }
+  adapters.delete(deviceId);
+  artifactIds.delete(deviceId);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
