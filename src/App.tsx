@@ -1,4 +1,5 @@
 import { RuntimeSpikePanel } from './components/RuntimeSpikePanel';
+import { SwarmCanvasPanel } from './components/SwarmCanvasPanel';
 
 export function App() {
   return (
@@ -21,6 +22,7 @@ export function App() {
       </section>
 
       <RuntimeSpikePanel />
+      <SwarmCanvasPanel />
     </main>
   );
 }

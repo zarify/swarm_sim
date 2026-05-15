@@ -132,9 +132,18 @@ h2 {
   text-transform: uppercase;
 }
 
-.runtime-panel {
+.runtime-panel,
+.swarm-panel {
   margin-top: 24px;
   padding: clamp(24px, 5vw, 44px);
+}
+
+.swarm-panel {
+  border: 1px solid var(--line);
+  background:
+    linear-gradient(135deg, rgba(12, 31, 33, 0.98), rgba(8, 20, 22, 0.88)),
+    radial-gradient(circle at 18% 20%, rgba(183, 255, 74, 0.08), transparent 30rem);
+  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.44), inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .panel-header {
@@ -287,10 +296,212 @@ h2 {
   text-transform: uppercase;
 }
 
+.control-stack,
+.toolbar-card {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+button {
+  border: 1px solid rgba(105, 247, 255, 0.38);
+  padding: 10px 13px;
+  color: var(--ink);
+  background: rgba(105, 247, 255, 0.08);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--cyan);
+  box-shadow: 0 0 24px rgba(105, 247, 255, 0.12);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.swarm-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  gap: 20px;
+  margin-top: 28px;
+}
+
+.canvas-wrap {
+  min-height: 420px;
+  border: 1px solid rgba(105, 247, 255, 0.24);
+  background:
+    linear-gradient(90deg, rgba(105, 247, 255, 0.07) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(105, 247, 255, 0.06) 1px, transparent 1px),
+    rgba(0, 0, 0, 0.2);
+  background-size: 36px 36px;
+}
+
+.swarm-canvas {
+  display: block;
+  width: 100%;
+  height: min(60vw, 560px);
+  min-height: 420px;
+  touch-action: none;
+}
+
+.canvas-field {
+  fill: rgba(5, 13, 15, 0.62);
+}
+
+.radio-link {
+  stroke: var(--cyan);
+  stroke-dasharray: 7 9;
+  stroke-linecap: round;
+  stroke-width: 2;
+  opacity: 0.64;
+}
+
+.source-node,
+.microbit-node {
+  cursor: grab;
+}
+
+.source-node:active,
+.microbit-node:active {
+  cursor: grabbing;
+}
+
+.source-radius {
+  fill: url("#source-glow");
+  stroke: rgba(255, 176, 46, 0.24);
+  stroke-dasharray: 6 10;
+}
+
+.source-node--sound .source-radius {
+  fill: rgba(105, 247, 255, 0.08);
+  stroke: rgba(105, 247, 255, 0.25);
+}
+
+.source-core {
+  fill: rgba(255, 176, 46, 0.84);
+  stroke: rgba(255, 255, 255, 0.72);
+  stroke-width: 2;
+}
+
+.source-node--sound .source-core {
+  fill: rgba(105, 247, 255, 0.72);
+}
+
+.source-node text {
+  fill: #061012;
+  font-size: 0.9rem;
+  font-weight: 900;
+  pointer-events: none;
+}
+
+.radio-radius {
+  fill: url("#radio-glow");
+  stroke: rgba(105, 247, 255, 0.18);
+  stroke-width: 1.5;
+}
+
+.microbit-body {
+  fill: rgba(11, 35, 37, 0.96);
+  stroke: rgba(183, 255, 74, 0.55);
+  stroke-width: 2;
+}
+
+.microbit-node--selected .microbit-body {
+  stroke: var(--phosphor);
+  filter: drop-shadow(0 0 16px rgba(183, 255, 74, 0.34));
+}
+
+.button-dot {
+  fill: rgba(255, 176, 46, 0.82);
+}
+
+.led-pixel {
+  fill: rgba(147, 169, 134, 0.26);
+}
+
+.led-pixel--lit {
+  fill: var(--phosphor);
+  filter: drop-shadow(0 0 4px rgba(183, 255, 74, 0.8));
+}
+
+.node-label {
+  fill: var(--ink);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  pointer-events: none;
+}
+
+.swarm-sidebar {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.toolbar-card,
+.selection-card,
+.telemetry-card {
+  border: 1px solid rgba(147, 169, 134, 0.24);
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+.toolbar-card .metric-label,
+.selection-card .metric-label,
+.telemetry-card .metric-label {
+  flex-basis: 100%;
+  margin-bottom: 2px;
+}
+
+.selection-card strong,
+.telemetry-card strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--phosphor);
+  font-size: 1.45rem;
+  text-transform: uppercase;
+}
+
+.selection-card p,
+.telemetry-card p {
+  margin: 10px 0 0;
+  color: var(--muted);
+}
+
+.toggle-field,
+.range-field {
+  display: grid;
+  gap: 8px;
+  width: 100%;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.toggle-field {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+}
+
+.range-field input {
+  accent-color: var(--phosphor);
+}
+
 @media (max-width: 760px) {
   .hero-panel,
   .readiness-grid,
-  .capability-list {
+  .capability-list,
+  .swarm-layout {
     grid-template-columns: 1fr;
   }
 }
