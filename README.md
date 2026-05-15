@@ -19,10 +19,12 @@ The spike records the current technical position:
 
 - MakeCode `.hex` support is likely best approached through the official PXT simulator, but it must be isolated behind an adapter before the main simulator depends on it.
 - MicroPython `.hex` execution with browser hooks for display, buttons, radio, light, and sound is not currently proven.
-- The app accepts `.hex` metadata for spike evaluation only; real execution remains blocked until byte-level adapter checks can distinguish MakeCode/MicroPython artifacts and prove the required hooks.
+- The app accepts `.hex` metadata for spike evaluation only; real execution remains blocked until adapter checks prove the required runtime hooks.
 - The runtime contract includes an explicit `runtimeSource` field so a future byte-level adapter can report `makecode-pxt` or `micropython` without relying on filenames.
 - Package availability reinforces the split: `pxt-microbit` and `pxt-core` are published on npm, while `microbit-micropython-js` is not available as an npm package.
 - Fixture-backed detection now parses Intel HEX data records and classifies the provided `hex_files/mc_beacon.hex` as `makecode-pxt` and `hex_files/mp_beacon.hex` as `micropython`; both remain non-executable until a runtime adapter proves radio/display hooks.
+- Source extraction is now proven from editor-generated HEX fixtures: MicroPython recovers `main.py` from the embedded filesystem, while MakeCode recovers the embedded PXT project file map using the documented source header and LZMA payload.
+- Project persistence now has a schema-versioned domain model, self-contained JSON export/import with artifact bytes encoded inline, and browser local-storage helpers for save/reopen flows.
 
 ## Simulator adapter decision
 
@@ -35,8 +37,8 @@ The shared adapter contract in `src/runtime/runtimeAdapter.ts` now targets the o
 
 The next runtime spike should prove:
 
-1. MicroPython: extract or preserve `main.py`, flash it into the Foundation simulator, observe `radio_output` for `ping`, inject `radio_input`, and find a stable display-state signal.
-2. MakeCode: determine whether `mc_beacon.hex` contains recoverable PXT project/source metadata or whether MakeCode uploads must include source/project data; then run through `pxtsim` and validate display/radio hooks.
+1. MicroPython: flash the extracted `main.py` into the Foundation simulator, observe `radio_output` for `ping`, inject `radio_input`, and find a stable display-state signal.
+2. MakeCode: compile/run the recovered PXT project through `pxtsim` and validate display/radio hooks.
 
 ## Design direction
 

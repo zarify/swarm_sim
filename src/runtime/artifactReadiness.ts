@@ -8,7 +8,7 @@ import type {
 import { REQUIRED_RUNTIME_CAPABILITY_IDS, RUNTIME_CAPABILITY_LABELS } from './types';
 
 export const ARTIFACT_EXTENSION_HINT =
-  'Spike accepts micro:bit .hex names for evaluation; execution remains disabled until byte-level adapter checks prove the required hooks.';
+  'Spike accepts micro:bit .hex files for runtime/source evaluation; execution remains disabled until simulator adapters prove the required hooks.';
 
 export function detectArtifactKind(filename: string): ArtifactKind {
   const normalized = filename.trim().toLowerCase();

@@ -80,7 +80,7 @@ export const SIMULATOR_CANDIDATES: SimulatorCandidate[] = [
       },
     ],
     nextSpike: [
-      'Extract main.py from the MicroPython HEX fixture or preserve source alongside uploads.',
+      'Use the extracted main.py from the MicroPython HEX fixture.',
       'Flash the fixture program through the iframe filesystem API.',
       'Verify radio_output payload bytes for "ping" and radio_input delivery back to the program.',
       'Determine whether LED matrix state can be observed without scraping the iframe DOM.',
@@ -159,10 +159,9 @@ export const SIMULATOR_CANDIDATES: SimulatorCandidate[] = [
       },
     ],
     nextSpike: [
-      'Locate the smallest PXT API path that can run the MakeCode fixture as simulator JavaScript.',
-      'Verify whether mc_beacon.hex contains enough metadata to recover source/project data.',
+      'Locate the smallest PXT API path that compiles the recovered MakeCode project into simulator JavaScript.',
       'Observe LedMatrixState and RadioState from an embedded simulator instance.',
-      'Decide whether MakeCode uploads must require project/source metadata instead of standalone HEX.',
+      'Validate that source extraction works across representative MakeCode HEX exports, not only the beacon fixture.',
     ],
   },
 ];
