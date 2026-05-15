@@ -11,9 +11,11 @@ npm run test
 npm run build
 ```
 
-## Current implementation slice
+## Current implementation
 
-This first slice establishes the React + TypeScript + Vite application shell and a runtime-spike harness. It intentionally does **not** claim full compiled artifact execution yet.
+The app now includes the React + TypeScript + Vite shell, a runtime-spike harness, schema-versioned project persistence, source extraction for editor-generated HEX files, a pure TypeScript swarm simulation engine, and a first interactive SVG swarm canvas with selection, radio telemetry, button controls, per-device logs, and a radio message inspector.
+
+It intentionally does **not** claim full compiled artifact execution yet.
 
 The spike records the current technical position:
 
@@ -25,6 +27,7 @@ The spike records the current technical position:
 - Fixture-backed detection now parses Intel HEX data records and classifies the provided `hex_files/mc_beacon.hex` as `makecode-pxt` and `hex_files/mp_beacon.hex` as `micropython`; both remain non-executable until a runtime adapter proves radio/display hooks.
 - Source extraction is now proven from editor-generated HEX fixtures: MicroPython recovers `main.py` from the embedded filesystem, while MakeCode recovers the embedded PXT project file map using the documented source header and LZMA payload.
 - Project persistence now has a schema-versioned domain model, self-contained JSON export/import with artifact bytes encoded inline, and browser local-storage helpers for save/reopen flows.
+- The simulation engine covers run/pause/resume/reset, 6-10 device radio routing, signal-strength-to-radius mapping, group/channel filtering, movement recalculation, light/sound source influence, button input logs, and radio message events.
 
 ## Simulator adapter decision
 
