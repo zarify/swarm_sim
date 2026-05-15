@@ -8,6 +8,7 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByRole('heading', { name: 'Spatial radio bench' })).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeInTheDocument();
     expect(screen.getByText(/4 nodes \//)).toBeInTheDocument();
+    expect(screen.getByLabelText('MicroPython runtime host')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
     expect(screen.getByText('running')).toBeInTheDocument();
@@ -39,6 +40,13 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByText('ping')).toBeInTheDocument();
     expect(screen.getByText(/device-alpha to 1 received/)).toBeInTheDocument();
     expect(screen.getByText(/Sent radio packet to 1 recipient/)).toBeInTheDocument();
+  });
+
+  it('shows MicroPython runtime frames for assigned demo devices', () => {
+    render(<SwarmCanvasPanel />);
+
+    expect(screen.getByTitle('MicroPython simulator for Alpha')).toBeInTheDocument();
+    expect(screen.getByTitle('MicroPython simulator for Beta')).toBeInTheDocument();
   });
 
   it('preserves logs and radio inspector history when topology changes', () => {

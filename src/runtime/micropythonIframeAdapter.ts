@@ -26,6 +26,8 @@ export interface MicroPythonIframeRuntimeAdapterOptions {
   targetOrigin: string;
   eventTarget?: MessageEventTargetLike;
   messageSource?: MessageEventSource | null;
+  initialReady?: boolean;
+  readyTimeoutMs?: number;
   name?: string;
 }
 
@@ -37,9 +39,15 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   private readonly targetOrigin: string;
   private readonly eventTarget?: MessageEventTargetLike;
   private readonly messageSource?: MessageEventSource | null;
+  private readonly readyTimeoutMs: number;
   private readonly listeners = new Set<(event: RuntimeAdapterEvent) => void>();
   private readonly handleMessage = (event: MessageEvent) => this.receiveMessage(event);
   private lastProgram?: MicroPythonRuntimeProgram;
+  private ready = false;
+  private resolveReady?: () => void;
+  private readonly readyPromise = new Promise<void>((resolve) => {
+    this.resolveReady = resolve;
+  });
 
   constructor(options: MicroPythonIframeRuntimeAdapterOptions) {
     this.name = options.name ?? 'micro:bit Foundation MicroPython iframe';
@@ -47,6 +55,10 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     this.targetOrigin = parseTrustedOrigin(options.targetOrigin);
     this.eventTarget = options.eventTarget;
     this.messageSource = this.eventTarget ? requireMessageSource(options.messageSource) : options.messageSource;
+    this.readyTimeoutMs = options.readyTimeoutMs ?? 5000;
+    if (!this.eventTarget || options.initialReady) {
+      this.markReady();
+    }
     this.eventTarget?.addEventListener('message', this.handleMessage);
   }
 
@@ -57,6 +69,7 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   async flash(program: RuntimeProgram): Promise<void> {
     assertMicroPythonProgram(program);
     this.lastProgram = program;
+    await this.waitUntilReady();
     this.postFlash(program);
   }
 
@@ -123,6 +136,9 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     }
 
     switch (data.kind) {
+      case 'ready':
+        this.markReady();
+        break;
       case 'request_flash':
         if (this.lastProgram) {
           this.postFlash(this.lastProgram);
@@ -151,6 +167,32 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     for (const listener of this.listeners) {
       listener(event);
     }
+  }
+
+  private markReady(): void {
+    if (this.ready) {
+      return;
+    }
+
+    this.ready = true;
+    this.resolveReady?.();
+  }
+
+  private waitUntilReady(): Promise<void> {
+    if (this.ready) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      const timeoutId = globalThis.setTimeout(() => {
+        reject(new Error('MicroPython simulator did not become ready before flash timeout'));
+      }, this.readyTimeoutMs);
+
+      this.readyPromise.then(() => {
+        globalThis.clearTimeout(timeoutId);
+        resolve();
+      }, reject);
+    });
   }
 }
 

@@ -73,7 +73,14 @@ export interface DeviceLogEvent {
   sequence: number;
   timestampMs: number;
   deviceId: DeviceId;
-  type: 'lifecycle' | 'button-input' | 'radio-sent' | 'radio-received' | 'radio-blocked';
+  type:
+    | 'lifecycle'
+    | 'button-input'
+    | 'radio-sent'
+    | 'radio-received'
+    | 'radio-blocked'
+    | 'serial-output'
+    | 'runtime-error';
   message: string;
 }
 
@@ -284,6 +291,32 @@ export function setDeviceButton(
         deviceId,
         type: 'button-input',
         message: `Button ${button} ${pressed ? 'pressed' : 'released'}`,
+      },
+    ],
+  };
+}
+
+export function appendDeviceRuntimeLog(
+  state: SimulationState,
+  deviceId: DeviceId,
+  type: Extract<DeviceLogEvent['type'], 'serial-output' | 'runtime-error'>,
+  message: string,
+): SimulationState {
+  requireDevice(state, deviceId);
+  const sequence = state.sequence + 1;
+
+  return {
+    ...state,
+    sequence,
+    deviceLogs: [
+      ...state.deviceLogs,
+      {
+        id: `log-${sequence}-${deviceId}-${type}`,
+        sequence,
+        timestampMs: state.clockMs,
+        deviceId,
+        type,
+        message,
       },
     ],
   };

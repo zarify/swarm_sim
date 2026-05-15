@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import {
   createBlankProject,
   type DeviceId,
@@ -7,7 +8,9 @@ import {
   type Point,
   type SwarmProject,
 } from '../domain/project';
+import { MicroPythonRuntimeHost } from './MicroPythonRuntimeHost';
 import {
+  appendDeviceRuntimeLog,
   moveDevice,
   pauseSimulation,
   reconcileSimulationProject,
@@ -20,6 +23,8 @@ import {
   type SimulationState,
   type SimulationMode,
 } from '../simulation/simulationEngine';
+import type { DeviceProgramLoadResult } from '../runtime/programLoader';
+import type { RuntimeRadioPacket } from '../runtime/runtimeAdapter';
 
 type Selection =
   | { type: 'device'; id: DeviceId }
@@ -38,6 +43,13 @@ const defaultRadioOptions = {
   minRadioRangeRadius: 40,
   maxRadioRangeRadius: 240,
 };
+const textEncoder = new TextEncoder();
+const demoMicroPythonBeaconHex = makeMicroPythonDemoHex(`
+import radio
+radio.config(group=42)
+radio.on()
+radio.send("ping")
+`);
 
 export function SwarmCanvasPanel() {
   const [model, setModel] = useState<CanvasModel>(() => {
@@ -50,7 +62,9 @@ export function SwarmCanvasPanel() {
   const [selected, setSelected] = useState<Selection>({ type: 'device', id: 'device-alpha' });
   const [showRadioRange, setShowRadioRange] = useState(true);
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
+  const [runtimeLoadResults, setRuntimeLoadResults] = useState<DeviceProgramLoadResult[]>([]);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const modelRef = useRef(model);
   const capturedPointerId = useRef<number | null>(null);
   const { project, simulationState } = model;
   const mode = simulationState.mode;
@@ -64,6 +78,9 @@ export function SwarmCanvasPanel() {
       : undefined;
 
   useEffect(() => () => releaseCanvasPointer(), []);
+  useEffect(() => {
+    modelRef.current = model;
+  }, [model]);
 
   function setSimulationMode(nextMode: SimulationMode) {
     setModel((current) => {
@@ -168,6 +185,41 @@ export function SwarmCanvasPanel() {
       ...current,
       simulationState: setDeviceButton(current.simulationState, selected.id, button, pressed),
     }));
+  }
+
+  function handleRuntimeRadioPacket(deviceId: DeviceId, packet: RuntimeRadioPacket): DeviceId[] {
+    let recipients: DeviceId[] = [];
+    flushSync(() => {
+      setModel((current) => {
+        const simulationState = routeRadioPacket(current.simulationState, deviceId, packet);
+        recipients = simulationState.radioEvents.at(-1)?.recipients ?? [];
+        const next = { ...current, simulationState };
+        modelRef.current = next;
+        return next;
+      });
+    });
+
+    return recipients;
+  }
+
+  function handleRuntimeLog(
+    deviceId: DeviceId,
+    type: 'serial-output' | 'internal-error',
+    message: string,
+  ) {
+    setModel((current) => {
+      const next = {
+        ...current,
+        simulationState: appendDeviceRuntimeLog(
+          current.simulationState,
+          deviceId,
+          type === 'serial-output' ? 'serial-output' : 'runtime-error',
+          message,
+        ),
+      };
+      modelRef.current = next;
+      return next;
+    });
   }
 
   function updateDragPosition(clientX: number, clientY: number) {
@@ -375,6 +427,9 @@ export function SwarmCanvasPanel() {
               <DeviceSelection
                 project={project}
                 runtime={simulationState.devices[selectedDevice.id]}
+                runtimeLoadResult={runtimeLoadResults.find(
+                  (result) => result.deviceId === selectedDevice.id,
+                )}
                 deviceId={selectedDevice.id}
                 logs={simulationState.deviceLogs.filter((log) => log.deviceId === selectedDevice.id)}
                 onButtonChange={setSelectedDeviceButton}
@@ -395,6 +450,13 @@ export function SwarmCanvasPanel() {
               active directed radio links
             </p>
           </div>
+
+          <MicroPythonRuntimeHost
+            project={project}
+            onRadioPacket={handleRuntimeRadioPacket}
+            onRuntimeLog={handleRuntimeLog}
+            onLoadResultsChange={setRuntimeLoadResults}
+          />
 
           <div className="radio-inspector-card" aria-label="Radio message inspector">
             <span className="metric-label">Radio inspector</span>
@@ -425,6 +487,7 @@ function DeviceSelection({
   project,
   deviceId,
   runtime,
+  runtimeLoadResult,
   logs,
   onButtonChange,
   onSendPing,
@@ -432,6 +495,7 @@ function DeviceSelection({
   project: SwarmProject;
   deviceId: DeviceId;
   runtime?: DeviceRuntimeState;
+  runtimeLoadResult?: DeviceProgramLoadResult;
   logs: SimulationState['deviceLogs'];
   onButtonChange: (button: 'A' | 'B', pressed: boolean) => void;
   onSendPing: () => void;
@@ -448,6 +512,11 @@ function DeviceSelection({
         x {Math.round(device.position.x)} / y {Math.round(device.position.y)}
       </p>
       <p>{device.programArtifactId ? `Artifact: ${device.programArtifactId}` : 'No artifact assigned yet'}</p>
+      {runtimeLoadResult ? (
+        <p>
+          Runtime: <strong>{runtimeLoadResult.status}</strong>
+        </p>
+      ) : null}
       {runtime ? (
         <>
           <dl className="radio-summary">
@@ -553,9 +622,29 @@ function createDemoProject(): SwarmProject {
       name: 'Radio field lab',
       now: '2026-05-16T04:20:00.000Z',
     }),
+    artifacts: [
+      {
+        id: 'artifact-micropython-beacon',
+        name: 'mp_beacon.hex',
+        artifactKind: 'hex',
+        runtimeSource: 'micropython',
+        bytes: textEncoder.encode(demoMicroPythonBeaconHex),
+        createdAt: '2026-05-16T04:20:00.000Z',
+      },
+    ],
     devices: [
-      { id: 'device-alpha', name: 'Alpha', position: { x: 180, y: 180 } },
-      { id: 'device-beta', name: 'Beta', position: { x: 315, y: 220 } },
+      {
+        id: 'device-alpha',
+        name: 'Alpha',
+        position: { x: 180, y: 180 },
+        programArtifactId: 'artifact-micropython-beacon',
+      },
+      {
+        id: 'device-beta',
+        name: 'Beta',
+        position: { x: 315, y: 220 },
+        programArtifactId: 'artifact-micropython-beacon',
+      },
       { id: 'device-gamma', name: 'Gamma', position: { x: 505, y: 190 } },
       { id: 'device-delta', name: 'Delta', position: { x: 610, y: 340 } },
     ],
@@ -609,6 +698,42 @@ function clampPoint(point: Point): Point {
     x: Math.min(canvasSize.width - 42, Math.max(42, point.x)),
     y: Math.min(canvasSize.height - 42, Math.max(42, point.y)),
   };
+}
+
+function makeMicroPythonDemoHex(mainPy: string): string {
+  const filename = textEncoder.encode('main.py');
+  const source = textEncoder.encode(mainPy);
+  const chunk = new Uint8Array(128).fill(0xff);
+  const dataStart = 3 + filename.length;
+  const endOffset = dataStart + source.length - 1;
+  if (endOffset > 126) {
+    throw new Error('Demo MicroPython program is too large for a single filesystem chunk');
+  }
+
+  chunk[0] = 0xfe;
+  chunk[1] = endOffset;
+  chunk[2] = filename.length;
+  chunk.set(filename, 3);
+  chunk.set(source, dataStart);
+
+  return [
+    ...chunkBytes(chunk, 16).map((record, index) => makeHexRecord(index * 16, 0x00, [...record])),
+    makeHexRecord(0x0000, 0x01, []),
+  ].join('\n');
+}
+
+function chunkBytes(bytes: Uint8Array, size: number): Uint8Array[] {
+  const chunks: Uint8Array[] = [];
+  for (let offset = 0; offset < bytes.length; offset += size) {
+    chunks.push(bytes.subarray(offset, offset + size));
+  }
+  return chunks;
+}
+
+function makeHexRecord(address: number, recordType: number, data: number[]): string {
+  const bytes = [data.length, address >> 8, address & 0xff, recordType, ...data];
+  const checksum = (-bytes.reduce((total, byte) => total + byte, 0)) & 0xff;
+  return `:${[...bytes, checksum].map((byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
 }
 
 function makeLedPixels(seed: number): boolean[] {

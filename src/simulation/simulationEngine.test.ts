@@ -1,5 +1,6 @@
 import { createBlankProject, type SwarmProject } from '../domain/project';
 import {
+  appendDeviceRuntimeLog,
   advanceSimulation,
   createSimulationState,
   moveDevice,
@@ -72,6 +73,18 @@ describe('simulation engine', () => {
       type: 'button-input',
       message: 'Button A pressed',
     });
+  });
+
+  it('records runtime serial and error logs from adapters', () => {
+    let state = createSimulationState(makeProject());
+
+    state = appendDeviceRuntimeLog(state, 'device-a', 'serial-output', 'mp-receive');
+    state = appendDeviceRuntimeLog(state, 'device-a', 'runtime-error', 'simulator fault');
+
+    expect(state.deviceLogs.slice(-2)).toMatchObject([
+      { deviceId: 'device-a', type: 'serial-output', message: 'mp-receive' },
+      { deviceId: 'device-a', type: 'runtime-error', message: 'simulator fault' },
+    ]);
   });
 
   it('preserves observability state while reconciling project topology changes', () => {

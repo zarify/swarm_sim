@@ -14,6 +14,7 @@ describe('MicroPython iframe runtime adapter', () => {
       targetWindow,
       targetOrigin: 'https://python-simulator.usermbit.org',
     });
+
     const program = makeMicroPythonProgram();
 
     await adapter.flash(program);
@@ -29,6 +30,25 @@ describe('MicroPython iframe runtime adapter', () => {
         targetOrigin: 'https://python-simulator.usermbit.org',
       },
     ]);
+  });
+
+  it('waits for the simulator ready handshake before flashing through a listening adapter', async () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+      readyTimeoutMs: 100,
+    });
+    const flash = adapter.flash(makeMicroPythonProgram());
+
+    expect(targetWindow.messages).toEqual([]);
+    eventTarget.dispatchMessage({ kind: 'ready' });
+    await flash;
+
+    expect(targetWindow.messages[0]?.message).toMatchObject({ kind: 'flash' });
   });
 
   it('maps buttons, sensors, reset, stop, and radio input to documented simulator messages', async () => {
@@ -94,6 +114,7 @@ describe('MicroPython iframe runtime adapter', () => {
     });
     const program = makeMicroPythonProgram();
 
+    eventTarget.dispatchMessage({ kind: 'ready' });
     await adapter.flash(program);
     eventTarget.dispatchMessage({ kind: 'request_flash' });
 
