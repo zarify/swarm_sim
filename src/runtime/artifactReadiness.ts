@@ -1,23 +1,14 @@
 import type {
   ArtifactKind,
   CapabilityState,
+  RequiredRuntimeCapabilityId,
   RuntimeCapability,
   RuntimeReadiness,
 } from './types';
+import { REQUIRED_RUNTIME_CAPABILITY_IDS, RUNTIME_CAPABILITY_LABELS } from './types';
 
 export const ARTIFACT_EXTENSION_HINT =
   'Spike accepts micro:bit .hex names for evaluation; execution remains disabled until byte-level adapter checks prove the required hooks.';
-
-const requiredHooks = [
-  'LED display state',
-  'button input injection',
-  'radio send/receive',
-  'radio group/channel',
-  'radio strength',
-  'reset lifecycle',
-  'light input',
-  'sound input/output',
-] as const;
 
 export function detectArtifactKind(filename: string): ArtifactKind {
   const normalized = filename.trim().toLowerCase();
@@ -285,5 +276,9 @@ function bytesToAscii(bytes: Uint8Array): string {
 }
 
 function makeCapabilities(state: CapabilityState): RuntimeCapability[] {
-  return requiredHooks.map((name) => ({ name, state }));
+  return REQUIRED_RUNTIME_CAPABILITY_IDS.map((id: RequiredRuntimeCapabilityId) => ({
+    id,
+    name: RUNTIME_CAPABILITY_LABELS[id],
+    state,
+  }));
 }

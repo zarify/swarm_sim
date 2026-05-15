@@ -228,6 +228,26 @@ h2 {
   background: rgba(147, 169, 134, 0.22);
 }
 
+.simulator-card {
+  margin-top: 24px;
+  padding: 18px;
+  border: 1px solid rgba(255, 176, 46, 0.34);
+  background: rgba(255, 176, 46, 0.06);
+}
+
+.simulator-card strong {
+  display: block;
+  margin-top: 8px;
+  color: var(--amber);
+  font-size: clamp(1.2rem, 2vw, 1.7rem);
+}
+
+.simulator-card p {
+  max-width: 850px;
+  margin: 10px 0 0;
+  color: var(--muted);
+}
+
 .capability-row {
   display: flex;
   align-items: center;

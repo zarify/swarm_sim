@@ -3,6 +3,10 @@ import {
   ARTIFACT_EXTENSION_HINT,
   evaluateArtifactRuntimeReadiness,
 } from '../runtime/artifactReadiness';
+import {
+  candidateForRuntimeSource,
+  missingRequiredCapabilities,
+} from '../runtime/simulatorCandidates';
 
 const defaultArtifactName = 'swarm-radio-demo.hex';
 
@@ -15,6 +19,10 @@ export function RuntimeSpikePanel() {
     () => evaluateArtifactRuntimeReadiness(artifactName, artifactBytes),
     [artifactName, artifactBytes],
   );
+  const simulatorCandidate = candidateForRuntimeSource(readiness.runtimeSource);
+  const missingCapabilities = simulatorCandidate
+    ? missingRequiredCapabilities(simulatorCandidate)
+    : [];
 
   const statusTone = readiness.canExecuteNow ? 'ready' : 'blocked';
 
@@ -121,6 +129,18 @@ export function RuntimeSpikePanel() {
           </div>
         ))}
       </div>
+
+      {simulatorCandidate ? (
+        <div className="simulator-card" aria-label="Recommended simulator adapter">
+          <span className="metric-label">Recommended adapter</span>
+          <strong>{simulatorCandidate.name}</strong>
+          <p>{simulatorCandidate.loadPath}</p>
+          <p>
+            Missing proof:{' '}
+            {missingCapabilities.length > 0 ? missingCapabilities.join(', ') : 'none'}
+          </p>
+        </div>
+      ) : null}
 
       <div className="format-strip" aria-label="Spike input format">
         <span>micro:bit .hex</span>
