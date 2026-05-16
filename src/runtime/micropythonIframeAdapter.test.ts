@@ -26,6 +26,77 @@ describe('MicroPython iframe runtime adapter', () => {
     expect(source).toContain('_SwarmDisplayProxy');
     expect(source).not.toContain('__swarm');
     expect(source).toContain('from microbit import *');
+    expect(source.indexOf('from microbit import *')).toBeLessThan(source.indexOf('class _SwarmDisplayProxy'));
+    expect(source.indexOf('class _SwarmDisplayProxy')).toBeLessThan(source.indexOf('display.show(Image.ARROW_N)'));
+  });
+
+  it('does not split valid multi-line imports when inserting the display bridge', async () => {
+    const targetWindow = makeTargetWindow();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+    });
+
+    await adapter.flash({
+      source: 'micropython',
+      filesystem: {
+        'main.py': encoder.encode(`from microbit import (
+    display,
+    Image,
+)
+display.show(Image.HEART)`),
+      },
+    });
+
+    const flash = getFlashMessage(targetWindow.messages[0]?.message);
+    const source = decoder.decode(flash.filesystem['main.py']);
+    expect(source.indexOf('    Image,\n)')).toBeLessThan(source.indexOf('class _SwarmDisplayProxy'));
+    expect(source.indexOf('class _SwarmDisplayProxy')).toBeLessThan(source.indexOf('display.show(Image.HEART)'));
+  });
+
+  it('keeps the bridge after imports when a module docstring leads the program', async () => {
+    const targetWindow = makeTargetWindow();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+    });
+
+    await adapter.flash({
+      source: 'micropython',
+      filesystem: {
+        'main.py': encoder.encode(`"""Beacon test program."""
+from microbit import *
+display.show(Image.SNAKE)`),
+      },
+    });
+
+    const flash = getFlashMessage(targetWindow.messages[0]?.message);
+    const source = decoder.decode(flash.filesystem['main.py']);
+    expect(source.indexOf('"""Beacon test program."""')).toBeLessThan(source.indexOf('from microbit import *'));
+    expect(source.indexOf('from microbit import *')).toBeLessThan(source.indexOf('class _SwarmDisplayProxy'));
+    expect(source.indexOf('class _SwarmDisplayProxy')).toBeLessThan(source.indexOf('display.show(Image.SNAKE)'));
+  });
+
+  it('ignores brackets in import comments and strings when finding the insertion point', async () => {
+    const targetWindow = makeTargetWindow();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+    });
+
+    await adapter.flash({
+      source: 'micropython',
+      filesystem: {
+        'main.py': encoder.encode(`from microbit import *  # (
+label = "not an import )"
+display.show(Image.ARROW_N)`),
+      },
+    });
+
+    const flash = getFlashMessage(targetWindow.messages[0]?.message);
+    const source = decoder.decode(flash.filesystem['main.py']);
+    expect(source.indexOf('from microbit import *  # (')).toBeLessThan(source.indexOf('class _SwarmDisplayProxy'));
+    expect(source.indexOf('class _SwarmDisplayProxy')).toBeLessThan(source.indexOf('label = "not an import )"'));
   });
 
   it('waits for the simulator ready handshake before flashing through a listening adapter', async () => {
@@ -266,7 +337,12 @@ function makeMicroPythonProgram() {
   return {
     source: 'micropython',
     filesystem: {
-      'main.py': encoder.encode('from microbit import *'),
+      'main.py': encoder.encode(`# Imports go at the top
+from microbit import *
+import radio
+
+radio.config(group=42)
+display.show(Image.ARROW_N)`),
     },
   } satisfies RuntimeProgram;
 }

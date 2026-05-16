@@ -231,8 +231,157 @@ function instrumentMicroPythonFilesystem(filesystem: MicroPythonRuntimeProgram['
   const source = utf8Decoder.decode(main);
   return {
     ...filesystem,
-    [mainPythonFile]: utf8Encoder.encode(`${microPythonDisplayBridgeSource}\n${source}`),
+    [mainPythonFile]: utf8Encoder.encode(instrumentMicroPythonSource(source)),
   };
+}
+
+function instrumentMicroPythonSource(source: string): string {
+  const lines = source.split(/\r?\n/);
+  let insertIndex = 0;
+
+  insertIndex = skipBlankAndCommentLines(lines, insertIndex);
+  insertIndex = findModuleDocstringEnd(lines, insertIndex);
+  insertIndex = skipBlankAndCommentLines(lines, insertIndex);
+
+  while (insertIndex < lines.length) {
+    const line = lines[insertIndex] ?? '';
+    const trimmed = line.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) {
+      insertIndex += 1;
+      continue;
+    }
+
+    if (!trimmed.startsWith('import ') && !trimmed.startsWith('from ')) {
+      break;
+    }
+
+    insertIndex = findImportStatementEnd(lines, insertIndex);
+  }
+
+  return [
+    ...lines.slice(0, insertIndex),
+    microPythonDisplayBridgeSource,
+    ...lines.slice(insertIndex),
+  ].join('\n');
+}
+
+function skipBlankAndCommentLines(lines: string[], startIndex: number): number {
+  let index = startIndex;
+  while (index < lines.length) {
+    const trimmed = lines[index]?.trim() ?? '';
+    if (trimmed !== '' && !trimmed.startsWith('#')) {
+      break;
+    }
+    index += 1;
+  }
+  return index;
+}
+
+function findModuleDocstringEnd(lines: string[], startIndex: number): number {
+  const firstLine = lines[startIndex];
+  if (firstLine === undefined) {
+    return startIndex;
+  }
+
+  const trimmed = firstLine.trimStart();
+  const tripleQuoteMatch = /^([rRuUbB]*)("""|''')/.exec(trimmed);
+  if (tripleQuoteMatch?.[2]) {
+    const quote = tripleQuoteMatch[2];
+    const remainder = trimmed.slice(tripleQuoteMatch[0].length);
+    if (remainder.includes(quote)) {
+      return startIndex + 1;
+    }
+
+    for (let index = startIndex + 1; index < lines.length; index += 1) {
+      if (lines[index]?.includes(quote)) {
+        return index + 1;
+      }
+    }
+    return lines.length;
+  }
+
+  if (/^([rRuUbB]*)("|')/.test(trimmed)) {
+    return startIndex + 1;
+  }
+
+  return startIndex;
+}
+
+function findImportStatementEnd(lines: string[], startIndex: number): number {
+  let index = startIndex;
+  let bracketDepth = 0;
+  do {
+    const line = lines[index] ?? '';
+    const sanitizedLine = stripPythonStringsAndComments(line);
+    bracketDepth = nextBracketDepth(bracketDepth, sanitizedLine);
+    index += 1;
+    if (bracketDepth === 0 && !sanitizedLine.trimEnd().endsWith('\\')) {
+      break;
+    }
+  } while (index < lines.length);
+
+  return index;
+}
+
+function nextBracketDepth(currentDepth: number, line: string): number {
+  let nextDepth = currentDepth;
+  for (const character of line) {
+    if (character === '(' || character === '[' || character === '{') {
+      nextDepth += 1;
+    } else if (character === ')' || character === ']' || character === '}') {
+      nextDepth = Math.max(0, nextDepth - 1);
+    }
+  }
+
+  return nextDepth;
+}
+
+function stripPythonStringsAndComments(line: string): string {
+  let stripped = '';
+  let quote: '"' | "'" | undefined;
+  let tripleQuote = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index] ?? '';
+    const nextThree = line.slice(index, index + 3);
+
+    if (!quote && character === '#') {
+      break;
+    }
+
+    if (!quote && (character === '"' || character === "'")) {
+      quote = character;
+      tripleQuote = nextThree === character.repeat(3);
+      stripped += ' ';
+      if (tripleQuote) {
+        stripped += '  ';
+        index += 2;
+      }
+      continue;
+    }
+
+    if (quote) {
+      if (tripleQuote && nextThree === quote.repeat(3)) {
+        stripped += '   ';
+        index += 2;
+        quote = undefined;
+        tripleQuote = false;
+      } else if (!tripleQuote && character === quote) {
+        stripped += ' ';
+        quote = undefined;
+      } else {
+        stripped += ' ';
+        if (!tripleQuote && character === '\\') {
+          index += 1;
+          stripped += ' ';
+        }
+      }
+      continue;
+    }
+
+    stripped += character;
+  }
+
+  return stripped;
 }
 
 function parseDisplayBridgeSerialOutput(input: string): {
@@ -321,7 +470,10 @@ def _swarm_report_display_bridge_error(_swarm_error):
 
 try:
     import microbit as _swarm_microbit
-    _swarm_display_target = _swarm_microbit.display
+    try:
+        _swarm_display_target = display
+    except NameError:
+        _swarm_display_target = _swarm_microbit.display
 
     def _swarm_emit_display():
         try:
@@ -370,8 +522,11 @@ try:
             _swarm_emit_display()
             return _swarm_result
 
-    _swarm_microbit.display = _SwarmDisplayProxy(_swarm_display_target)
-    display = _swarm_microbit.display
+    display = _SwarmDisplayProxy(_swarm_display_target)
+    try:
+        _swarm_microbit.display = display
+    except Exception:
+        pass
     _swarm_emit_display()
 except Exception as _swarm_error:
     _swarm_report_display_bridge_error(_swarm_error)
