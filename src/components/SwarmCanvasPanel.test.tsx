@@ -1,4 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { useEffect, useRef } from 'react';
+import type { MicroPythonRuntimeHostProps } from './MicroPythonRuntimeHost';
 import { SwarmCanvasPanel } from './SwarmCanvasPanel';
 
 describe('SwarmCanvasPanel', () => {
@@ -82,7 +84,34 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByText(/2 nodes \//)).toBeInTheDocument();
     expect(screen.getByLabelText('MicroPython runtime host')).toBeInTheDocument();
   });
+
+  it('draws canvas LEDs from live runtime display-change events instead of decorative pixels', async () => {
+    const pixels = [9, 0, 0, 0, 9, 0, 9, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 9, 0, 9, 0, 0, 0, 9];
+    const { container } = render(<SwarmCanvasPanel RuntimeHost={(props) => <DisplayEmitterHost {...props} pixels={pixels} />} />);
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-led-pixel="device-alpha:0"]')).toHaveClass('led-pixel--lit');
+      expect(container.querySelector('[data-led-pixel="device-alpha:1"]')).not.toHaveClass('led-pixel--lit');
+      expect(container.querySelector('[data-led-pixel="device-alpha:6"]')).toHaveClass('led-pixel--lit');
+    });
+  });
 });
+
+function DisplayEmitterHost({
+  onDisplayChange,
+  pixels,
+}: MicroPythonRuntimeHostProps & { pixels: number[] }) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    if (emitted.current) {
+      return;
+    }
+    emitted.current = true;
+    onDisplayChange?.('device-alpha', pixels);
+  }, [onDisplayChange, pixels]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
 
 function makeHexWithAscii(value: string): string {
   const bytes = [...new TextEncoder().encode(value)];

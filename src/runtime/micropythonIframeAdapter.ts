@@ -45,6 +45,7 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   private readonly listeners = new Set<(event: RuntimeAdapterEvent) => void>();
   private readonly handleMessage = (event: MessageEvent) => this.receiveMessage(event);
   private lastProgram?: MicroPythonRuntimeProgram;
+  private pendingSerialOutput = '';
   private ready = false;
   private resolveReady?: () => void;
   private readonly readyPromise = new Promise<void>((resolve) => {
@@ -116,7 +117,7 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   }
 
   private postFlash(program: MicroPythonRuntimeProgram): void {
-    this.post({ kind: 'flash', filesystem: program.filesystem });
+    this.post({ kind: 'flash', filesystem: instrumentMicroPythonFilesystem(program.filesystem) });
   }
 
   private postSetValue(id: ButtonId | SensorId, value: number): void {
@@ -147,7 +148,11 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
         break;
       case 'request_flash':
         if (this.lastProgram) {
-          this.postFlash(this.lastProgram);
+          try {
+            this.postFlash(this.lastProgram);
+          } catch (error) {
+            this.emit({ type: 'internal-error', error: normalizeError(error) });
+          }
         }
         break;
       case 'radio_output':
@@ -158,7 +163,7 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
         }
         break;
       case 'serial_output':
-        this.emit({ type: 'serial-output', data: typeof data.data === 'string' ? data.data : '' });
+        this.handleSerialOutput(typeof data.data === 'string' ? data.data : '');
         break;
       case 'internal_error':
         this.emit({ type: 'internal-error', error: normalizeError(data.error) });
@@ -167,6 +172,14 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
         break;
     }
 
+  }
+
+  private handleSerialOutput(data: string): void {
+    const parsed = parseDisplayBridgeSerialOutput(this.pendingSerialOutput + data);
+    this.pendingSerialOutput = parsed.pending;
+    for (const event of parsed.events) {
+      this.emit(event);
+    }
   }
 
   private emit(event: RuntimeAdapterEvent): void {
@@ -201,6 +214,168 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     });
   }
 }
+
+const mainPythonFile = 'main.py';
+const utf8Encoder = new TextEncoder();
+const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
+const displayBridgePrefix = '\x1eSWARM_DISPLAY:';
+const displayBridgeErrorPrefix = '\x1eSWARM_DISPLAY_ERROR:';
+const displayBridgeMarkerPattern = /\x1eSWARM_DISPLAY:([0-9]{25})(?:\r?\n)?|\x1eSWARM_DISPLAY_ERROR:([^\r\n]*)(?:\r?\n)?/g;
+
+function instrumentMicroPythonFilesystem(filesystem: MicroPythonRuntimeProgram['filesystem']) {
+  const main = filesystem[mainPythonFile];
+  if (!main) {
+    return filesystem;
+  }
+
+  const source = utf8Decoder.decode(main);
+  return {
+    ...filesystem,
+    [mainPythonFile]: utf8Encoder.encode(`${microPythonDisplayBridgeSource}\n${source}`),
+  };
+}
+
+function parseDisplayBridgeSerialOutput(input: string): {
+  events: RuntimeAdapterEvent[];
+  pending: string;
+} {
+  const { stable, pending } = splitStableDisplayBridgeSerial(input);
+  const events: RuntimeAdapterEvent[] = [];
+  let cursor = 0;
+  displayBridgeMarkerPattern.lastIndex = 0;
+
+  for (let match = displayBridgeMarkerPattern.exec(stable); match; match = displayBridgeMarkerPattern.exec(stable)) {
+    if (match.index > cursor) {
+      events.push({ type: 'serial-output', data: stable.slice(cursor, match.index) });
+    }
+
+    if (match[1]) {
+      events.push({ type: 'display-change', pixels: parseDisplayPixels(match[1]) });
+    } else {
+      events.push({
+        type: 'internal-error',
+        error: new Error(match[2] || 'MicroPython display bridge failed'),
+      });
+    }
+    cursor = match.index + match[0].length;
+  }
+
+  if (cursor < stable.length) {
+    events.push({ type: 'serial-output', data: stable.slice(cursor) });
+  }
+
+  return { events, pending };
+}
+
+function splitStableDisplayBridgeSerial(input: string): { stable: string; pending: string } {
+  let stableEnd = input.length;
+  const displayStart = input.lastIndexOf(displayBridgePrefix);
+  if (displayStart >= 0) {
+    const displayPayload = input.slice(displayStart + displayBridgePrefix.length);
+    if (/^[0-9]{0,24}$/.test(displayPayload)) {
+      stableEnd = Math.min(stableEnd, displayStart);
+    }
+  }
+
+  const errorStart = input.lastIndexOf(displayBridgeErrorPrefix);
+  if (errorStart >= 0) {
+    const errorPayload = input.slice(errorStart + displayBridgeErrorPrefix.length);
+    if (!/[\r\n]/.test(errorPayload)) {
+      stableEnd = Math.min(stableEnd, errorStart);
+    }
+  }
+
+  const stableCandidate = input.slice(0, stableEnd);
+  const trailingFragmentLength = getTrailingMarkerPrefixFragmentLength(stableCandidate);
+  const finalStableEnd = stableEnd - trailingFragmentLength;
+  return {
+    stable: input.slice(0, finalStableEnd),
+    pending: input.slice(finalStableEnd),
+  };
+}
+
+function getTrailingMarkerPrefixFragmentLength(value: string): number {
+  const prefixes = [displayBridgePrefix, displayBridgeErrorPrefix];
+  let longest = 0;
+  for (const prefix of prefixes) {
+    const maxLength = Math.min(prefix.length - 1, value.length);
+    for (let length = 1; length <= maxLength; length += 1) {
+      if (prefix.startsWith(value.slice(-length))) {
+        longest = Math.max(longest, length);
+      }
+    }
+  }
+  return longest;
+}
+
+function parseDisplayPixels(value: string): number[] {
+  return [...value].map((digit) => Number(digit));
+}
+
+const microPythonDisplayBridgeSource = String.raw`
+def _swarm_report_display_bridge_error(_swarm_error):
+    try:
+        print("\x1eSWARM_DISPLAY_ERROR:" + repr(_swarm_error))
+    except Exception:
+        pass
+
+try:
+    import microbit as _swarm_microbit
+    _swarm_display_target = _swarm_microbit.display
+
+    def _swarm_emit_display():
+        try:
+            _swarm_pixels = []
+            for _swarm_y in range(5):
+                for _swarm_x in range(5):
+                    _swarm_pixels.append(str(_swarm_display_target.get_pixel(_swarm_x, _swarm_y)))
+            print("\x1eSWARM_DISPLAY:" + "".join(_swarm_pixels))
+        except Exception as _swarm_error:
+            _swarm_report_display_bridge_error(_swarm_error)
+
+    class _SwarmDisplayProxy:
+        def __init__(self, _swarm_target):
+            self._swarm_target = _swarm_target
+
+        def __getattr__(self, _swarm_name):
+            return getattr(self._swarm_target, _swarm_name)
+
+        def show(self, *args, **kwargs):
+            _swarm_result = self._swarm_target.show(*args, **kwargs)
+            _swarm_emit_display()
+            return _swarm_result
+
+        def scroll(self, *args, **kwargs):
+            _swarm_result = self._swarm_target.scroll(*args, **kwargs)
+            _swarm_emit_display()
+            return _swarm_result
+
+        def clear(self):
+            _swarm_result = self._swarm_target.clear()
+            _swarm_emit_display()
+            return _swarm_result
+
+        def set_pixel(self, *args, **kwargs):
+            _swarm_result = self._swarm_target.set_pixel(*args, **kwargs)
+            _swarm_emit_display()
+            return _swarm_result
+
+        def on(self):
+            _swarm_result = self._swarm_target.on()
+            _swarm_emit_display()
+            return _swarm_result
+
+        def off(self):
+            _swarm_result = self._swarm_target.off()
+            _swarm_emit_display()
+            return _swarm_result
+
+    _swarm_microbit.display = _SwarmDisplayProxy(_swarm_display_target)
+    display = _swarm_microbit.display
+    _swarm_emit_display()
+except Exception as _swarm_error:
+    _swarm_report_display_bridge_error(_swarm_error)
+`;
 
 export function encodeMicroPythonRadioString(value: string): Uint8Array {
   const encoded = new TextEncoder().encode(value);

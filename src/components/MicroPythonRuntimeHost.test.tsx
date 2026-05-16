@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createBlankProject, type SwarmProject } from '../domain/project';
 import type { LoadProjectRuntimeProgramsOptions } from '../runtime/programLoader';
-import type { MicrobitRuntimeAdapter, RuntimeProgram } from '../runtime/runtimeAdapter';
+import type { MicrobitRuntimeAdapter, RuntimeAdapterEvent, RuntimeProgram } from '../runtime/runtimeAdapter';
 import type { DeviceRuntimeState } from '../simulation/simulationEngine';
 import {
   MicroPythonRuntimeHost,
@@ -242,6 +242,35 @@ describe('MicroPythonRuntimeHost', () => {
     await waitFor(() =>
       expect(sensorValues).toEqual(['lightLevel:17', 'soundLevel:23', 'lightLevel:81', 'soundLevel:5']),
     );
+  });
+
+  it('forwards prepared adapter display changes with the originating device id', async () => {
+    const displayChanges: string[] = [];
+    let emitRuntimeEvent: ((event: RuntimeAdapterEvent) => void) | undefined;
+    const project = makeProject();
+    render(
+      <MicroPythonRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        onDisplayChange={(deviceId, pixels) => displayChanges.push(`${deviceId}:${pixels.join('')}`)}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={() => makeEventAdapter((listener) => {
+          emitRuntimeEvent = listener;
+        })}
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(emitRuntimeEvent).toBeDefined());
+
+    emitRuntimeEvent?.({
+      type: 'display-change',
+      pixels: [9, 0, 0, 0, 9, 0, 9, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 9, 0, 9, 0, 0, 0, 9],
+    });
+
+    expect(displayChanges).toEqual(['device-alpha:9000909090009000909090009']);
   });
 
   it('disposes adapter listeners when MicroPython devices are removed from the runtime set', async () => {
@@ -560,6 +589,16 @@ function makeSensorAdapter(sensorValues: string[]): MicrobitRuntimeAdapter {
     ...makeAdapter([], true),
     setSensor: async (sensor, value) => {
       sensorValues.push(`${sensor}:${value}`);
+    },
+  };
+}
+
+function makeEventAdapter(captureListener: (listener: (event: RuntimeAdapterEvent) => void) => void): MicrobitRuntimeAdapter {
+  return {
+    ...makeAdapter([], true),
+    onEvent: (listener) => {
+      captureListener(listener);
+      return () => {};
     },
   };
 }

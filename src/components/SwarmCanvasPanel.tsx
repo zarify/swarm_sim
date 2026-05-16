@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { flushSync } from 'react-dom';
 import {
   createBlankProject,
@@ -25,6 +25,7 @@ import {
 } from '../simulation/simulationEngine';
 import type { DeviceProgramLoadResult } from '../runtime/programLoader';
 import type { RuntimeRadioPacket } from '../runtime/runtimeAdapter';
+import type { MicroPythonRuntimeHostProps } from './MicroPythonRuntimeHost';
 
 type Selection =
   | { type: 'device'; id: DeviceId }
@@ -37,13 +38,17 @@ interface CanvasModel {
   simulationState: SimulationState;
 }
 
+interface SwarmCanvasPanelProps {
+  RuntimeHost?: (props: MicroPythonRuntimeHostProps) => ReactElement;
+}
+
 const canvasSize = { width: 860, height: 520 };
 const defaultRadioOptions = {
   defaultRadioRangeRadius: 160,
   minRadioRangeRadius: 40,
   maxRadioRangeRadius: 240,
 };
-export function SwarmCanvasPanel() {
+export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: SwarmCanvasPanelProps = {}) {
   const [model, setModel] = useState<CanvasModel>(() => {
     const project = createDemoProject();
     return {
@@ -55,6 +60,7 @@ export function SwarmCanvasPanel() {
   const [showRadioRange, setShowRadioRange] = useState(true);
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
   const [runtimeLoadResults, setRuntimeLoadResults] = useState<DeviceProgramLoadResult[]>([]);
+  const [displaySnapshots, setDisplaySnapshots] = useState<Record<DeviceId, number[]>>({});
   const [scenarioResetSignal, setScenarioResetSignal] = useState(0);
   const [artifactUploadErrors, setArtifactUploadErrors] = useState<Record<DeviceId, string>>({});
   const svgRef = useRef<SVGSVGElement | null>(null);
@@ -77,10 +83,20 @@ export function SwarmCanvasPanel() {
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
+  useEffect(() => {
+    const activeDeviceIds = new Set(project.devices.map((device) => device.id));
+    setDisplaySnapshots((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([deviceId]) => activeDeviceIds.has(deviceId)),
+      ) as Record<DeviceId, number[]>;
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [project.devices]);
 
   function setSimulationMode(nextMode: SimulationMode) {
     if (nextMode === 'idle') {
       setScenarioResetSignal((current) => current + 1);
+      setDisplaySnapshots({});
     }
 
     setModel((current) => {
@@ -201,6 +217,7 @@ export function SwarmCanvasPanel() {
           device.id === deviceId ? { ...device, programArtifactId: artifactId } : device,
         ),
       }));
+      setDisplaySnapshots((current) => removeDisplaySnapshot(current, deviceId));
       setArtifactUploadErrors((current) => {
         const { [deviceId]: _removed, ...rest } = current;
         return rest;
@@ -250,6 +267,18 @@ export function SwarmCanvasPanel() {
       modelRef.current = next;
       return next;
     });
+  }
+
+  function handleRuntimeDisplayChange(deviceId: DeviceId, pixels: number[]) {
+    if (pixels.length !== 25 || pixels.some((pixel) => !Number.isFinite(pixel))) {
+      handleRuntimeLog(deviceId, 'internal-error', 'MicroPython display bridge emitted invalid LED data');
+      return;
+    }
+
+    setDisplaySnapshots((current) => ({
+      ...current,
+      [deviceId]: pixels.map((pixel) => Math.max(0, Math.min(9, Math.round(pixel)))),
+    }));
   }
 
   function updateDragPosition(clientX: number, clientY: number) {
@@ -407,8 +436,9 @@ export function SwarmCanvasPanel() {
               </g>
             ))}
 
-            {Object.values(simulationState.devices).map((device, index) => {
+            {Object.values(simulationState.devices).map((device) => {
               const isSelected = selected.type === 'device' && selected.id === device.deviceId;
+              const ledPixels = displaySnapshots[device.deviceId] ?? emptyLedPixels;
               return (
                 <g
                   key={device.deviceId}
@@ -423,13 +453,16 @@ export function SwarmCanvasPanel() {
                   <rect className="microbit-body" x="-34" y="-24" width="68" height="48" rx="12" />
                   <circle className="button-dot" cx="-23" cy="-1" r="5" />
                   <circle className="button-dot" cx="23" cy="-1" r="5" />
-                  {makeLedPixels(index).map((lit, pixelIndex) => {
+                  {ledPixels.map((brightness, pixelIndex) => {
                     const column = pixelIndex % 5;
                     const row = Math.floor(pixelIndex / 5);
+                    const lit = brightness > 0;
                     return (
                       <rect
                         key={pixelIndex}
+                        data-led-pixel={`${device.deviceId}:${pixelIndex}`}
                         className={lit ? 'led-pixel led-pixel--lit' : 'led-pixel'}
+                        style={lit ? { opacity: 0.35 + (brightness / 9) * 0.65 } : undefined}
                         x={-12 + column * 6}
                         y={-12 + row * 6}
                         width="3.6"
@@ -492,13 +525,14 @@ export function SwarmCanvasPanel() {
             )}
           </div>
 
-          <MicroPythonRuntimeHost
+          <RuntimeHost
             project={project}
             selectedDeviceId={selectedDevice?.id}
             deviceRuntimeStates={simulationState.devices}
             scenarioResetSignal={scenarioResetSignal}
             onRadioPacket={handleRuntimeRadioPacket}
             onRuntimeLog={handleRuntimeLog}
+            onDisplayChange={handleRuntimeDisplayChange}
             onLoadResultsChange={setRuntimeLoadResults}
           />
 
@@ -800,10 +834,16 @@ function clampPoint(point: Point): Point {
   };
 }
 
-function makeLedPixels(seed: number): boolean[] {
-  return Array.from({ length: 25 }, (_, index) => {
-    const row = Math.floor(index / 5);
-    const column = index % 5;
-    return row === column || row + column === 4 || (seed + row + column) % 7 === 0;
-  });
+const emptyLedPixels = Array.from({ length: 25 }, () => 0);
+
+function removeDisplaySnapshot(
+  snapshots: Record<DeviceId, number[]>,
+  deviceId: DeviceId,
+): Record<DeviceId, number[]> {
+  if (!snapshots[deviceId]) {
+    return snapshots;
+  }
+
+  const { [deviceId]: _removed, ...rest } = snapshots;
+  return rest;
 }

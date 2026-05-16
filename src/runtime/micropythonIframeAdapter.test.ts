@@ -6,6 +6,7 @@ import {
 } from './micropythonIframeAdapter';
 
 const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
 describe('MicroPython iframe runtime adapter', () => {
   it('flashes MicroPython filesystem programs via the Foundation postMessage API', async () => {
@@ -19,17 +20,12 @@ describe('MicroPython iframe runtime adapter', () => {
 
     await adapter.flash(program);
 
-    expect(targetWindow.messages).toEqual([
-      {
-        message: {
-          kind: 'flash',
-          filesystem: {
-            'main.py': program.filesystem['main.py'],
-          },
-        },
-        targetOrigin: 'https://python-simulator.usermbit.org',
-      },
-    ]);
+    const flash = getFlashMessage(targetWindow.messages[0]?.message);
+    const source = decoder.decode(flash.filesystem['main.py']);
+    expect(targetWindow.messages[0]?.targetOrigin).toBe('https://python-simulator.usermbit.org');
+    expect(source).toContain('_SwarmDisplayProxy');
+    expect(source).not.toContain('__swarm');
+    expect(source).toContain('from microbit import *');
   });
 
   it('waits for the simulator ready handshake before flashing through a listening adapter', async () => {
@@ -87,6 +83,7 @@ describe('MicroPython iframe runtime adapter', () => {
       eventTarget,
       messageSource: trustedMessageSource,
     });
+
     const events: RuntimeAdapterEvent[] = [];
     adapter.onEvent((event) => events.push(event));
 
@@ -101,6 +98,49 @@ describe('MicroPython iframe runtime adapter', () => {
     expect(decodeMicroPythonRadioString(events[0].packet.data)).toBe('ping');
     expect(events[1]).toEqual({ type: 'serial-output', data: 'mp-receive' });
     expect(events[2]).toMatchObject({ type: 'internal-error', error: new Error('boom') });
+  });
+
+  it('converts display bridge serial markers into display events without leaking them to user serial logs', () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: 'hello\n\x1eSWARM_DISPLAY:0123456789012345678901234\nworld' });
+
+    expect(events).toEqual([
+      { type: 'serial-output', data: 'hello\n' },
+      { type: 'display-change', pixels: digits('0123456789012345678901234') },
+      { type: 'serial-output', data: 'world' },
+    ]);
+  });
+
+  it('buffers split display bridge serial markers until the full LED frame arrives', () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: 'before\n\x1eSWARM_DIS' });
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: 'PLAY:9999900000999990000099999\nafter' });
+
+    expect(events).toEqual([
+      { type: 'serial-output', data: 'before\n' },
+      { type: 'display-change', pixels: digits('9999900000999990000099999') },
+      { type: 'serial-output', data: 'after' },
+    ]);
   });
 
   it('re-flashes the latest program when the iframe requests flash', async () => {
@@ -231,6 +271,10 @@ function makeMicroPythonProgram() {
   } satisfies RuntimeProgram;
 }
 
+function digits(value: string): number[] {
+  return [...value].map((digit) => Number(digit));
+}
+
 function makeTargetWindow() {
   const messages: { message: unknown; targetOrigin: string }[] = [];
   return {
@@ -239,6 +283,25 @@ function makeTargetWindow() {
       messages.push({ message, targetOrigin });
     },
   };
+}
+
+function getFlashMessage(message: unknown): {
+  kind: 'flash';
+  filesystem: Record<string, Uint8Array>;
+} {
+  if (
+    typeof message === 'object' &&
+    message !== null &&
+    'kind' in message &&
+    message.kind === 'flash' &&
+    'filesystem' in message &&
+    typeof message.filesystem === 'object' &&
+    message.filesystem !== null
+  ) {
+    return message as { kind: 'flash'; filesystem: Record<string, Uint8Array> };
+  }
+
+  throw new Error('Expected a flash postMessage');
 }
 
 const trustedMessageSource = window;

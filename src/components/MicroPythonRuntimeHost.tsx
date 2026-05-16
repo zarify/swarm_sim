@@ -22,7 +22,7 @@ type RuntimeLoadPrograms = (
   options: LoadProjectRuntimeProgramsOptions,
 ) => Promise<DeviceProgramLoadResult[]>;
 
-interface MicroPythonRuntimeHostProps {
+export interface MicroPythonRuntimeHostProps {
   project: SwarmProject;
   selectedDeviceId?: DeviceId;
   deviceRuntimeStates?: Record<DeviceId, DeviceRuntimeState>;
@@ -33,6 +33,7 @@ interface MicroPythonRuntimeHostProps {
     type: Extract<RuntimeAdapterEvent['type'], 'serial-output' | 'internal-error'>,
     message: string,
   ) => void;
+  onDisplayChange?: (deviceId: DeviceId, pixels: number[]) => void;
   onLoadResultsChange?: (results: DeviceProgramLoadResult[]) => void;
   loadPrograms?: RuntimeLoadPrograms;
   createAdapter?: (
@@ -49,6 +50,7 @@ export function MicroPythonRuntimeHost({
   scenarioResetSignal = 0,
   onRadioPacket,
   onRuntimeLog,
+  onDisplayChange,
   onLoadResultsChange,
   loadPrograms = loadProjectRuntimePrograms,
   createAdapter = createMicroPythonIframeAdapter,
@@ -63,7 +65,7 @@ export function MicroPythonRuntimeHost({
   const lastSensorValues = useRef(new Map<DeviceId, string>());
   const scenarioResetRef = useRef(scenarioResetSignal);
   const loadRequestId = useRef(0);
-  const callbacks = useRef({ onRadioPacket, onRuntimeLog });
+  const callbacks = useRef({ onRadioPacket, onRuntimeLog, onDisplayChange });
   const [readyDeviceIds, setReadyDeviceIds] = useState<Set<DeviceId>>(() => new Set());
 
   useEffect(() => {
@@ -71,8 +73,8 @@ export function MicroPythonRuntimeHost({
   }, [loadResults, onLoadResultsChange]);
 
   useEffect(() => {
-    callbacks.current = { onRadioPacket, onRuntimeLog };
-  }, [onRadioPacket, onRuntimeLog]);
+    callbacks.current = { onRadioPacket, onRuntimeLog, onDisplayChange };
+  }, [onRadioPacket, onRuntimeLog, onDisplayChange]);
 
   useEffect(() => () => disposeAdapters(adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current), []);
 
@@ -337,6 +339,7 @@ export function MicroPythonRuntimeHost({
         callbacks.current.onRuntimeLog(deviceId, 'internal-error', event.error.message);
         break;
       case 'display-change':
+        callbacks.current.onDisplayChange?.(deviceId, event.pixels);
         break;
     }
   }
