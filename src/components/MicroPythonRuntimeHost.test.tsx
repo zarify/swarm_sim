@@ -68,7 +68,6 @@ describe('MicroPythonRuntimeHost', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
     await waitFor(() => expect(screen.getByText(/prepared/)).toBeInTheDocument());
     expect(flashed).toHaveLength(1);
-    expect(flashed).toHaveLength(1);
   });
 
   it('keeps loading disabled until the simulator posts its ready handshake', () => {
@@ -122,7 +121,7 @@ describe('MicroPythonRuntimeHost', () => {
     );
     dispatchReadyFor('MicroPython simulator for Alpha');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare selected' }));
     await waitFor(() => expect(screen.getByText(/device-alpha/)).toBeInTheDocument());
 
     rerender(
@@ -140,11 +139,36 @@ describe('MicroPythonRuntimeHost', () => {
     );
     dispatchReadyFor('MicroPython simulator for Beta');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare selected' }));
     await waitFor(() => expect(screen.getByText(/device-beta/)).toBeInTheDocument());
 
     expect(created).toEqual(['device-alpha', 'device-beta']);
     expect(disposed).toEqual([]);
+  });
+
+  it('can prepare all ready device runtimes even when one device is selected', async () => {
+    const created: string[] = [];
+    const project = makeTwoMicroPythonDeviceProject();
+    render(
+      <MicroPythonRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={(prepared) => {
+          created.push(prepared.device.id);
+          return makeAdapter([], true);
+        }}
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    dispatchReadyFor('MicroPython simulator for Beta');
+
+    expect(screen.getByRole('button', { name: 'Prepare selected' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare all' }));
+
+    await waitFor(() => expect(created).toEqual(['device-alpha', 'device-beta']));
   });
 
   it('resets selected and scenario runtimes without disposing prepared adapters', async () => {
@@ -162,7 +186,7 @@ describe('MicroPythonRuntimeHost', () => {
       />,
     );
     dispatchReadyFor('MicroPython simulator for Alpha');
-    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare selected' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Reset selected runtime' })).toBeEnabled());
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset selected runtime' }));

@@ -39,36 +39,9 @@ input {
 }
 
 .app-shell {
-  width: min(1180px, calc(100% - 32px));
+  width: min(1240px, calc(100% - 24px));
   margin: 0 auto;
-  padding: 48px 0;
-}
-
-.hero-panel,
-.runtime-panel {
-  border: 1px solid var(--line);
-  background: linear-gradient(135deg, var(--panel-strong), var(--panel));
-  box-shadow: 0 28px 90px rgba(0, 0, 0, 0.44), inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  backdrop-filter: blur(18px);
-}
-
-.hero-panel {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr minmax(220px, 0.34fr);
-  gap: 32px;
-  overflow: hidden;
-  padding: clamp(32px, 7vw, 76px);
-}
-
-.hero-panel::after {
-  position: absolute;
-  inset: auto -18% -52% 22%;
-  height: 340px;
-  content: "";
-  border: 1px solid rgba(105, 247, 255, 0.24);
-  border-radius: 50%;
-  transform: rotate(-8deg);
+  padding: 18px 0;
 }
 
 .eyebrow {
@@ -107,22 +80,6 @@ h2 {
   line-height: 1.55;
 }
 
-.signal-card {
-  align-self: end;
-  padding: 24px;
-  border: 1px dashed rgba(183, 255, 74, 0.44);
-  background: rgba(0, 0, 0, 0.22);
-  text-transform: uppercase;
-}
-
-.signal-card strong {
-  display: block;
-  color: var(--phosphor);
-  font-size: clamp(4rem, 8vw, 7rem);
-  line-height: 0.9;
-}
-
-.signal-card__label,
 .metric-label {
   display: block;
   color: var(--muted);
@@ -134,10 +91,10 @@ h2 {
 
 .runtime-panel,
 .swarm-panel {
-  margin-top: 24px;
   padding: clamp(24px, 5vw, 44px);
 }
 
+.runtime-panel,
 .swarm-panel {
   border: 1px solid var(--line);
   background:
@@ -606,17 +563,47 @@ button:disabled {
 }
 
 .runtime-frame-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
-  max-height: 360px;
-  overflow: auto;
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 2px 2px 10px;
+  scroll-snap-type: x proximity;
 }
 
-.runtime-frame-grid iframe {
+.runtime-frame-card {
+  flex: 0 0 min(250px, 82vw);
+  scroll-snap-align: start;
+  border: 1px solid rgba(105, 247, 255, 0.2);
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.runtime-frame-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid rgba(105, 247, 255, 0.16);
+  padding: 7px 9px;
+}
+
+.runtime-frame-card__header strong,
+.runtime-frame-card__header span {
+  color: var(--cyan);
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.runtime-frame-card__header span {
+  color: var(--muted);
+}
+
+.runtime-frame-card iframe {
   width: 100%;
-  height: 148px;
-  border: 1px solid rgba(105, 247, 255, 0.24);
+  height: 142px;
+  border: 0;
   background: #020809;
 }
 
@@ -665,7 +652,6 @@ button:disabled {
 }
 
 @media (max-width: 760px) {
-  .hero-panel,
   .readiness-grid,
   .capability-list,
   .swarm-layout {

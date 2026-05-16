@@ -87,13 +87,6 @@ export function MicroPythonRuntimeHost({
 
   const selectedRuntimeDevice = devices.find((device) => device.id === selectedDeviceId);
 
-  const loadTargetDevices = selectedRuntimeDevice ? [selectedRuntimeDevice] : devices;
-
-  const runtimeProject = useMemo(
-    () => makeRuntimeProject(project, loadTargetDevices),
-    [loadTargetDevices, project],
-  );
-
   useEffect(() => {
     loadRequestId.current += 1;
     setIsLoading(false);
@@ -224,11 +217,11 @@ export function MicroPythonRuntimeHost({
     [devices, setFrame],
   );
 
-  async function loadRuntimes() {
+  async function loadRuntimes(targetDevices: SwarmProject['devices']) {
     const requestId = loadRequestId.current + 1;
     loadRequestId.current = requestId;
     setIsLoading(true);
-    for (const device of loadTargetDevices) {
+    for (const device of targetDevices) {
       disposeAdapterForDevice(
         adapters.current,
         adapterUnsubscribes.current,
@@ -240,7 +233,7 @@ export function MicroPythonRuntimeHost({
     const requestAdapters: { deviceId: DeviceId; adapter: MicrobitRuntimeAdapter }[] = [];
 
     try {
-      const results = normalizeDeferredFlashResults(await loadPrograms(runtimeProject, {
+      const results = normalizeDeferredFlashResults(await loadPrograms(makeRuntimeProject(project, targetDevices), {
         createAdapter: (prepared) => {
           if (prepared.runtimeSource !== 'micropython') {
             return undefined;
@@ -285,7 +278,7 @@ export function MicroPythonRuntimeHost({
         return;
       }
       const diagnostic = error instanceof Error ? error.message : 'Unable to load MicroPython runtimes';
-      const results: DeviceProgramLoadResult[] = loadTargetDevices.map((device) => ({
+      const results: DeviceProgramLoadResult[] = targetDevices.map((device) => ({
         deviceId: device.id,
         artifactId: device.programArtifactId,
         status: 'failed',
@@ -349,12 +342,13 @@ export function MicroPythonRuntimeHost({
   }
 
   const readyFrames = devices.filter((device) => readyDeviceIds.has(device.id)).length;
-  const targetReadyFrames = loadTargetDevices.filter((device) => readyDeviceIds.has(device.id)).length;
+  const allFramesReady = devices.length > 0 && readyFrames === devices.length;
+  const selectedFrameReady = selectedRuntimeDevice ? readyDeviceIds.has(selectedRuntimeDevice.id) : false;
   const preparedDeviceIds = new Set(adapters.current.keys());
   const selectedPrepared = selectedDeviceId ? preparedDeviceIds.has(selectedDeviceId) : false;
   const hasPreparedRuntime = preparedDeviceIds.size > 0;
-  const canPrepareTarget =
-    loadTargetDevices.length > 0 && targetReadyFrames === loadTargetDevices.length;
+  const canPrepareSelected = Boolean(selectedRuntimeDevice && selectedFrameReady);
+  const showPrepareSelected = Boolean(selectedRuntimeDevice && devices.length > 1);
 
   return (
     <div className="runtime-host-card" aria-label="MicroPython runtime host">
@@ -371,18 +365,21 @@ export function MicroPythonRuntimeHost({
         </p>
       </div>
       <div className="runtime-host-actions">
+        {showPrepareSelected && selectedRuntimeDevice ? (
+          <button
+            type="button"
+            onClick={() => loadRuntimes([selectedRuntimeDevice])}
+            disabled={isLoading || !canPrepareSelected}
+          >
+            {isLoading ? 'Preparing runtime...' : 'Prepare selected'}
+          </button>
+        ) : null}
         <button
           type="button"
-          onClick={loadRuntimes}
-          disabled={isLoading || !canPrepareTarget}
+          onClick={() => loadRuntimes(devices)}
+          disabled={isLoading || !allFramesReady}
         >
-          {isLoading
-            ? 'Preparing runtime...'
-            : selectedRuntimeDevice
-              ? 'Prepare runtime'
-              : devices.length === 1
-                ? 'Prepare runtime'
-                : 'Prepare all runtimes'}
+          {isLoading ? 'Preparing runtimes...' : devices.length <= 1 ? 'Prepare runtime' : 'Prepare all'}
         </button>
         <button
           type="button"
@@ -401,14 +398,19 @@ export function MicroPythonRuntimeHost({
       </div>
       <div className="runtime-frame-grid" data-frame-version={frameVersion}>
         {devices.map((device) => (
-          <iframe
-            key={device.id}
-            ref={frameRefs.get(device.id)}
-            title={`MicroPython simulator for ${device.name}`}
-            src={MICRO_PYTHON_SIMULATOR_URL}
-            sandbox="allow-scripts allow-same-origin"
-            scrolling="no"
-          />
+          <article key={device.id} className="runtime-frame-card">
+            <div className="runtime-frame-card__header">
+              <strong>{device.name}</strong>
+              <span>{preparedDeviceIds.has(device.id) ? 'prepared' : readyDeviceIds.has(device.id) ? 'ready' : 'loading'}</span>
+            </div>
+            <iframe
+              ref={frameRefs.get(device.id)}
+              title={`MicroPython simulator for ${device.name}`}
+              src={MICRO_PYTHON_SIMULATOR_URL}
+              sandbox="allow-scripts allow-same-origin"
+              scrolling="no"
+            />
+          </article>
         ))}
       </div>
       {loadResults.length > 0 ? (

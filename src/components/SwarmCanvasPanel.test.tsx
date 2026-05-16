@@ -36,9 +36,9 @@ describe('SwarmCanvasPanel', () => {
     render(<SwarmCanvasPanel />);
 
     expect(screen.queryByRole('button', { name: /Press A|Press B|Send ping/ })).not.toBeInTheDocument();
-    expect(screen.getByText('Runtime group')).toBeInTheDocument();
-    expect(screen.getByText('Runtime channel')).toBeInTheDocument();
-    expect(screen.getAllByText('Not exposed')).toHaveLength(2);
+    expect(screen.queryByText('Runtime group')).not.toBeInTheDocument();
+    expect(screen.queryByText('Runtime channel')).not.toBeInTheDocument();
+    expect(screen.queryByText('Not exposed')).not.toBeInTheDocument();
     expect(screen.getByLabelText('Event log for Alpha')).not.toHaveAttribute('open');
     expect(screen.getByLabelText('Radio message inspector')).not.toHaveAttribute('open');
   });
@@ -53,6 +53,8 @@ describe('SwarmCanvasPanel', () => {
 
     await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
     expect(screen.getByTitle('MicroPython simulator for Alpha')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Prepare runtime' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Prepare selected' })).not.toBeInTheDocument();
   });
 
   it('keeps the latest selected-device upload when an older read finishes later', async () => {

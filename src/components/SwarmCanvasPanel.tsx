@@ -594,14 +594,6 @@ function DeviceSelection({
         <>
           <dl className="radio-summary">
             <div>
-              <dt>Runtime group</dt>
-              <dd>Not exposed</dd>
-            </div>
-            <div>
-              <dt>Runtime channel</dt>
-              <dd>Not exposed</dd>
-            </div>
-            <div>
               <dt>Range</dt>
               <dd>{Math.round(runtime.radio.rangeRadius)}</dd>
             </div>
