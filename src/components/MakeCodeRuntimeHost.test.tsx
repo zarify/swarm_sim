@@ -224,6 +224,63 @@ describe('MakeCodeRuntimeHost', () => {
     expect(packets).toEqual(['device-alpha:light:76']);
   });
 
+  it('deduplicates immediate identical serial outputs from the same runtime device', async () => {
+    const logs: string[] = [];
+    let emitRuntimeEvent: ((event: RuntimeAdapterEvent) => void) | undefined;
+
+    render(
+      <MakeCodeRuntimeHost
+        project={makeProject()}
+        onDisplayChange={() => {}}
+        onRadioPacket={() => []}
+        onRuntimeLog={(deviceId, _type, message) => logs.push(`${deviceId}:${message}`)}
+        onSoundOutput={() => {}}
+        onRadioConfigHint={() => {}}
+        loadPrograms={async (_project, options) => {
+          const adapter = await options.createAdapter?.({
+            device: makeProject().devices[0]!,
+            artifact: makeProject().artifacts[0]!,
+            runtimeSource: 'makecode-pxt',
+            program: {
+              source: 'makecode-pxt',
+              sourceFiles: { 'main.ts': 'radio.sendString("ping")' },
+            },
+          });
+          await adapter?.flash({
+            source: 'makecode-pxt',
+            sourceFiles: { 'main.ts': 'radio.sendString("ping")' },
+          });
+          return [
+            {
+              deviceId: 'device-alpha',
+              artifactId: 'artifact-mc',
+              status: 'loaded',
+              runtimeSource: 'makecode-pxt',
+              adapterName: adapter?.name,
+            },
+          ];
+        }}
+        createAdapter={() =>
+          makeEventAdapter((listener) => {
+            emitRuntimeEvent = listener;
+          })
+        }
+      />,
+    );
+
+    await markRunnerReady('Alpha');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare runtime' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(emitRuntimeEvent).toBeDefined());
+
+    act(() => {
+      emitRuntimeEvent?.({ type: 'serial-output', data: 'light:66' });
+      emitRuntimeEvent?.({ type: 'serial-output', data: 'light:66' });
+    });
+
+    expect(logs).toEqual(['device-alpha:light:66']);
+  });
+
   it('filters malformed display frames and logs the fault once until a valid frame arrives', async () => {
     const displayChanges: string[] = [];
     const logs: string[] = [];

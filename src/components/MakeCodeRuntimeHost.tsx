@@ -86,6 +86,7 @@ export function MakeCodeRuntimeHost({
   const [readyDeviceIds, setReadyDeviceIds] = useState<Set<DeviceId>>(() => new Set());
   const invalidDisplayFrameLogged = useRef(new Set<DeviceId>());
   const recentRadioPackets = useRef(new Map<DeviceId, string>());
+  const recentSerialOutputs = useRef(new Map<DeviceId, string>());
   const callbacks = useRef({
     onRadioPacket,
     onRuntimeLog,
@@ -175,6 +176,7 @@ export function MakeCodeRuntimeHost({
         lastButtonValues.current.delete(deviceId);
         invalidDisplayFrameLogged.current.delete(deviceId);
         recentRadioPackets.current.delete(deviceId);
+        recentSerialOutputs.current.delete(deviceId);
       }
     }
     setReadyDeviceIds((current) => {
@@ -339,6 +341,7 @@ export function MakeCodeRuntimeHost({
       lastButtonValues.current.delete(device.id);
       invalidDisplayFrameLogged.current.delete(device.id);
       recentRadioPackets.current.delete(device.id);
+      recentSerialOutputs.current.delete(device.id);
     }
 
     const requestAdapters: { deviceId: DeviceId; adapter: MicrobitRuntimeAdapter }[] = [];
@@ -452,6 +455,7 @@ export function MakeCodeRuntimeHost({
         lastButtonValues.current.delete(deviceId);
         invalidDisplayFrameLogged.current.delete(deviceId);
         recentRadioPackets.current.delete(deviceId);
+        recentSerialOutputs.current.delete(deviceId);
         if (runtime) {
           await syncRuntimeInputs(deviceId, adapter, runtime, true);
         }
@@ -555,6 +559,9 @@ export function MakeCodeRuntimeHost({
         callbacks.current.onRadioConfigHint?.(deviceId, event.config);
         break;
       case 'serial-output':
+        if (isDuplicateRecentSerialOutput(recentSerialOutputs.current, deviceId, event.data)) {
+          break;
+        }
         callbacks.current.onRuntimeLog(deviceId, 'serial-output', event.data);
         break;
       case 'internal-error':
@@ -825,6 +832,21 @@ function isDuplicateRecentRadioPacket(
     }
   });
   return previous === fingerprint;
+}
+
+function isDuplicateRecentSerialOutput(
+  cache: Map<DeviceId, string>,
+  deviceId: DeviceId,
+  data: string,
+): boolean {
+  const previous = cache.get(deviceId);
+  cache.set(deviceId, data);
+  queueMicrotask(() => {
+    if (cache.get(deviceId) === data) {
+      cache.delete(deviceId);
+    }
+  });
+  return previous === data;
 }
 
 function debugMakeCodeRadio(event: string, details: Record<string, unknown>): void {
