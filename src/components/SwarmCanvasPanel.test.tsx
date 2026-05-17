@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useEffect, useRef } from 'react';
 import type { MicroPythonRuntimeHostProps } from './MicroPythonRuntimeHost';
 import { SwarmCanvasPanel } from './SwarmCanvasPanel';
+import makeCodeBeaconHex from '../../hex_files/mc_beacon.hex?raw';
 
 describe('SwarmCanvasPanel', () => {
   it('renders the spatial canvas and updates simulation controls', () => {
@@ -10,7 +11,8 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByRole('heading', { name: 'Spatial radio bench' })).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeInTheDocument();
     expect(screen.getByText(/1 nodes \//)).toBeInTheDocument();
-    expect(screen.getByLabelText('MicroPython runtime host')).toBeInTheDocument();
+    expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('MakeCode runtime host')).not.toBeInTheDocument();
     expect(screen.queryByText('Artifact execution gate')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Run' }));
@@ -54,9 +56,47 @@ describe('SwarmCanvasPanel', () => {
     });
 
     await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
+    expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
     expect(screen.getByTitle('MicroPython simulator for Alpha')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Prepare runtime' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('MakeCode runtime host')).not.toBeInTheDocument();
+    expect(
+      within(screen.getByLabelText('MicroPython runtime host')).getByRole('button', {
+        name: 'Reload runtime',
+      }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Prepare selected' })).not.toBeInTheDocument();
+  });
+
+  it('assigns MakeCode fixture HEX files and classifies their runtime source', async () => {
+    render(<SwarmCanvasPanel />);
+
+    const file = makeUploadFile('mc_beacon.hex', makeCodeBeaconHex);
+    fireEvent.change(screen.getByLabelText(/Load code onto Alpha/), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => expect(screen.getByText('Runtime source: makecode-pxt')).toBeInTheDocument(), {
+      timeout: 12000,
+    });
+    expect(screen.getByLabelText('MakeCode runtime host')).toBeInTheDocument();
+    expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('MakeCode simulator for Alpha')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Unable to identify this HEX/)).not.toBeInTheDocument();
+  }, 30000);
+
+  it('keeps valid HEX assignments even when runtime source cannot yet be identified', async () => {
+    render(<SwarmCanvasPanel />);
+
+    const file = makeUploadFile('unknown.hex', makeHexWithAscii('hello'));
+    fireEvent.change(screen.getByLabelText(/Load code onto Alpha/), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => expect(screen.getByText('Assigned: unknown.hex')).toBeInTheDocument());
+    expect(screen.getByText('Runtime source: unknown')).toBeInTheDocument();
+    expect(
+      screen.getByText(/Assigned, but runtime source could not be identified yet/),
+    ).toBeInTheDocument();
   });
 
   it('keeps the latest selected-device upload when an older read finishes later', async () => {
@@ -76,14 +116,35 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.queryByText('Assigned: slow.hex')).not.toBeInTheDocument();
   });
 
-  it('keeps runtime host mounted when topology changes', () => {
+  it('keeps runtime hosts hidden until devices have assigned runtime artifacts', () => {
     render(<SwarmCanvasPanel />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
 
     expect(screen.getByText(/2 nodes \//)).toBeInTheDocument();
-    expect(screen.getByLabelText('MicroPython runtime host')).toBeInTheDocument();
+    expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('MakeCode runtime host')).not.toBeInTheDocument();
   });
+
+  it('keeps both runtime hosts mounted when MicroPython and MakeCode devices are assigned together', async () => {
+    render(<SwarmCanvasPanel />);
+
+    fireEvent.change(screen.getByLabelText(/Load code onto Alpha/), {
+      target: { files: [makeUploadFile('mp.hex', makeHexWithAscii('MicroPython'))] },
+    });
+    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
+      target: { files: [makeUploadFile('mc_beacon.hex', makeCodeBeaconHex)] },
+    });
+    await waitFor(() => expect(screen.getByText('Runtime source: makecode-pxt')).toBeInTheDocument(), {
+      timeout: 12000,
+    });
+
+    expect(screen.getByLabelText('MicroPython runtime host')).toBeInTheDocument();
+    expect(screen.getByLabelText('MakeCode runtime host')).toBeInTheDocument();
+  }, 30000);
 
   it('draws canvas LEDs from live runtime display-change events instead of decorative pixels', async () => {
     const pixels = [9, 0, 0, 0, 9, 0, 9, 0, 9, 0, 0, 0, 9, 0, 0, 0, 9, 0, 9, 0, 9, 0, 0, 0, 9];
@@ -95,6 +156,78 @@ describe('SwarmCanvasPanel', () => {
       expect(container.querySelector('[data-led-pixel="device-alpha:6"]')).toHaveClass('led-pixel--lit');
     });
   });
+
+  it('shows transient runtime activity rings for radio transmit and sound output', async () => {
+    const { container } = render(<SwarmCanvasPanel RuntimeHost={(props) => <ActivityEmitterHost {...props} />} />);
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-runtime-activity="tx:device-alpha"]')).toHaveClass('runtime-activity--active');
+      expect(container.querySelector('[data-runtime-activity="sound:device-alpha"]')).toHaveClass('runtime-activity--active');
+    });
+  });
+
+  it('normalizes invalid runtime radio signal-strength values instead of crashing the panel', async () => {
+    const { container } = render(
+      <SwarmCanvasPanel RuntimeHost={(props) => <InvalidSignalStrengthHost {...props} />} />,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-runtime-activity="tx:device-alpha"]')).toHaveClass(
+        'runtime-activity--active',
+      );
+    });
+    expect(screen.getByRole('heading', { name: 'Spatial radio bench' })).toBeInTheDocument();
+  });
+
+  it('shows serial output in runtime logs and renders compact radio packet previews', async () => {
+    render(<SwarmCanvasPanel RuntimeHost={(props) => <SerialAndRadioEmitterHost {...props} />} />);
+
+    const deviceLog = screen.getByLabelText('Event log for Alpha');
+    const radioInspector = screen.getByLabelText('Radio message inspector');
+    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
+    fireEvent.click(radioInspector.querySelector('summary') as HTMLElement);
+
+    await waitFor(() => expect(screen.getAllByText('sound:13').length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('applies runtime radio config hints before routing immediate packets', async () => {
+    render(<SwarmCanvasPanel RuntimeHost={(props) => <RadioConfigThenPacketHost {...props} />} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
+    await waitFor(() => expect(screen.getByText('Node 2')).toBeInTheDocument());
+
+    const deviceLog = screen.getByLabelText('Event log for Node 2');
+    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
+
+    await waitFor(() => expect(screen.getByText('Received radio packet from device-alpha')).toBeInTheDocument());
+    expect(screen.queryByText('Blocked radio packet from device-alpha: group-mismatch')).not.toBeInTheDocument();
+  });
+
+  it('deduplicates immediate identical runtime radio packets before routing', async () => {
+    render(<SwarmCanvasPanel RuntimeHost={(props) => <DuplicateRadioPacketHost {...props} />} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
+    await waitFor(() => expect(screen.getByText('Node 2')).toBeInTheDocument());
+
+    const deviceLog = screen.getByLabelText('Event log for Node 2');
+    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
+
+    await waitFor(() =>
+      expect(screen.getByText('Received radio packet from device-alpha')).toBeInTheDocument(),
+    );
+    expect(screen.getAllByText('Received radio packet from device-alpha')).toHaveLength(1);
+  });
+
+  it('pulses canvas device buttons into runtime state so hosts can consume button input', async () => {
+    const buttonStates: string[] = [];
+    render(<SwarmCanvasPanel RuntimeHost={(props) => <ButtonProbeHost {...props} buttonStates={buttonStates} />} />);
+
+    fireEvent.pointerDown(screen.getByTestId('device-button-device-alpha-A'));
+
+    await waitFor(() => expect(buttonStates).toContain('true:false'));
+    await waitFor(() => expect(buttonStates).toContain('false:false'));
+  });
+
 });
 
 function DisplayEmitterHost({
@@ -112,6 +245,122 @@ function DisplayEmitterHost({
 
   return <div aria-label="MicroPython runtime host" />;
 }
+
+function ActivityEmitterHost({
+  onRadioPacket,
+  onSoundOutput,
+}: MicroPythonRuntimeHostProps) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    if (emitted.current) {
+      return;
+    }
+    emitted.current = true;
+    const timerId = globalThis.setTimeout(() => {
+      onRadioPacket('device-alpha', { data: new Uint8Array([0x01]) });
+      onSoundOutput?.('device-alpha', 9);
+    }, 0);
+    return () => globalThis.clearTimeout(timerId);
+  }, [onRadioPacket, onSoundOutput]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
+function InvalidSignalStrengthHost({ onRadioPacket }: MicroPythonRuntimeHostProps) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    if (emitted.current) {
+      return;
+    }
+    emitted.current = true;
+    const timerId = globalThis.setTimeout(() => {
+      onRadioPacket('device-alpha', {
+        data: new Uint8Array([0x01]),
+        signalStrength: -52,
+      });
+    }, 0);
+    return () => globalThis.clearTimeout(timerId);
+  }, [onRadioPacket]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
+function ButtonProbeHost({
+  deviceRuntimeStates,
+  buttonStates,
+}: MicroPythonRuntimeHostProps & { buttonStates: string[] }) {
+  const last = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    const runtime = deviceRuntimeStates?.['device-alpha'];
+    if (!runtime) {
+      return;
+    }
+    const snapshot = `${runtime.buttons.A}:${runtime.buttons.B}`;
+    if (last.current === snapshot) {
+      return;
+    }
+    last.current = snapshot;
+    buttonStates.push(snapshot);
+  }, [deviceRuntimeStates, buttonStates]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
+function SerialAndRadioEmitterHost({ onRadioPacket, onRuntimeLog }: MicroPythonRuntimeHostProps) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    if (emitted.current) {
+      return;
+    }
+    emitted.current = true;
+    const timerId = globalThis.setTimeout(() => {
+      onRuntimeLog('device-alpha', 'serial-output', 'sound:13');
+      onRadioPacket('device-alpha', { data: makeMakeCodeValuePacket('sound', 13) });
+    }, 0);
+    return () => globalThis.clearTimeout(timerId);
+  }, [onRadioPacket, onRuntimeLog]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
+function RadioConfigThenPacketHost({ project, onRadioConfigHint, onRadioPacket }: MicroPythonRuntimeHostProps) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    if (emitted.current || !project.devices.some((device) => device.id === 'device-2')) {
+      return;
+    }
+    emitted.current = true;
+    const timerId = globalThis.setTimeout(() => {
+      onRadioConfigHint?.('device-alpha', { group: 42 });
+      onRadioConfigHint?.('device-2', { group: 42 });
+      onRadioPacket('device-alpha', { data: new Uint8Array([0x01]), signalStrength: 7 });
+    }, 0);
+    return () => globalThis.clearTimeout(timerId);
+  }, [project, onRadioConfigHint, onRadioPacket]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
+function DuplicateRadioPacketHost({ project, onRadioConfigHint, onRadioPacket }: MicroPythonRuntimeHostProps) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    if (emitted.current || !project.devices.some((device) => device.id === 'device-2')) {
+      return;
+    }
+    emitted.current = true;
+    const timerId = globalThis.setTimeout(() => {
+      onRadioConfigHint?.('device-alpha', { group: 42 });
+      onRadioConfigHint?.('device-2', { group: 42 });
+      const packet = { data: new Uint8Array([0x01]), signalStrength: 7 };
+      onRadioPacket('device-alpha', packet);
+      onRadioPacket('device-alpha', packet);
+    }, 0);
+    return () => globalThis.clearTimeout(timerId);
+  }, [project, onRadioConfigHint, onRadioPacket]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
 
 function makeHexWithAscii(value: string): string {
   const bytes = [...new TextEncoder().encode(value)];
@@ -145,4 +394,15 @@ function makeHexRecord(address: number, recordType: number, data: number[]): str
   const bytes = [data.length, address >> 8, address & 0xff, recordType, ...data];
   const checksum = (-bytes.reduce((total, byte) => total + byte, 0)) & 0xff;
   return `:${[...bytes, checksum].map((byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
+}
+
+function makeMakeCodeValuePacket(name: string, value: number): Uint8Array {
+  const bytes = new Uint8Array(32);
+  bytes[0] = 1; // PACKET_TYPE_VALUE
+  const view = new DataView(bytes.buffer);
+  view.setInt32(9, value, true);
+  const encodedName = new TextEncoder().encode(name.slice(0, 8));
+  bytes[13] = encodedName.length;
+  bytes.set(encodedName, 14);
+  return bytes;
 }

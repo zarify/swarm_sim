@@ -24,7 +24,6 @@ type RuntimeLoadPrograms = (
 
 const MAKECODE_SIMULATOR_RUNNER_URL = '/makecode-patched-runner.html';
 const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
-const RADIO_DUPLICATE_WINDOW_MS = 8;
 
 export interface MakeCodeRuntimeHostProps {
   project: SwarmProject;
@@ -86,7 +85,7 @@ export function MakeCodeRuntimeHost({
   const loadRequestId = useRef(0);
   const [readyDeviceIds, setReadyDeviceIds] = useState<Set<DeviceId>>(() => new Set());
   const invalidDisplayFrameLogged = useRef(new Set<DeviceId>());
-  const recentRadioPackets = useRef(new Map<DeviceId, { fingerprint: string; atMs: number }>());
+  const recentRadioPackets = useRef(new Map<DeviceId, string>());
   const callbacks = useRef({
     onRadioPacket,
     onRuntimeLog,
@@ -813,15 +812,19 @@ function runtimeRadioConfigFromPacket(
 }
 
 function isDuplicateRecentRadioPacket(
-  cache: Map<DeviceId, { fingerprint: string; atMs: number }>,
+  cache: Map<DeviceId, string>,
   deviceId: DeviceId,
   packet: RuntimeRadioPacket,
 ): boolean {
-  const nowMs = Date.now();
   const fingerprint = `${packet.group ?? 'none'}:${packet.channel ?? 'none'}:${packet.signalStrength ?? 'none'}:${[...packet.data].join(',')}`;
   const previous = cache.get(deviceId);
-  cache.set(deviceId, { fingerprint, atMs: nowMs });
-  return Boolean(previous && previous.fingerprint === fingerprint && nowMs - previous.atMs <= RADIO_DUPLICATE_WINDOW_MS);
+  cache.set(deviceId, fingerprint);
+  queueMicrotask(() => {
+    if (cache.get(deviceId) === fingerprint) {
+      cache.delete(deviceId);
+    }
+  });
+  return previous === fingerprint;
 }
 
 function debugMakeCodeRadio(event: string, details: Record<string, unknown>): void {

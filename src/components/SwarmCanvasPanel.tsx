@@ -97,6 +97,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const displayFrameTimers = useRef(new Map<DeviceId, number>());
   const displayLastUpdateMs = useRef(new Map<DeviceId, number>());
   const buttonPulseTimers = useRef(new Map<string, number>());
+  const recentRoutedPackets = useRef(new Map<DeviceId, string>());
   const pendingRadioConfigHints = useRef(
     new Map<DeviceId, Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>>>(),
   );
@@ -214,6 +215,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       clearDisplayFrameTimers(displayFrameTimers.current);
       clearButtonPulseTimers(buttonPulseTimers.current);
       displayLastUpdateMs.current.clear();
+      recentRoutedPackets.current.clear();
     }
 
     setModel((current) => {
@@ -371,6 +373,24 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   }
 
   function handleRuntimeRadioPacket(deviceId: DeviceId, packet: RuntimeRadioPacket): DeviceId[] {
+    const senderRadio = modelRef.current.simulationState.devices[deviceId]?.radio;
+    const effectiveGroup = packet.group ?? senderRadio?.group;
+    const effectiveChannel = packet.channel ?? senderRadio?.channel;
+    if (
+      isDuplicateRecentRoutedPacket(
+        recentRoutedPackets.current,
+        deviceId,
+        packet,
+        effectiveGroup,
+        effectiveChannel,
+      )
+    ) {
+      debugRadioPanel('dedupe-runtime-radio-packet', {
+        senderDeviceId: deviceId,
+        packet: summarizeRadioPacket(packet),
+      });
+      return [];
+    }
     pulseRuntimeActivity(deviceId, 'tx');
     let recipients: DeviceId[] = [];
     flushSync(() => {
@@ -1460,6 +1480,24 @@ function summarizeRadioPacket(packet: RuntimeRadioPacket): Record<string, unknow
     channel: packet.channel,
     signalStrength: packet.signalStrength,
   };
+}
+
+function isDuplicateRecentRoutedPacket(
+  cache: Map<DeviceId, string>,
+  deviceId: DeviceId,
+  packet: RuntimeRadioPacket,
+  effectiveGroup?: number,
+  effectiveChannel?: number,
+): boolean {
+  const fingerprint = `${effectiveGroup ?? 'none'}:${effectiveChannel ?? 'none'}:${[...packet.data].join(',')}:${packet.signalStrength ?? 'none'}`;
+  const previous = cache.get(deviceId);
+  cache.set(deviceId, fingerprint);
+  queueMicrotask(() => {
+    if (cache.get(deviceId) === fingerprint) {
+      cache.delete(deviceId);
+    }
+  });
+  return previous === fingerprint;
 }
 
 function debugRadioPanel(event: string, details: Record<string, unknown>): void {
