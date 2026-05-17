@@ -1,5 +1,7 @@
 import { createBlankProject, type SwarmProject } from '../domain/project';
 import { deserializeProject, serializeProject } from '../domain/projectSerialization';
+import { loadProjectRuntimePrograms } from '../runtime/programLoader';
+import type { RuntimeProgram } from '../runtime/runtimeAdapter';
 import {
   createSimulationState,
   moveDevice,
@@ -9,6 +11,7 @@ import {
 } from '../simulation/simulationEngine';
 import makeCodeBeaconHex from '../../hex_files/mc_beacon.hex?raw';
 import microPythonBeaconHex from '../../hex_files/mp_beacon.hex?raw';
+import { decompress } from 'lzma';
 
 const now = '2026-05-16T04:20:00.000Z';
 const encoder = new TextEncoder();
@@ -72,6 +75,56 @@ describe('MVP acceptance coverage', () => {
     expect(changed).not.toEqual(initial);
     expect(reset).toEqual(initial);
   });
+
+  it('prepares mixed MakeCode and MicroPython runtime programs from real fixture HEX artifacts', async () => {
+    const flashed: RuntimeProgram[] = [];
+    const results = await loadProjectRuntimePrograms(makeTwoDeviceProject(), {
+      decompressLzma: (bytes) =>
+        new Promise((resolve, reject) => {
+          decompress(bytes, (result, error) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            if (typeof result !== 'string') {
+              reject(new Error('Expected LZMA output to be decoded source text'));
+              return;
+            }
+            resolve(result);
+          });
+        }),
+      createAdapter: ({ runtimeSource }) => ({
+        name: `${runtimeSource} acceptance adapter`,
+        source: runtimeSource,
+        evaluateArtifact: () => ({
+          artifactKind: 'hex',
+          runtimeSource,
+          sourceEvidence: [],
+          canExecuteNow: true,
+          verdict: 'acceptance adapter',
+          capabilities: [],
+        }),
+        flash: async (program) => {
+          flashed.push(program);
+        },
+        reset: async () => {},
+        stop: async () => {},
+        setButton: async () => {},
+        setSensor: async () => {},
+        sendRadio: async () => {},
+        onEvent: () => () => {},
+      }),
+    });
+    expect(results).toHaveLength(2);
+    expect(flashed.map((program) => program.source)).toContain('makecode-pxt');
+    expect(flashed.map((program) => program.source)).toContain('micropython');
+    const makeCodeProgram = flashed.find((program) => program.source === 'makecode-pxt');
+    expect(makeCodeProgram).toBeDefined();
+    if (makeCodeProgram?.source !== 'makecode-pxt') {
+      throw new Error('Expected MakeCode runtime program');
+    }
+    expect(makeCodeProgram.sourceFiles?.['main.ts']).toContain('radio.sendString("ping")');
+  }, 20000);
 });
 
 function makeTenDeviceProject(): SwarmProject {
@@ -120,5 +173,44 @@ function makeTenDeviceProject(): SwarmProject {
         intensity: 0.65,
       },
     ],
+  };
+}
+
+function makeTwoDeviceProject(): SwarmProject {
+  return {
+    ...createBlankProject({ id: 'acceptance-runtime-project', name: 'Acceptance runtime', now }),
+    artifacts: [
+      {
+        id: 'artifact-makecode',
+        name: 'mc_beacon.hex',
+        artifactKind: 'hex',
+        runtimeSource: 'makecode-pxt',
+        bytes: encoder.encode(makeCodeBeaconHex),
+        createdAt: now,
+      },
+      {
+        id: 'artifact-micropython',
+        name: 'mp_beacon.hex',
+        artifactKind: 'hex',
+        runtimeSource: 'micropython',
+        bytes: encoder.encode(microPythonBeaconHex),
+        createdAt: now,
+      },
+    ],
+    devices: [
+      {
+        id: 'device-mc',
+        name: 'MakeCode',
+        position: { x: 120, y: 120 },
+        programArtifactId: 'artifact-makecode',
+      },
+      {
+        id: 'device-mp',
+        name: 'MicroPython',
+        position: { x: 220, y: 120 },
+        programArtifactId: 'artifact-micropython',
+      },
+    ],
+    environmentSources: [],
   };
 }

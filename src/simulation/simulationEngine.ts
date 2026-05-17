@@ -1,4 +1,8 @@
 import type { DeviceId, EnvironmentSource, Point, SwarmProject } from '../domain/project';
+import {
+  MICROBIT_BUILTIN_SENSOR_DOMAINS,
+  clampMicrobitNumericSensor,
+} from '../runtime/microbitSensorDomains';
 import type { RuntimeRadioPacket } from '../runtime/runtimeAdapter';
 
 export type SimulationMode = 'idle' | 'running' | 'paused';
@@ -52,6 +56,8 @@ export interface BlockedRadioTarget {
   deviceId: DeviceId;
   reason: RadioBlockReason;
   distance: number;
+  targetGroup: number;
+  targetChannel: number;
 }
 
 export interface RadioMessageEvent {
@@ -105,7 +111,7 @@ const DEFAULT_OPTIONS: Required<SimulationOptions> = {
 };
 const DEFAULT_RADIO_GROUP = 0;
 const DEFAULT_RADIO_CHANNEL = 7;
-const SENSOR_MAX_LEVEL = 255;
+const SENSOR_MAX_LEVEL = MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel.max;
 
 export function createSimulationState(
   project: SwarmProject,
@@ -349,7 +355,13 @@ export function routeRadioPacket(
     const distance = distanceBetween(sender.position, device.position);
     const blockReason = getRadioBlockReason(device, group, channel, distance, rangeRadius);
     if (blockReason) {
-      blockedTargets.push({ deviceId: device.deviceId, reason: blockReason, distance });
+      blockedTargets.push({
+        deviceId: device.deviceId,
+        reason: blockReason,
+        distance,
+        targetGroup: device.radio.group,
+        targetChannel: device.radio.channel,
+      });
     } else {
       recipients.push(device.deviceId);
     }
@@ -413,8 +425,8 @@ export function calculateEnvironmentSensors(
   }
 
   return {
-    lightLevel: Math.round(lightLevel),
-    soundLevel: Math.round(soundLevel),
+    lightLevel: clampMicrobitNumericSensor('lightLevel', lightLevel),
+    soundLevel: clampMicrobitNumericSensor('soundLevel', soundLevel),
   };
 }
 
@@ -521,7 +533,9 @@ function makeRadioLogs(event: RadioMessageEvent): DeviceLogEvent[] {
       timestampMs: event.timestampMs,
       deviceId: target.deviceId,
       type: 'radio-blocked',
-      message: `Blocked radio packet from ${event.senderId}: ${target.reason}`,
+      message:
+        `Blocked radio packet from ${event.senderId}: ${target.reason}` +
+        ` (sender g${event.group}/ch${event.channel} -> target g${target.targetGroup}/ch${target.targetChannel})`,
     });
   });
 

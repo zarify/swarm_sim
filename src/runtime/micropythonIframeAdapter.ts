@@ -220,7 +220,9 @@ const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
 const displayBridgePrefix = '\x1eSWARM_DISPLAY:';
 const displayBridgeErrorPrefix = '\x1eSWARM_DISPLAY_ERROR:';
-const displayBridgeMarkerPattern = /\x1eSWARM_DISPLAY:([0-9]{25})(?:\r?\n)?|\x1eSWARM_DISPLAY_ERROR:([^\r\n]*)(?:\r?\n)?/g;
+const soundBridgePrefix = '\x1eSWARM_SOUND:';
+const displayBridgeMarkerPattern =
+  /\x1eSWARM_DISPLAY:([0-9]{25})(?:\r?\n)?|\x1eSWARM_DISPLAY_ERROR:([^\r\n]*)(?:\r?\n)?|\x1eSWARM_SOUND:([0-9]{1,3})(?:\r?\n)/g;
 
 function instrumentMicroPythonFilesystem(filesystem: MicroPythonRuntimeProgram['filesystem']) {
   const main = filesystem[mainPythonFile];
@@ -400,6 +402,11 @@ function parseDisplayBridgeSerialOutput(input: string): {
 
     if (match[1]) {
       events.push({ type: 'display-change', pixels: parseDisplayPixels(match[1]) });
+    } else if (match[3]) {
+      events.push({
+        type: 'sound-output',
+        level: clampSoundLevel(Number.parseInt(match[3], 10)),
+      });
     } else {
       events.push({
         type: 'internal-error',
@@ -434,6 +441,14 @@ function splitStableDisplayBridgeSerial(input: string): { stable: string; pendin
     }
   }
 
+  const soundStart = input.lastIndexOf(soundBridgePrefix);
+  if (soundStart >= 0) {
+    const soundPayload = input.slice(soundStart + soundBridgePrefix.length);
+    if (/^[0-9]{0,3}$/.test(soundPayload)) {
+      stableEnd = Math.min(stableEnd, soundStart);
+    }
+  }
+
   const stableCandidate = input.slice(0, stableEnd);
   const trailingFragmentLength = getTrailingMarkerPrefixFragmentLength(stableCandidate);
   const finalStableEnd = stableEnd - trailingFragmentLength;
@@ -444,7 +459,7 @@ function splitStableDisplayBridgeSerial(input: string): { stable: string; pendin
 }
 
 function getTrailingMarkerPrefixFragmentLength(value: string): number {
-  const prefixes = [displayBridgePrefix, displayBridgeErrorPrefix];
+  const prefixes = [displayBridgePrefix, displayBridgeErrorPrefix, soundBridgePrefix];
   let longest = 0;
   for (const prefix of prefixes) {
     const maxLength = Math.min(prefix.length - 1, value.length);
@@ -459,6 +474,13 @@ function getTrailingMarkerPrefixFragmentLength(value: string): number {
 
 function parseDisplayPixels(value: string): number[] {
   return [...value].map((digit) => Number(digit));
+}
+
+function clampSoundLevel(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(255, Math.round(value)));
 }
 
 const microPythonDisplayBridgeSource = String.raw`
@@ -484,6 +506,17 @@ try:
             print("\x1eSWARM_DISPLAY:" + "".join(_swarm_pixels))
         except Exception as _swarm_error:
             _swarm_report_display_bridge_error(_swarm_error)
+
+    def _swarm_emit_sound(_swarm_level=9):
+        try:
+            _swarm_value = int(_swarm_level)
+        except Exception:
+            _swarm_value = 9
+        if _swarm_value < 0:
+            _swarm_value = 0
+        if _swarm_value > 255:
+            _swarm_value = 255
+        print("\x1eSWARM_SOUND:" + str(_swarm_value))
 
     class _SwarmDisplayProxy:
         def __init__(self, _swarm_target):
@@ -527,6 +560,29 @@ try:
         _swarm_microbit.display = display
     except Exception:
         pass
+
+    try:
+        import music as _swarm_music
+
+        def _swarm_wrap_music(_swarm_name):
+            try:
+                _swarm_original = getattr(_swarm_music, _swarm_name)
+            except AttributeError:
+                return
+            if not callable(_swarm_original):
+                return
+
+            def _swarm_wrapped(*args, **kwargs):
+                _swarm_emit_sound()
+                return _swarm_original(*args, **kwargs)
+
+            setattr(_swarm_music, _swarm_name, _swarm_wrapped)
+
+        for _swarm_name in ("play", "pitch", "play_tone", "ring_tone", "set_tempo"):
+            _swarm_wrap_music(_swarm_name)
+    except Exception:
+        pass
+
     _swarm_emit_display()
 except Exception as _swarm_error:
     _swarm_report_display_bridge_error(_swarm_error)

@@ -30,9 +30,16 @@ export interface RuntimeRadioPacket {
   signalStrength?: number;
 }
 
+export interface RuntimeRadioConfig {
+  group?: number;
+  channel?: number;
+}
+
 export type RuntimeAdapterEvent =
   | { type: 'display-change'; pixels: number[] }
   | { type: 'radio-output'; packet: RuntimeRadioPacket }
+  | { type: 'radio-config-change'; config: RuntimeRadioConfig }
+  | { type: 'sound-output'; level: number }
   | { type: 'serial-output'; data: string }
   | { type: 'internal-error'; error: Error };
 

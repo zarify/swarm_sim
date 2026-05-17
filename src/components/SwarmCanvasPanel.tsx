@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactElement } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactElement } from 'react';
 import { flushSync } from 'react-dom';
 import {
   createBlankProject,
@@ -6,6 +6,7 @@ import {
   type EnvironmentSource,
   type EnvironmentSourceId,
   type Point,
+  type ProjectSummary,
   type SwarmProject,
 } from '../domain/project';
 import { SwarmRuntimeHosts } from './SwarmRuntimeHosts';
@@ -17,27 +18,30 @@ import { MICROBIT_BUILTIN_SENSOR_DOMAINS } from '../runtime/microbitSensorDomain
 import {
   appendDeviceRuntimeLog,
   moveDevice,
-  pauseSimulation,
   reconcileSimulationProject,
-  resumeSimulation,
   resetSimulation,
   routeRadioPacket,
   setDeviceButton,
   setDeviceRadioConfig,
-  startSimulation,
   type DeviceRuntimeState,
   type SimulationState,
-  type SimulationMode,
 } from '../simulation/simulationEngine';
 import type { DeviceProgramLoadResult } from '../runtime/programLoader';
 import type { RuntimeRadioPacket } from '../runtime/runtimeAdapter';
 import type { MicroPythonRuntimeHostProps } from './MicroPythonRuntimeHost';
+import type { RuntimeResetRequest } from './runtimeHostControls';
+import type { BrowserProjectStore } from '../domain/browserProjectStore';
+import { createBrowserProjectStore } from '../domain/browserProjectStore';
+import { deserializeProject, serializeProject } from '../domain/projectSerialization';
 
 type Selection =
   | { type: 'device'; id: DeviceId }
-  | { type: 'source'; id: EnvironmentSourceId };
+  | { type: 'source'; id: EnvironmentSourceId }
+  | { type: 'none' };
 
-type DragTarget = Selection;
+type DragTarget =
+  | { type: 'device'; id: DeviceId }
+  | { type: 'source'; id: EnvironmentSourceId };
 
 interface CanvasModel {
   project: SwarmProject;
@@ -57,6 +61,9 @@ interface DeviceRuntimeActivity {
   tx: boolean;
   sound: boolean;
 }
+
+type ArtifactUploadState = 'uploading' | 'ready' | 'failed';
+type RuntimeNodeState = 'pending' | 'ready' | 'failed';
 
 const canvasSize = { width: 860, height: 520 };
 const defaultRadioOptions = {
@@ -86,10 +93,18 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const [showRadioRange, setShowRadioRange] = useState(true);
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
   const [runtimeLoadResults, setRuntimeLoadResults] = useState<DeviceProgramLoadResult[]>([]);
+  const [savedProjectSummaries, setSavedProjectSummaries] = useState<ProjectSummary[]>([]);
+  const [isCanvasStateMenuOpen, setIsCanvasStateMenuOpen] = useState(false);
+  const [isRefreshingSavedProjects, setIsRefreshingSavedProjects] = useState(false);
+  const [canvasStateMessage, setCanvasStateMessage] = useState<string>();
+  const [isBundleDropActive, setIsBundleDropActive] = useState(false);
   const [displaySnapshots, setDisplaySnapshots] = useState<Record<DeviceId, number[]>>({});
   const [runtimeActivity, setRuntimeActivity] = useState<Record<DeviceId, DeviceRuntimeActivity>>({});
   const [scenarioResetSignal, setScenarioResetSignal] = useState(0);
+  const [runtimeResetRequest, setRuntimeResetRequest] = useState<RuntimeResetRequest>();
   const [artifactUploadIssues, setArtifactUploadIssues] = useState<Record<DeviceId, ArtifactUploadIssue>>({});
+  const [artifactUploadState, setArtifactUploadState] = useState<Record<DeviceId, ArtifactUploadState>>({});
+  const [isSidebarDragActive, setIsSidebarDragActive] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const modelRef = useRef(model);
   const uploadTokens = useRef(new Map<DeviceId, number>());
@@ -101,10 +116,11 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const pendingRadioConfigHints = useRef(
     new Map<DeviceId, Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>>>(),
   );
+  const runtimeResetNonce = useRef(0);
   const nextDeviceNumber = useRef(model.project.devices.length + 1);
   const capturedPointerId = useRef<number | null>(null);
+  const browserProjectStore = useRef<BrowserProjectStore | undefined>(undefined);
   const { project, simulationState } = model;
-  const mode = simulationState.mode;
   const selectedDevice =
     selected.type === 'device'
       ? project.devices.find((device) => device.id === selected.id)
@@ -126,6 +142,27 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
+
+  useEffect(() => {
+    if (browserProjectStore.current) {
+      return;
+    }
+    try {
+      browserProjectStore.current = createBrowserProjectStore();
+    } catch (error) {
+      setCanvasStateMessage(
+        error instanceof Error ? error.message : 'Browser storage is not available',
+      );
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isCanvasStateMenuOpen) {
+      return;
+    }
+    void refreshSavedProjects();
+  }, [isCanvasStateMenuOpen]);
+
   useEffect(() => {
     const activeDeviceIds = new Set(project.devices.map((device) => device.id));
     setDisplaySnapshots((current) => {
@@ -204,51 +241,37 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         return next;
       });
     }
+    setArtifactUploadIssues((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([deviceId]) => activeDeviceIds.has(deviceId)),
+      ) as Record<DeviceId, ArtifactUploadIssue>;
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+    setArtifactUploadState((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([deviceId]) => activeDeviceIds.has(deviceId)),
+      ) as Record<DeviceId, ArtifactUploadState>;
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
   }, [project.devices]);
 
-  function setSimulationMode(nextMode: SimulationMode) {
-    if (nextMode === 'idle') {
-      setScenarioResetSignal((current) => current + 1);
-      setDisplaySnapshots({});
-      setRuntimeActivity({});
-      clearRuntimeActivityTimers(runtimeActivityTimers.current);
-      clearDisplayFrameTimers(displayFrameTimers.current);
-      clearButtonPulseTimers(buttonPulseTimers.current);
-      displayLastUpdateMs.current.clear();
-      recentRoutedPackets.current.clear();
+  async function refreshSavedProjects() {
+    if (!browserProjectStore.current) {
+      setSavedProjectSummaries([]);
+      return;
     }
-
-    setModel((current) => {
-      if (nextMode === 'idle') {
-        return {
-          ...current,
-          simulationState: resetSimulation(current.project, defaultRadioOptions),
-        };
-      }
-
-      if (nextMode === 'running') {
-        if (current.simulationState.mode === 'running') {
-          return current;
-        }
-
-        return {
-          ...current,
-          simulationState:
-            current.simulationState.mode === 'paused'
-              ? resumeSimulation(current.simulationState)
-              : startSimulation(current.simulationState),
-        };
-      }
-
-      if (current.simulationState.mode !== 'running') {
-        return current;
-      }
-
-      return {
-        ...current,
-        simulationState: pauseSimulation(current.simulationState),
-      };
-    });
+    setIsRefreshingSavedProjects(true);
+    try {
+      const summaries = await browserProjectStore.current.list();
+      setSavedProjectSummaries(summaries);
+      setCanvasStateMessage(undefined);
+    } catch (error) {
+      setCanvasStateMessage(
+        error instanceof Error ? error.message : 'Unable to list saved layouts',
+      );
+    } finally {
+      setIsRefreshingSavedProjects(false);
+    }
   }
 
   function addDevice() {
@@ -301,13 +324,127 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }));
   }
 
+  function resetAllDevices() {
+    setScenarioResetSignal((current) => current + 1);
+    setDisplaySnapshots({});
+    setRuntimeActivity({});
+    clearRuntimeActivityTimers(runtimeActivityTimers.current);
+    clearDisplayFrameTimers(displayFrameTimers.current);
+    clearButtonPulseTimers(buttonPulseTimers.current);
+    displayLastUpdateMs.current.clear();
+    recentRoutedPackets.current.clear();
+    setModel((current) => ({
+      ...current,
+      simulationState: resetSimulation(current.project, defaultRadioOptions),
+    }));
+  }
+
+  function resetSelectedDevice() {
+    if (!selectedDevice) {
+      return;
+    }
+    const deviceId = selectedDevice.id;
+    const nextNonce = runtimeResetNonce.current + 1;
+    runtimeResetNonce.current = nextNonce;
+    setRuntimeResetRequest({
+      nonce: nextNonce,
+      deviceIds: [deviceId],
+      actionLabel: 'device reset',
+    });
+    setDisplaySnapshots((current) => removeDisplaySnapshot(current, deviceId));
+    setRuntimeActivity((current) => {
+      if (!current[deviceId]) {
+        return current;
+      }
+      const { [deviceId]: _removed, ...rest } = current;
+      return rest;
+    });
+    for (const [key, timerId] of runtimeActivityTimers.current.entries()) {
+      if (!key.startsWith(`${deviceId}:`)) {
+        continue;
+      }
+      globalThis.clearTimeout(timerId);
+      runtimeActivityTimers.current.delete(key);
+    }
+    const displayTimer = displayFrameTimers.current.get(deviceId);
+    if (displayTimer !== undefined) {
+      globalThis.clearTimeout(displayTimer);
+      displayFrameTimers.current.delete(deviceId);
+    }
+    displayLastUpdateMs.current.delete(deviceId);
+  }
+
+  function deleteSelectedNode() {
+    if (selected.type === 'none') {
+      return;
+    }
+
+    if (selected.type === 'device') {
+      const deletingId = selected.id;
+      uploadTokens.current.delete(deletingId);
+      setArtifactUploadIssues((current) => {
+        const { [deletingId]: _removed, ...rest } = current;
+        return rest;
+      });
+      setArtifactUploadState((current) => {
+        const { [deletingId]: _removed, ...rest } = current;
+        return rest;
+      });
+      setModel((current) => {
+        const nextProject = removeDeviceFromProject(current.project, deletingId);
+        const next = {
+          project: nextProject,
+          simulationState: reconcileSimulationProject(current.simulationState, nextProject),
+        };
+        modelRef.current = next;
+        setSelected(pickFallbackSelection(nextProject));
+        return next;
+      });
+      return;
+    }
+
+    const deletingId = selected.id;
+    setModel((current) => {
+      const nextProject = {
+        ...current.project,
+        environmentSources: current.project.environmentSources.filter((source) => source.id !== deletingId),
+      };
+      const next = {
+        project: nextProject,
+        simulationState: reconcileSimulationProject(current.simulationState, nextProject),
+      };
+      modelRef.current = next;
+      setSelected(pickFallbackSelection(nextProject));
+      return next;
+    });
+  }
+
   async function uploadArtifactForDevice(deviceId: DeviceId, file: File) {
+    const device = modelRef.current.project.devices.find((candidate) => candidate.id === deviceId);
+    if (!device) {
+      return;
+    }
+    const assignedArtifact = device.programArtifactId
+      ? modelRef.current.project.artifacts.find((artifact) => artifact.id === device.programArtifactId)
+      : undefined;
+    if (
+      assignedArtifact &&
+      typeof window !== 'undefined' &&
+      typeof window.confirm === 'function' &&
+      !window.confirm(
+        `This will overwrite ${assignedArtifact.name} on ${device.name}. Continue?`,
+      )
+    ) {
+      return;
+    }
+
     const token = (uploadTokens.current.get(deviceId) ?? 0) + 1;
     uploadTokens.current.set(deviceId, token);
+    setArtifactUploadState((current) => ({ ...current, [deviceId]: 'uploading' }));
 
     try {
       const bytes = await readHexFileBytes(file);
-      if (uploadTokens.current.get(deviceId) !== token) {
+      if (uploadTokens.current.get(deviceId) !== token || !hasDevice(modelRef.current.project, deviceId)) {
         return;
       }
 
@@ -320,6 +457,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         bytes,
         readiness.runtimeSource,
       );
+      if (uploadTokens.current.get(deviceId) !== token || !hasDevice(modelRef.current.project, deviceId)) {
+        return;
+      }
       debugRadioPanel('artifact-runtime-source', {
         deviceId,
         filename: file.name,
@@ -357,8 +497,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         const { [deviceId]: _removed, ...rest } = current;
         return rest;
       });
+      setArtifactUploadState((current) => ({ ...current, [deviceId]: 'ready' }));
     } catch (error) {
-      if (uploadTokens.current.get(deviceId) !== token) {
+      if (uploadTokens.current.get(deviceId) !== token || !hasDevice(modelRef.current.project, deviceId)) {
         return;
       }
 
@@ -369,6 +510,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           message: error instanceof Error ? error.message : 'Unable to upload artifact',
         },
       }));
+      setArtifactUploadState((current) => ({ ...current, [deviceId]: 'failed' }));
     }
   }
 
@@ -631,7 +773,11 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
 
   function updateProject(updater: (current: SwarmProject) => SwarmProject) {
     setModel((current) => {
-      const project = updater(current.project);
+      const nextProject = updater(current.project);
+      const project =
+        nextProject.updatedAt === current.project.updatedAt
+          ? { ...nextProject, updatedAt: new Date().toISOString() }
+          : nextProject;
       return {
         project,
         simulationState: reconcileSimulationProject(current.simulationState, project),
@@ -658,6 +804,220 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     setDragTarget(null);
   }
 
+  const selectedRuntimeLoadResult = selectedDevice
+    ? runtimeLoadResults.find(
+        (result) =>
+          result.deviceId === selectedDevice.id &&
+          result.artifactId === selectedDevice.programArtifactId,
+      )
+    : undefined;
+  const canDropHexToSidebar = Boolean(selectedDevice);
+
+  function handleSidebarDragOver(event: DragEvent<HTMLElement>) {
+    if (!canDropHexToSidebar || !event.dataTransfer.types.includes('Files')) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setIsSidebarDragActive(true);
+  }
+
+  function handleSidebarDragLeave(event: DragEvent<HTMLElement>) {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+      return;
+    }
+    setIsSidebarDragActive(false);
+  }
+
+  function handleSidebarDrop(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setIsSidebarDragActive(false);
+    if (!selectedDevice) {
+      return;
+    }
+    const file = pickFirstHexFile(event.dataTransfer);
+    if (!file) {
+      setArtifactUploadIssues((current) => ({
+        ...current,
+        [selectedDevice.id]: {
+          severity: 'error',
+          message: 'Only micro:bit .hex files can be assigned to devices right now',
+        },
+      }));
+      setArtifactUploadState((current) => ({ ...current, [selectedDevice.id]: 'failed' }));
+      return;
+    }
+    void uploadArtifactForDevice(selectedDevice.id, file);
+  }
+
+  function replaceScenarioProject(nextProject: SwarmProject) {
+    releaseCanvasPointer();
+    setDragTarget(null);
+    setIsSidebarDragActive(false);
+    setIsBundleDropActive(false);
+    setDisplaySnapshots({});
+    setRuntimeActivity({});
+    setRuntimeLoadResults([]);
+    setArtifactUploadIssues({});
+    setArtifactUploadState({});
+    uploadTokens.current.clear();
+    pendingRadioConfigHints.current.clear();
+    recentRoutedPackets.current.clear();
+    clearRuntimeActivityTimers(runtimeActivityTimers.current);
+    clearDisplayFrameTimers(displayFrameTimers.current);
+    clearButtonPulseTimers(buttonPulseTimers.current);
+    displayLastUpdateMs.current.clear();
+    const next = {
+      project: nextProject,
+      simulationState: resetSimulation(nextProject, defaultRadioOptions),
+    };
+    modelRef.current = next;
+    setModel(next);
+    setSelected(pickFallbackSelection(nextProject));
+    nextDeviceNumber.current = nextProject.devices.length + 1;
+    setScenarioResetSignal((current) => current + 1);
+  }
+
+  async function saveCurrentLayoutToBrowser() {
+    if (!browserProjectStore.current) {
+      setCanvasStateMessage('Browser storage is not available');
+      return;
+    }
+    const proposedName =
+      typeof window !== 'undefined' && typeof window.prompt === 'function'
+        ? window.prompt('Save layout as:', project.name)
+        : project.name;
+    if (proposedName === null) {
+      return;
+    }
+    const now = new Date().toISOString();
+    const saved: SwarmProject = {
+      ...project,
+      id: buildSavedProjectId(now),
+      name: proposedName.trim() || project.name,
+      createdAt: now,
+      updatedAt: now,
+    };
+    try {
+      await browserProjectStore.current.save(saved);
+      setCanvasStateMessage(`Saved "${saved.name}"`);
+      await refreshSavedProjects();
+    } catch (error) {
+      setCanvasStateMessage(
+        error instanceof Error ? error.message : 'Unable to save layout',
+      );
+    }
+  }
+
+  async function loadSavedLayout(projectId: string) {
+    if (!browserProjectStore.current) {
+      setCanvasStateMessage('Browser storage is not available');
+      return;
+    }
+    try {
+      const loadedProject = await browserProjectStore.current.load(projectId);
+      replaceScenarioProject(loadedProject);
+      setCanvasStateMessage(`Loaded "${loadedProject.name}"`);
+    } catch (error) {
+      setCanvasStateMessage(
+        error instanceof Error ? error.message : 'Unable to load saved layout',
+      );
+    }
+  }
+
+  function downloadCanvasBundle() {
+    const serialized = serializeProject(project);
+    const blob = new Blob([serialized], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${slugForFilename(project.name)}.swarm.json`;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    setCanvasStateMessage('Downloaded canvas bundle');
+  }
+
+  async function importCanvasBundle(file: File) {
+    if (
+      isProjectPopulated(project) &&
+      typeof window !== 'undefined' &&
+      typeof window.confirm === 'function' &&
+      !window.confirm('Importing a bundle will overwrite the current layout. Continue?')
+    ) {
+      return;
+    }
+
+    try {
+      const serialized = await file.text();
+      const imported = deserializeProject(serialized);
+      replaceScenarioProject(imported);
+      setCanvasStateMessage(`Imported "${imported.name}"`);
+    } catch (error) {
+      setCanvasStateMessage(
+        error instanceof Error ? error.message : 'Unable to import bundle',
+      );
+    }
+  }
+
+  function clearCanvasLayout() {
+    if (
+      typeof window !== 'undefined' &&
+      typeof window.confirm === 'function' &&
+      !window.confirm('Clear all devices, code artifacts, and sources from this canvas?')
+    ) {
+      return;
+    }
+    const now = new Date().toISOString();
+    replaceScenarioProject(
+      createBlankProject({
+        id: buildSavedProjectId(now),
+        name: 'Untitled layout',
+        now,
+      }),
+    );
+    setCanvasStateMessage('Canvas cleared');
+  }
+
+  function handleBundleFileInput(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (file) {
+      void importCanvasBundle(file);
+    }
+    event.currentTarget.value = '';
+  }
+
+  function handleBundleDropAreaDragOver(event: DragEvent<HTMLElement>) {
+    if (!event.dataTransfer.types.includes('Files')) {
+      return;
+    }
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    setIsBundleDropActive(true);
+  }
+
+  function handleBundleDropAreaDragLeave(event: DragEvent<HTMLElement>) {
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+      return;
+    }
+    setIsBundleDropActive(false);
+  }
+
+  function handleBundleDropAreaDrop(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setIsBundleDropActive(false);
+    const file = event.dataTransfer.files[0];
+    if (!file) {
+      return;
+    }
+    void importCanvasBundle(file);
+  }
+
+  const runtimeNodeStates = buildRuntimeNodeStates(project, runtimeLoadResults, artifactUploadState);
+
   return (
     <section className="swarm-panel" aria-labelledby="swarm-title">
       <div className="panel-header">
@@ -666,17 +1026,69 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           <h2 id="swarm-title">Spatial radio bench</h2>
         </div>
         <div className="control-stack" aria-label="Simulation controls">
-          <button type="button" onClick={() => setSimulationMode('running')} disabled={mode === 'running'}>
-            Run
+          <button type="button" onClick={resetAllDevices}>
+            Reset all
           </button>
-          <button type="button" onClick={() => setSimulationMode('paused')} disabled={mode !== 'running'}>
-            Pause
-          </button>
-          <button type="button" onClick={() => setSimulationMode('idle')}>
-            Reset
+          <button
+            type="button"
+            aria-expanded={isCanvasStateMenuOpen}
+            aria-controls="canvas-state-panel"
+            onClick={() => setIsCanvasStateMenuOpen((current) => !current)}
+          >
+            Canvas state
           </button>
         </div>
       </div>
+      {isCanvasStateMenuOpen ? (
+        <div id="canvas-state-panel" className="canvas-state-panel" aria-label="Canvas state controls">
+          <div className="canvas-state-panel__actions">
+            <button type="button" onClick={() => void saveCurrentLayoutToBrowser()}>
+              Save to browser
+            </button>
+            <button type="button" onClick={downloadCanvasBundle}>
+              Download bundle
+            </button>
+            <label className="canvas-state-upload">
+              Upload bundle
+              <input
+                type="file"
+                accept=".json,.swarm,.swarm.json"
+                onChange={handleBundleFileInput}
+              />
+            </label>
+            <button type="button" onClick={clearCanvasLayout}>
+              Clear canvas
+            </button>
+          </div>
+          <div
+            className={isBundleDropActive ? 'canvas-state-drop canvas-state-drop--active' : 'canvas-state-drop'}
+            onDragOver={handleBundleDropAreaDragOver}
+            onDragLeave={handleBundleDropAreaDragLeave}
+            onDrop={handleBundleDropAreaDrop}
+          >
+            Drop a saved bundle here to import
+          </div>
+          <div className="canvas-state-saved">
+            <span className="metric-label">Saved layouts</span>
+            {isRefreshingSavedProjects ? <p className="hint">Refreshing...</p> : null}
+            {!isRefreshingSavedProjects && savedProjectSummaries.length === 0 ? (
+              <p className="hint">No saved layouts yet.</p>
+            ) : (
+              savedProjectSummaries.slice(0, 8).map((summary) => (
+                <button
+                  key={summary.id}
+                  type="button"
+                  onClick={() => void loadSavedLayout(summary.id)}
+                  className="canvas-state-saved__item"
+                >
+                  Load {summary.name}
+                </button>
+              ))
+            )}
+          </div>
+          {canvasStateMessage ? <p className="hint">{canvasStateMessage}</p> : null}
+        </div>
+      ) : null}
 
       <div className="swarm-layout">
         <div className="canvas-wrap">
@@ -770,6 +1182,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               const activity = runtimeActivity[device.deviceId];
               const txActive = activity?.tx ?? false;
               const soundActive = activity?.sound ?? false;
+              const runtimeState = runtimeNodeStates[device.deviceId];
               return (
                 <g
                   key={device.deviceId}
@@ -824,6 +1237,14 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                       pulseDeviceButton(device.deviceId, 'B');
                     }}
                   />
+                  {runtimeState ? (
+                    <g
+                      className={`runtime-state runtime-state--${runtimeState}`}
+                      data-runtime-state={`${device.deviceId}:${runtimeState}`}
+                    >
+                      <circle cx="34" cy="-22" r="7" />
+                    </g>
+                  ) : null}
                   {ledPixels.map((brightness, pixelIndex) => {
                     const column = pixelIndex % 5;
                     const row = Math.floor(pixelIndex / 5);
@@ -851,7 +1272,21 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           </svg>
         </div>
 
-        <aside className="swarm-sidebar" aria-label="Canvas controls and selection details">
+        <aside
+          className={`swarm-sidebar ${canDropHexToSidebar ? 'swarm-sidebar--drop-enabled' : ''} ${isSidebarDragActive ? 'swarm-sidebar--drag-over' : ''}`}
+          aria-label="Canvas controls and selection details"
+          onDragOver={handleSidebarDragOver}
+          onDragLeave={handleSidebarDragLeave}
+          onDrop={handleSidebarDrop}
+        >
+          {canDropHexToSidebar ? (
+            <p className="dropzone-hint">Drop a .hex file anywhere in this panel to load onto {selectedDevice?.name}.</p>
+          ) : null}
+          {isSidebarDragActive && canDropHexToSidebar ? (
+            <div className="swarm-sidebar-drop-overlay">
+              Drop .hex to load onto <strong>{selectedDevice?.name}</strong>
+            </div>
+          ) : null}
           <div className="toolbar-card">
             <span className="metric-label">Canvas tools</span>
             <button type="button" onClick={addDevice}>
@@ -880,38 +1315,25 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                 <DeviceSelection
                   project={project}
                   runtime={simulationState.devices[selectedDevice.id]}
-                  runtimeLoadResult={runtimeLoadResults.find(
-                    (result) => result.deviceId === selectedDevice.id,
-                  )}
+                  runtimeLoadResult={selectedRuntimeLoadResult}
+                  uploadState={artifactUploadState[selectedDevice.id]}
                   deviceId={selectedDevice.id}
                   uploadIssue={artifactUploadIssues[selectedDevice.id]}
                   logs={simulationState.deviceLogs.filter((log) => log.deviceId === selectedDevice.id)}
+                  onResetRuntime={resetSelectedDevice}
+                  onDeleteNode={deleteSelectedNode}
                   onArtifactUpload={uploadArtifactForDevice}
                 />
               </>
             ) : selectedSource ? (
-              <SourceSelection source={selectedSource} updateSource={updateSource} />
+              <SourceSelection source={selectedSource} updateSource={updateSource} onDeleteNode={deleteSelectedNode} />
             ) : (
               <p className="hint">Select a node or environmental source.</p>
             )}
           </div>
 
-          <RuntimeHost
-            project={project}
-            selectedDeviceId={selectedDevice?.id}
-            deviceRuntimeStates={simulationState.devices}
-            scenarioResetSignal={scenarioResetSignal}
-            onRadioPacket={handleRuntimeRadioPacket}
-            onRuntimeLog={handleRuntimeLog}
-            onDisplayChange={handleRuntimeDisplayChange}
-            onSoundOutput={handleRuntimeSoundOutput}
-            onRadioConfigHint={handleRuntimeRadioConfigHint}
-            onLoadResultsChange={setRuntimeLoadResults}
-          />
-
           <div className="telemetry-card" aria-live="polite">
             <span className="metric-label">Engine telemetry</span>
-            <strong>{mode}</strong>
             <p>
               {project.devices.length} nodes / {simulationState.radioLinks.filter((link) => link.canCommunicate).length}{' '}
               active directed radio links
@@ -944,6 +1366,20 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           </details>
         </aside>
       </div>
+      <RuntimeHost
+        project={project}
+        selectedDeviceId={selectedDevice?.id}
+        resetRequest={runtimeResetRequest}
+        headless
+        deviceRuntimeStates={simulationState.devices}
+        scenarioResetSignal={scenarioResetSignal}
+        onRadioPacket={handleRuntimeRadioPacket}
+        onRuntimeLog={handleRuntimeLog}
+        onDisplayChange={handleRuntimeDisplayChange}
+        onSoundOutput={handleRuntimeSoundOutput}
+        onRadioConfigHint={handleRuntimeRadioConfigHint}
+        onLoadResultsChange={setRuntimeLoadResults}
+      />
     </section>
   );
 }
@@ -953,16 +1389,22 @@ function DeviceSelection({
   deviceId,
   runtime,
   runtimeLoadResult,
+  uploadState,
   uploadIssue,
   logs,
+  onResetRuntime,
+  onDeleteNode,
   onArtifactUpload,
 }: {
   project: SwarmProject;
   deviceId: DeviceId;
   runtime?: DeviceRuntimeState;
   runtimeLoadResult?: DeviceProgramLoadResult;
+  uploadState?: ArtifactUploadState;
   uploadIssue?: ArtifactUploadIssue;
   logs: SimulationState['deviceLogs'];
+  onResetRuntime: () => void;
+  onDeleteNode: () => void;
   onArtifactUpload: (deviceId: DeviceId, file: File) => void;
 }) {
   const device = project.devices.find((candidate) => candidate.id === deviceId);
@@ -979,6 +1421,14 @@ function DeviceSelection({
       <p>
         x {Math.round(device.position.x)} / y {Math.round(device.position.y)}
       </p>
+      <div className="selection-actions">
+        <button type="button" onClick={onResetRuntime} disabled={!device.programArtifactId}>
+          Reset selected
+        </button>
+        <button type="button" onClick={onDeleteNode}>
+          Delete node
+        </button>
+      </div>
       <label className="artifact-field artifact-field--compact">
         Load code onto {device.name}
         <input
@@ -1000,9 +1450,18 @@ function DeviceSelection({
           {uploadIssue.message}
         </p>
       ) : null}
+      {uploadState === 'uploading' ? (
+        <p>
+          Runtime: <strong>loading</strong>
+        </p>
+      ) : null}
       {runtimeLoadResult ? (
         <p>
           Runtime: <strong>{runtimeLoadResult.status}</strong>
+        </p>
+      ) : device.programArtifactId && uploadState !== 'uploading' ? (
+        <p>
+          Runtime: <strong>pending</strong>
         </p>
       ) : null}
       {runtime ? (
@@ -1051,9 +1510,11 @@ function DeviceSelection({
 function SourceSelection({
   source,
   updateSource,
+  onDeleteNode,
 }: {
   source: EnvironmentSource;
   updateSource: (sourceId: EnvironmentSourceId, patch: Partial<EnvironmentSource>) => void;
+  onDeleteNode: () => void;
 }) {
   const peakLevel = intensityToSensorLevel(source.intensity);
   return (
@@ -1061,6 +1522,11 @@ function SourceSelection({
       <strong>
         {source.type} source {source.id}
       </strong>
+      <div className="selection-actions">
+        <button type="button" onClick={onDeleteNode}>
+          Delete node
+        </button>
+      </div>
       <label className="range-field">
         Radius
         <input
@@ -1111,6 +1577,103 @@ function createDemoProject(): SwarmProject {
 
 function artifactName(project: SwarmProject, artifactId: string): string {
   return project.artifacts.find((artifact) => artifact.id === artifactId)?.name ?? artifactId;
+}
+
+function pickFallbackSelection(project: SwarmProject): Selection {
+  const firstDevice = project.devices[0];
+  if (firstDevice) {
+    return { type: 'device', id: firstDevice.id };
+  }
+  const firstSource = project.environmentSources[0];
+  if (firstSource) {
+    return { type: 'source', id: firstSource.id };
+  }
+  return { type: 'none' };
+}
+
+function removeDeviceFromProject(project: SwarmProject, deviceId: DeviceId): SwarmProject {
+  const removedArtifactId = project.devices.find((device) => device.id === deviceId)?.programArtifactId;
+  const devices = project.devices.filter((device) => device.id !== deviceId);
+  const stillUsedArtifactIds = new Set(
+    devices.map((device) => device.programArtifactId).filter((artifactId): artifactId is string => Boolean(artifactId)),
+  );
+  const artifacts = project.artifacts.filter((artifact) => {
+    if (artifact.id !== removedArtifactId) {
+      return true;
+    }
+    return stillUsedArtifactIds.has(artifact.id);
+  });
+  return {
+    ...project,
+    devices,
+    artifacts,
+  };
+}
+
+function pickFirstHexFile(dataTransfer: DataTransfer): File | undefined {
+  const files = [...dataTransfer.files];
+  return files.find((file) => file.name.toLowerCase().endsWith('.hex'));
+}
+
+function buildSavedProjectId(timestamp: string): string {
+  return `layout-${timestamp.replace(/[^0-9]/g, '')}`;
+}
+
+function slugForFilename(name: string): string {
+  const slug = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 48);
+  return slug || 'swarm-layout';
+}
+
+function isProjectPopulated(project: SwarmProject): boolean {
+  return (
+    project.devices.length > 0 ||
+    project.artifacts.length > 0 ||
+    project.environmentSources.length > 0
+  );
+}
+
+function buildRuntimeNodeStates(
+  project: SwarmProject,
+  loadResults: DeviceProgramLoadResult[],
+  uploadState: Record<DeviceId, ArtifactUploadState>,
+): Record<DeviceId, RuntimeNodeState> {
+  const artifactById = new Map(project.artifacts.map((artifact) => [artifact.id, artifact]));
+  const loadResultByDeviceId = new Map<DeviceId, DeviceProgramLoadResult>();
+  for (const result of loadResults) {
+    loadResultByDeviceId.set(result.deviceId, result);
+  }
+  const states: Record<DeviceId, RuntimeNodeState> = {};
+  for (const device of project.devices) {
+    if (!device.programArtifactId) {
+      continue;
+    }
+    const artifact = artifactById.get(device.programArtifactId);
+    if (!artifact || artifact.runtimeSource === 'unknown') {
+      states[device.id] = 'pending';
+      continue;
+    }
+    if (uploadState[device.id] === 'uploading') {
+      states[device.id] = 'pending';
+      continue;
+    }
+
+    const result = loadResultByDeviceId.get(device.id);
+    if (!result) {
+      states[device.id] = 'pending';
+      continue;
+    }
+    if (result.status === 'failed') {
+      states[device.id] = 'failed';
+      continue;
+    }
+    states[device.id] = 'ready';
+  }
+  return states;
 }
 
 function decodePacketPreview(data: Uint8Array): string {
@@ -1252,7 +1815,11 @@ function replaceDeviceArtifact(
   deviceId: DeviceId,
   nextArtifact: SwarmProject['artifacts'][number],
 ): SwarmProject['artifacts'] {
-  const previousArtifactId = project.devices.find((device) => device.id === deviceId)?.programArtifactId;
+  const targetDevice = project.devices.find((device) => device.id === deviceId);
+  if (!targetDevice) {
+    return project.artifacts;
+  }
+  const previousArtifactId = targetDevice.programArtifactId;
   return [
     ...project.artifacts.filter((artifact) => {
       if (artifact.id === nextArtifact.id) {
@@ -1267,6 +1834,10 @@ function replaceDeviceArtifact(
     }),
     nextArtifact,
   ];
+}
+
+function hasDevice(project: SwarmProject, deviceId: DeviceId): boolean {
+  return project.devices.some((device) => device.id === deviceId);
 }
 
 async function readHexFileBytes(file: File): Promise<Uint8Array> {

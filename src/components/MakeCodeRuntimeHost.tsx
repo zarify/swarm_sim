@@ -7,6 +7,7 @@ import {
   type LoadProjectRuntimeProgramsOptions,
   type PreparedDeviceRuntimeProgram,
 } from '../runtime/programLoader';
+import type { RuntimeHostState, RuntimeResetRequest } from './runtimeHostControls';
 import { decompressLzmaSource } from '../runtime/lzmaDecompressor';
 import { normalizeRuntimeDisplayPixels } from '../runtime/displayPixels';
 import type {
@@ -28,10 +29,13 @@ const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
 export interface MakeCodeRuntimeHostProps {
   project: SwarmProject;
   selectedDeviceId?: DeviceId;
+  resetRequest?: RuntimeResetRequest;
   deviceRuntimeStates?: Record<DeviceId, DeviceRuntimeState>;
   scenarioResetSignal?: number;
   autoPrepare?: boolean;
+  prepareEnabled?: boolean;
   showSimulatorFrames?: boolean;
+  headless?: boolean;
   onRadioPacket: (deviceId: DeviceId, packet: RuntimeRadioPacket) => DeviceId[];
   onRuntimeLog: (
     deviceId: DeviceId,
@@ -45,6 +49,7 @@ export interface MakeCodeRuntimeHostProps {
     config: Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>>,
   ) => void;
   onLoadResultsChange?: (results: DeviceProgramLoadResult[]) => void;
+  onRuntimeHostStateChange?: (state: RuntimeHostState) => void;
   loadPrograms?: RuntimeLoadPrograms;
   createAdapter?: (
     prepared: PreparedDeviceRuntimeProgram,
@@ -56,16 +61,20 @@ export interface MakeCodeRuntimeHostProps {
 export function MakeCodeRuntimeHost({
   project,
   selectedDeviceId,
+  resetRequest,
   deviceRuntimeStates,
   scenarioResetSignal = 0,
   autoPrepare = false,
+  prepareEnabled = true,
   showSimulatorFrames = true,
+  headless = false,
   onRadioPacket,
   onRuntimeLog,
   onDisplayChange,
   onSoundOutput,
   onRadioConfigHint,
   onLoadResultsChange,
+  onRuntimeHostStateChange,
   loadPrograms = loadProjectRuntimePrograms,
   createAdapter = createMakeCodeRuntimeAdapter,
 }: MakeCodeRuntimeHostProps) {
@@ -87,6 +96,7 @@ export function MakeCodeRuntimeHost({
   const invalidDisplayFrameLogged = useRef(new Set<DeviceId>());
   const recentRadioPackets = useRef(new Map<DeviceId, string>());
   const recentSerialOutputs = useRef(new Map<DeviceId, string>());
+  const lastResetRequestNonce = useRef(0);
   const callbacks = useRef({
     onRadioPacket,
     onRuntimeLog,
@@ -245,6 +255,15 @@ export function MakeCodeRuntimeHost({
     resetRuntimeAdapters([...adapters.current.keys()], 'scenario reset');
     setDisplaySnapshots({});
   }, [scenarioResetSignal]);
+
+  useEffect(() => {
+    if (!resetRequest || resetRequest.nonce === lastResetRequestNonce.current) {
+      return;
+    }
+
+    lastResetRequestNonce.current = resetRequest.nonce;
+    resetRuntimeAdapters(resetRequest.deviceIds, resetRequest.actionLabel);
+  }, [resetRequest]);
 
   useEffect(() => {
     function handleRunnerReady(event: MessageEvent) {
@@ -603,7 +622,14 @@ export function MakeCodeRuntimeHost({
   const showPrepareSelected = Boolean(selectedRuntimeDevice && devices.length > 1);
 
   useEffect(() => {
-    if (!autoPrepare || isLoading || devices.length === 0 || !allFramesReady) {
+    onRuntimeHostStateChange?.({
+      allFramesReady,
+      isLoading,
+    });
+  }, [allFramesReady, isLoading, onRuntimeHostStateChange]);
+
+  useEffect(() => {
+    if (!autoPrepare || !prepareEnabled || isLoading || devices.length === 0 || !allFramesReady) {
       return;
     }
 
@@ -618,7 +644,27 @@ export function MakeCodeRuntimeHost({
     }
 
     void loadRuntimes(devices);
-  }, [autoPrepare, devices, allFramesReady, isLoading]);
+  }, [autoPrepare, prepareEnabled, devices, allFramesReady, isLoading]);
+
+  const iframeGrid = (
+    <div className="runtime-frame-grid runtime-frame-grid--hidden" data-frame-version={frameVersion}>
+      {devices.map((device) => (
+        <article key={device.id} className="runtime-frame-card runtime-frame-card--hidden">
+          <iframe
+            ref={frameRefs.get(device.id)}
+            title={`MakeCode simulator for ${device.name}`}
+            src={MAKECODE_SIMULATOR_RUNNER_URL}
+            sandbox="allow-scripts allow-same-origin"
+            scrolling="no"
+          />
+        </article>
+      ))}
+    </div>
+  );
+
+  if (headless) {
+    return <div className="runtime-host-mount runtime-host-mount--hidden">{iframeGrid}</div>;
+  }
 
   return (
     <div className="runtime-host-card" aria-label="MakeCode runtime host">

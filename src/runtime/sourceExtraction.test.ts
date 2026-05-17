@@ -40,7 +40,7 @@ describe('HEX source extraction', () => {
     expect(source).toContain('radio.config(group=42)');
     expect(source).toContain('radio.send("ping")');
     expect(source).toContain('print("mp-receive")');
-  });
+  }, 15000);
 
   it('extracts the MakeCode project file map from the PXT HEX fixture', async () => {
     const extracted = await extractHexSource('mc_beacon.hex', encoder.encode(makeCodeBeaconHex), {

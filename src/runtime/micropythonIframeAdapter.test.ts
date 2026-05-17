@@ -24,6 +24,7 @@ describe('MicroPython iframe runtime adapter', () => {
     const source = decoder.decode(flash.filesystem['main.py']);
     expect(targetWindow.messages[0]?.targetOrigin).toBe('https://python-simulator.usermbit.org');
     expect(source).toContain('_SwarmDisplayProxy');
+    expect(source).toContain('_swarm_wrap_music');
     expect(source).not.toContain('__swarm');
     expect(source).toContain('from microbit import *');
     expect(source.indexOf('from microbit import *')).toBeLessThan(source.indexOf('class _SwarmDisplayProxy'));
@@ -210,6 +211,28 @@ display.show(Image.ARROW_N)`),
     expect(events).toEqual([
       { type: 'serial-output', data: 'before\n' },
       { type: 'display-change', pixels: digits('9999900000999990000099999') },
+      { type: 'serial-output', data: 'after' },
+    ]);
+  });
+
+  it('converts split sound bridge serial markers into sound events without leaking marker text', () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: 'before\n\x1eSWARM_SOUND:2' });
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: '55\nafter' });
+
+    expect(events).toEqual([
+      { type: 'serial-output', data: 'before\n' },
+      { type: 'sound-output', level: 255 },
       { type: 'serial-output', data: 'after' },
     ]);
   });

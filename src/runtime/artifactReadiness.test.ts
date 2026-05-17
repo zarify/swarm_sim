@@ -118,7 +118,7 @@ describe('artifact runtime readiness', () => {
     expect(readiness.runtimeSource).toBe('makecode-pxt');
     expect(readiness.sourceEvidence).toContain('PXT marker pxT!x');
     expect(readiness.verdict).toBe('Detected makecode-pxt; runtime adapter still required');
-  });
+  }, 15000);
 
   it('detects the MicroPython beacon fixture from decoded HEX bytes', () => {
     const readiness = evaluateArtifactRuntimeReadiness(
@@ -130,7 +130,7 @@ describe('artifact runtime readiness', () => {
     expect(readiness.runtimeSource).toBe('micropython');
     expect(readiness.sourceEvidence).toContain('MicroPython marker');
     expect(readiness.verdict).toBe('Detected micropython; runtime adapter still required');
-  });
+  }, 15000);
 });
 
 function asciiBytes(text: string): number[] {

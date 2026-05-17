@@ -1,11 +1,19 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useEffect, useRef } from 'react';
+import { vi } from 'vitest';
 import type { MicroPythonRuntimeHostProps } from './MicroPythonRuntimeHost';
 import { SwarmCanvasPanel } from './SwarmCanvasPanel';
 import makeCodeBeaconHex from '../../hex_files/mc_beacon.hex?raw';
 
 describe('SwarmCanvasPanel', () => {
-  it('renders the spatial canvas and updates simulation controls', () => {
+  beforeEach(() => {
+    if (typeof window.localStorage?.clear === 'function') {
+      window.localStorage.clear();
+    }
+    vi.restoreAllMocks();
+  });
+
+  it('renders the spatial canvas with reset-only runtime controls', () => {
     render(<SwarmCanvasPanel />);
 
     expect(screen.getByRole('heading', { name: 'Spatial radio bench' })).toBeInTheDocument();
@@ -15,14 +23,10 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.queryByLabelText('MakeCode runtime host')).not.toBeInTheDocument();
     expect(screen.queryByText('Artifact execution gate')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
-    expect(screen.getByText('running')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Pause' }));
-    expect(screen.getByText('paused')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
-    expect(screen.getByText('idle')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Pause' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Reset all' })[0]!);
+    expect(screen.getByRole('heading', { name: 'Spatial radio bench' })).toBeInTheDocument();
   });
 
   it('adds devices without bypassing engine-derived telemetry', () => {
@@ -59,12 +63,7 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
     expect(screen.getByTitle('MicroPython simulator for Alpha')).toBeInTheDocument();
     expect(screen.queryByLabelText('MakeCode runtime host')).not.toBeInTheDocument();
-    expect(
-      within(screen.getByLabelText('MicroPython runtime host')).getByRole('button', {
-        name: 'Reload runtime',
-      }),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Prepare selected' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Reset selected' })).toBeEnabled();
   });
 
   it('assigns MakeCode fixture HEX files and classifies their runtime source', async () => {
@@ -78,7 +77,6 @@ describe('SwarmCanvasPanel', () => {
     await waitFor(() => expect(screen.getByText('Runtime source: makecode-pxt')).toBeInTheDocument(), {
       timeout: 12000,
     });
-    expect(screen.getByLabelText('MakeCode runtime host')).toBeInTheDocument();
     expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('MakeCode simulator for Alpha')).not.toBeInTheDocument();
     expect(screen.queryByText(/Unable to identify this HEX/)).not.toBeInTheDocument();
@@ -116,6 +114,40 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.queryByText('Assigned: slow.hex')).not.toBeInTheDocument();
   });
 
+  it('supports dropping a .hex file anywhere in the right sidebar for the selected device', async () => {
+    render(<SwarmCanvasPanel />);
+
+    fireEvent.drop(screen.getByLabelText('Canvas controls and selection details'), {
+      dataTransfer: {
+        files: [makeUploadFile('dropped.hex', makeHexWithAscii('MicroPython'))],
+        types: ['Files'],
+      },
+    });
+
+    await waitFor(() => expect(screen.getByText('Assigned: dropped.hex')).toBeInTheDocument());
+    expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
+  });
+
+  it('prompts before overwriting existing code on a device', async () => {
+    render(<SwarmCanvasPanel />);
+    const input = screen.getByLabelText(/Load code onto Alpha/);
+    fireEvent.change(input, { target: { files: [makeUploadFile('first.hex', makeHexWithAscii('MicroPython'))] } });
+    await waitFor(() => expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument());
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.change(input, { target: { files: [makeUploadFile('second.hex', makeHexWithAscii('MicroPython'))] } });
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+    expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument();
+    expect(screen.queryByText('Assigned: second.hex')).not.toBeInTheDocument();
+    confirmSpy.mockRestore();
+  });
+
+  it('deletes the selected device node from the canvas', () => {
+    const { container } = render(<SwarmCanvasPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete node' }));
+    expect(container.querySelectorAll('.microbit-node')).toHaveLength(0);
+  });
+
   it('keeps runtime hosts hidden until devices have assigned runtime artifacts', () => {
     render(<SwarmCanvasPanel />);
 
@@ -126,7 +158,7 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.queryByLabelText('MakeCode runtime host')).not.toBeInTheDocument();
   });
 
-  it('keeps both runtime hosts mounted when MicroPython and MakeCode devices are assigned together', async () => {
+  it('keeps both runtime simulators mounted when MicroPython and MakeCode devices are assigned together', async () => {
     render(<SwarmCanvasPanel />);
 
     fireEvent.change(screen.getByLabelText(/Load code onto Alpha/), {
@@ -142,8 +174,8 @@ describe('SwarmCanvasPanel', () => {
       timeout: 12000,
     });
 
-    expect(screen.getByLabelText('MicroPython runtime host')).toBeInTheDocument();
-    expect(screen.getByLabelText('MakeCode runtime host')).toBeInTheDocument();
+    expect(screen.getByTitle('MicroPython simulator for Alpha')).toBeInTheDocument();
+    expect(screen.getByTitle('MakeCode simulator for Node 2')).toBeInTheDocument();
   }, 30000);
 
   it('draws canvas LEDs from live runtime display-change events instead of decorative pixels', async () => {
@@ -226,6 +258,40 @@ describe('SwarmCanvasPanel', () => {
 
     await waitFor(() => expect(buttonStates).toContain('true:false'));
     await waitFor(() => expect(buttonStates).toContain('false:false'));
+  });
+
+  it('saves a layout to browser storage and can load it back from the canvas-state menu', async () => {
+    render(<SwarmCanvasPanel />);
+
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Layout one');
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas state' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save to browser' }));
+
+    await waitFor(() => expect(promptSpy).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load Layout one' })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
+    expect(screen.getByText(/2 nodes \//)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load Layout one' }));
+
+    await waitFor(() => expect(screen.getByText(/1 nodes \//)).toBeInTheDocument());
+  });
+
+  it('prompts before clearing the canvas and only clears after confirmation', async () => {
+    render(<SwarmCanvasPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Canvas state' }));
+
+    const declineSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear canvas' }));
+    await waitFor(() => expect(declineSpy).toHaveBeenCalled());
+    expect(screen.getByText(/1 nodes \//)).toBeInTheDocument();
+
+    declineSpy.mockRestore();
+    const acceptSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear canvas' }));
+    await waitFor(() => expect(acceptSpy).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/0 nodes \//)).toBeInTheDocument());
   });
 
 });
