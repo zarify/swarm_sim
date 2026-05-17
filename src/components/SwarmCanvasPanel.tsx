@@ -393,6 +393,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }
     pulseRuntimeActivity(deviceId, 'tx');
     let recipients: DeviceId[] = [];
+    let routeDebugDetails: Record<string, unknown> | undefined;
     flushSync(() => {
       setModel((current) => {
         const senderRuntime = current.simulationState.devices[deviceId];
@@ -413,7 +414,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         }
         const routedEvent = simulationState.radioEvents.at(-1);
         recipients = routedEvent?.recipients ?? [];
-        debugRadioPanel('route-radio-packet', {
+        routeDebugDetails = {
           senderDeviceId: deviceId,
           senderRadio: senderRuntime?.radio,
           rawPacket: summarizeRadioPacket(packet),
@@ -427,12 +428,15 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               targetGroup: target.targetGroup,
               targetChannel: target.targetChannel,
             })) ?? [],
-        });
+        };
         const next = { ...current, simulationState };
         modelRef.current = next;
         return next;
       });
     });
+    if (routeDebugDetails) {
+      debugRadioPanel('route-radio-packet', routeDebugDetails);
+    }
 
     return recipients;
   }
@@ -499,13 +503,15 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       return;
     }
 
+    let queuedHint = false;
+    let appliedHint = false;
     flushSync(() => {
       setModel((current) => {
         const runtime = current.simulationState.devices[deviceId];
         if (!runtime) {
           const existing = pendingRadioConfigHints.current.get(deviceId) ?? {};
           pendingRadioConfigHints.current.set(deviceId, { ...existing, ...config });
-          debugRadioPanel('queue-radio-config-hint', { deviceId, config });
+          queuedHint = true;
           return current;
         }
 
@@ -518,12 +524,17 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
 
         const simulationState = setDeviceRadioConfig(current.simulationState, deviceId, config);
         pendingRadioConfigHints.current.delete(deviceId);
-        debugRadioPanel('apply-radio-config-hint', { deviceId, config });
+        appliedHint = true;
         const next = { ...current, simulationState };
         modelRef.current = next;
         return next;
       });
     });
+    if (queuedHint) {
+      debugRadioPanel('queue-radio-config-hint', { deviceId, config });
+    } else if (appliedHint) {
+      debugRadioPanel('apply-radio-config-hint', { deviceId, config });
+    }
   }
 
   function handleRuntimeSoundOutput(deviceId: DeviceId, _level: number) {
