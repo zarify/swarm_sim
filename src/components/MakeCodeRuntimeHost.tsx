@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DeviceId, SwarmProject } from '../domain/project';
-import { MicroPythonIframeRuntimeAdapter } from '../runtime/micropythonIframeAdapter';
-import { normalizeRuntimeDisplayPixels } from '../runtime/displayPixels';
+import { MakeCodeIframeRuntimeAdapter } from '../runtime/makecodeIframeRuntimeAdapter';
 import {
   loadProjectRuntimePrograms,
   type DeviceProgramLoadResult,
   type LoadProjectRuntimeProgramsOptions,
   type PreparedDeviceRuntimeProgram,
 } from '../runtime/programLoader';
+import { decompressLzmaSource } from '../runtime/lzmaDecompressor';
+import { normalizeRuntimeDisplayPixels } from '../runtime/displayPixels';
 import type {
   MicrobitRuntimeAdapter,
   RuntimeAdapterEvent,
@@ -16,15 +17,15 @@ import type {
 } from '../runtime/runtimeAdapter';
 import type { DeviceRuntimeState } from '../simulation/simulationEngine';
 
-export const MICRO_PYTHON_SIMULATOR_URL =
-  'https://python-simulator.usermbit.org/v/0.1/simulator.html?color=%23b7ff4a';
-
 type RuntimeLoadPrograms = (
   project: SwarmProject,
   options: LoadProjectRuntimeProgramsOptions,
 ) => Promise<DeviceProgramLoadResult[]>;
 
-export interface MicroPythonRuntimeHostProps {
+const MAKECODE_SIMULATOR_RUNNER_URL = '/makecode-patched-runner.html';
+const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
+
+export interface MakeCodeRuntimeHostProps {
   project: SwarmProject;
   selectedDeviceId?: DeviceId;
   deviceRuntimeStates?: Record<DeviceId, DeviceRuntimeState>;
@@ -52,7 +53,7 @@ export interface MicroPythonRuntimeHostProps {
   ) => MicrobitRuntimeAdapter;
 }
 
-export function MicroPythonRuntimeHost({
+export function MakeCodeRuntimeHost({
   project,
   selectedDeviceId,
   deviceRuntimeStates,
@@ -66,19 +67,24 @@ export function MicroPythonRuntimeHost({
   onRadioConfigHint,
   onLoadResultsChange,
   loadPrograms = loadProjectRuntimePrograms,
-  createAdapter = createMicroPythonIframeAdapter,
-}: MicroPythonRuntimeHostProps) {
+  createAdapter = createMakeCodeRuntimeAdapter,
+}: MakeCodeRuntimeHostProps) {
+  const requiresRunnerFrames = createAdapter === createMakeCodeRuntimeAdapter;
   const [loadResults, setLoadResults] = useState<DeviceProgramLoadResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [frameVersion, setFrameVersion] = useState(0);
+  const [displaySnapshots, setDisplaySnapshots] = useState<Record<DeviceId, number[]>>({});
   const frames = useRef(new Map<DeviceId, HTMLIFrameElement>());
   const adapters = useRef(new Map<DeviceId, MicrobitRuntimeAdapter>());
   const adapterArtifactIds = useRef(new Map<DeviceId, string>());
   const adapterUnsubscribes = useRef(new Map<DeviceId, () => void>());
+  const activeDeviceIds = useRef(new Set<DeviceId>());
   const lastSensorValues = useRef(new Map<DeviceId, string>());
   const lastButtonValues = useRef(new Map<DeviceId, string>());
   const scenarioResetRef = useRef(scenarioResetSignal);
   const loadRequestId = useRef(0);
+  const [readyDeviceIds, setReadyDeviceIds] = useState<Set<DeviceId>>(() => new Set());
+  const invalidDisplayFrameLogged = useRef(new Set<DeviceId>());
   const callbacks = useRef({
     onRadioPacket,
     onRuntimeLog,
@@ -86,8 +92,6 @@ export function MicroPythonRuntimeHost({
     onSoundOutput,
     onRadioConfigHint,
   });
-  const [readyDeviceIds, setReadyDeviceIds] = useState<Set<DeviceId>>(() => new Set());
-  const invalidDisplayFrameLogged = useRef(new Set<DeviceId>());
 
   useEffect(() => {
     onLoadResultsChange?.(loadResults);
@@ -103,18 +107,54 @@ export function MicroPythonRuntimeHost({
     };
   }, [onRadioPacket, onRuntimeLog, onDisplayChange, onSoundOutput, onRadioConfigHint]);
 
-  useEffect(() => () => disposeAdapters(adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current), []);
+  useEffect(
+    () => () => disposeAdapters(adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current),
+    [],
+  );
 
   const devices = useMemo(
     () =>
       project.devices.filter((device) => {
         const artifact = project.artifacts.find((candidate) => candidate.id === device.programArtifactId);
-        return artifact?.runtimeSource === 'micropython';
+        return artifact?.runtimeSource === 'makecode-pxt';
       }),
     [project],
   );
+  activeDeviceIds.current = new Set(devices.map((device) => device.id));
 
   const selectedRuntimeDevice = devices.find((device) => device.id === selectedDeviceId);
+
+  function syncRuntimeInputs(
+    deviceId: DeviceId,
+    adapter: MicrobitRuntimeAdapter,
+    runtime: DeviceRuntimeState,
+    force = false,
+  ): Promise<void> {
+    const tasks: Promise<void>[] = [];
+    const sensorKey = `${runtime.sensors.lightLevel}:${runtime.sensors.soundLevel}`;
+    if (force || lastSensorValues.current.get(deviceId) !== sensorKey) {
+      lastSensorValues.current.set(deviceId, sensorKey);
+      tasks.push(
+        Promise.all([
+          adapter.setSensor('lightLevel', runtime.sensors.lightLevel),
+          adapter.setSensor('soundLevel', runtime.sensors.soundLevel),
+        ]).then(() => undefined),
+      );
+    }
+
+    const buttonKey = `${runtime.buttons.A}:${runtime.buttons.B}`;
+    if (force || lastButtonValues.current.get(deviceId) !== buttonKey) {
+      lastButtonValues.current.set(deviceId, buttonKey);
+      tasks.push(
+        Promise.all([
+          adapter.setButton('A', runtime.buttons.A),
+          adapter.setButton('B', runtime.buttons.B),
+        ]).then(() => undefined),
+      );
+    }
+
+    return tasks.length === 0 ? Promise.resolve() : Promise.all(tasks).then(() => undefined);
+  }
 
   useEffect(() => {
     loadRequestId.current += 1;
@@ -143,6 +183,11 @@ export function MicroPythonRuntimeHost({
     setLoadResults((current) =>
       current.filter((result) => activeArtifactIds.get(result.deviceId) === result.artifactId),
     );
+    setDisplaySnapshots((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([deviceId]) => activeArtifactIds.has(deviceId)),
+      ) as Record<DeviceId, number[]>,
+    );
   }, [devices]);
 
   useEffect(() => {
@@ -156,20 +201,11 @@ export function MicroPythonRuntimeHost({
         continue;
       }
 
-      const sensorKey = `${runtime.sensors.lightLevel}:${runtime.sensors.soundLevel}`;
-      if (lastSensorValues.current.get(deviceId) === sensorKey) {
-        continue;
-      }
-
-      lastSensorValues.current.set(deviceId, sensorKey);
-      void Promise.all([
-        adapter.setSensor('lightLevel', runtime.sensors.lightLevel),
-        adapter.setSensor('soundLevel', runtime.sensors.soundLevel),
-      ]).catch((error: unknown) => {
+      void syncRuntimeInputs(deviceId, adapter, runtime).catch((error: unknown) => {
         callbacks.current.onRuntimeLog(
           deviceId,
           'internal-error',
-          error instanceof Error ? error.message : 'Unable to update MicroPython simulator sensors',
+          error instanceof Error ? error.message : 'Unable to update MakeCode runtime sensors',
         );
       });
     }
@@ -186,20 +222,11 @@ export function MicroPythonRuntimeHost({
         continue;
       }
 
-      const buttonKey = `${runtime.buttons.A}:${runtime.buttons.B}`;
-      if (lastButtonValues.current.get(deviceId) === buttonKey) {
-        continue;
-      }
-
-      lastButtonValues.current.set(deviceId, buttonKey);
-      void Promise.all([
-        adapter.setButton('A', runtime.buttons.A),
-        adapter.setButton('B', runtime.buttons.B),
-      ]).catch((error: unknown) => {
+      void syncRuntimeInputs(deviceId, adapter, runtime).catch((error: unknown) => {
         callbacks.current.onRuntimeLog(
           deviceId,
           'internal-error',
-          error instanceof Error ? error.message : 'Unable to update MicroPython simulator buttons',
+          error instanceof Error ? error.message : 'Unable to update MakeCode runtime buttons',
         );
       });
     }
@@ -212,54 +239,65 @@ export function MicroPythonRuntimeHost({
 
     scenarioResetRef.current = scenarioResetSignal;
     resetRuntimeAdapters([...adapters.current.keys()], 'scenario reset');
+    setDisplaySnapshots({});
   }, [scenarioResetSignal]);
 
   useEffect(() => {
-    function handleReadyMessage(event: MessageEvent) {
-      if (event.origin !== new URL(MICRO_PYTHON_SIMULATOR_URL).origin) {
-        return;
-      }
-
+    function handleRunnerReady(event: MessageEvent) {
       const data = event.data;
-      if (!isRecord(data) || data.kind !== 'ready') {
+      if (!isRecord(data) || data.type !== 'swarm-runner-ready') {
         return;
       }
 
-      const readyDevice = devices.find(
-        (device) => frames.current.get(device.id)?.contentWindow === event.source,
-      );
-      if (!readyDevice) {
+      let readyDeviceId: DeviceId | undefined;
+      for (const [deviceId, frame] of frames.current.entries()) {
+        if (frame.contentWindow === event.source) {
+          readyDeviceId = deviceId;
+          break;
+        }
+      }
+      if (!readyDeviceId) {
         return;
       }
 
+      debugMakeCodeRadio('runner-ready', { deviceId: readyDeviceId });
       setReadyDeviceIds((current) => {
-        if (current.has(readyDevice.id)) {
+        if (current.has(readyDeviceId)) {
           return current;
         }
-        return new Set([...current, readyDevice.id]);
+        return new Set([...current, readyDeviceId]);
       });
     }
 
-    window.addEventListener('message', handleReadyMessage);
-    return () => window.removeEventListener('message', handleReadyMessage);
-  }, [devices]);
+    window.addEventListener('message', handleRunnerReady);
+    return () => window.removeEventListener('message', handleRunnerReady);
+  }, []);
 
   const setFrame = useCallback((deviceId: DeviceId, frame: HTMLIFrameElement | null) => {
     if (frame) {
-      if (frames.current.get(deviceId) === frame) {
+      const previousFrame = frames.current.get(deviceId);
+      if (previousFrame === frame) {
         return;
       }
+      const previousWindow = previousFrame?.contentWindow;
+      const nextWindow = frame.contentWindow;
       frames.current.set(deviceId, frame);
-      setReadyDeviceIds((current) => {
-        if (!current.has(deviceId)) {
-          return current;
-        }
-        const next = new Set(current);
-        next.delete(deviceId);
-        return next;
-      });
+      if (previousWindow && nextWindow && previousWindow !== nextWindow) {
+        setReadyDeviceIds((current) => {
+          if (!current.has(deviceId)) {
+            return current;
+          }
+          const next = new Set(current);
+          next.delete(deviceId);
+          return next;
+        });
+      }
       setFrameVersion((current) => current + 1);
     } else if (frames.current.has(deviceId)) {
+      if (activeDeviceIds.current.has(deviceId)) {
+        // React ref callback identity churn can temporarily report null before reattaching.
+        return;
+      }
       frames.current.delete(deviceId);
       setReadyDeviceIds((current) => {
         if (!current.has(deviceId)) {
@@ -274,7 +312,13 @@ export function MicroPythonRuntimeHost({
   }, []);
 
   const frameRefs = useMemo(
-    () => new Map(devices.map((device) => [device.id, (frame: HTMLIFrameElement | null) => setFrame(device.id, frame)])),
+    () =>
+      new Map(
+        devices.map((device) => [
+          device.id,
+          (frame: HTMLIFrameElement | null) => setFrame(device.id, frame),
+        ]),
+      ),
     [devices, setFrame],
   );
 
@@ -293,17 +337,28 @@ export function MicroPythonRuntimeHost({
       lastButtonValues.current.delete(device.id);
       invalidDisplayFrameLogged.current.delete(device.id);
     }
+
     const requestAdapters: { deviceId: DeviceId; adapter: MicrobitRuntimeAdapter }[] = [];
 
     try {
-      const results = normalizeDeferredFlashResults(await loadPrograms(makeRuntimeProject(project, targetDevices), {
+      const results = await loadPrograms(makeRuntimeProject(project, targetDevices), {
+        decompressLzma: decompressLzmaSource,
         createAdapter: (prepared) => {
-          if (prepared.runtimeSource !== 'micropython') {
+          if (prepared.runtimeSource !== 'makecode-pxt') {
+            debugMakeCodeRadio('skip-non-makecode-runtime', {
+              deviceId: prepared.device.id,
+              runtimeSource: prepared.runtimeSource,
+              artifactId: prepared.artifact.id,
+            });
+            return undefined;
+          }
+
+          if (loadRequestId.current !== requestId) {
             return undefined;
           }
 
           const frameWindow = frames.current.get(prepared.device.id)?.contentWindow;
-          if (!frameWindow) {
+          if (requiresRunnerFrames && !frameWindow) {
             throw new Error(`Simulator iframe is not ready for ${prepared.device.name}`);
           }
           if (loadRequestId.current !== requestId) {
@@ -312,11 +367,16 @@ export function MicroPythonRuntimeHost({
 
           const adapter = createAdapter(
             prepared,
-            frameWindow,
+            frameWindow ?? window,
             readyDeviceIds.has(prepared.device.id),
           );
-          const radioConfigHint = extractMicroPythonRadioConfig(prepared.program);
+          const radioConfigHint = extractMakeCodeRadioConfig(prepared.program);
           if (radioConfigHint.group !== undefined || radioConfigHint.channel !== undefined) {
+            debugMakeCodeRadio('source-hint', {
+              deviceId: prepared.device.id,
+              group: radioConfigHint.group,
+              channel: radioConfigHint.channel,
+            });
             callbacks.current.onRadioConfigHint?.(prepared.device.id, radioConfigHint);
           }
           adapters.current.set(prepared.device.id, adapter);
@@ -328,13 +388,24 @@ export function MicroPythonRuntimeHost({
           );
           return adapter;
         },
-      }));
+      });
+
       if (loadRequestId.current !== requestId) {
         disposeRequestAdapters(requestAdapters, adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current);
         return;
       }
 
       const resultDeviceIds = new Set(results.map((result) => result.deviceId));
+      debugMakeCodeRadio('load-results', {
+        requestId,
+        devices: targetDevices.map((device) => device.id),
+        results: results.map((result) => ({
+          deviceId: result.deviceId,
+          status: result.status,
+          runtimeSource: result.runtimeSource,
+          diagnostic: result.diagnostic,
+        })),
+      });
       setLoadResults((current) => [
         ...current.filter((result) => !resultDeviceIds.has(result.deviceId)),
         ...results,
@@ -344,12 +415,13 @@ export function MicroPythonRuntimeHost({
         disposeRequestAdapters(requestAdapters, adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current);
         return;
       }
-      const diagnostic = error instanceof Error ? error.message : 'Unable to load MicroPython runtimes';
+
+      const diagnostic = error instanceof Error ? error.message : 'Unable to load MakeCode runtimes';
       const results: DeviceProgramLoadResult[] = targetDevices.map((device) => ({
         deviceId: device.id,
         artifactId: device.programArtifactId,
         status: 'failed',
-        runtimeSource: 'micropython',
+        runtimeSource: 'makecode-pxt',
         diagnostic,
       }));
       const resultDeviceIds = new Set(results.map((result) => result.deviceId));
@@ -371,8 +443,14 @@ export function MicroPythonRuntimeHost({
         if (!adapter) {
           return;
         }
-        invalidDisplayFrameLogged.current.delete(deviceId);
+        const runtime = deviceRuntimeStates?.[deviceId];
         await adapter.reset();
+        lastSensorValues.current.delete(deviceId);
+        lastButtonValues.current.delete(deviceId);
+        invalidDisplayFrameLogged.current.delete(deviceId);
+        if (runtime) {
+          await syncRuntimeInputs(deviceId, adapter, runtime, true);
+        }
       }),
     ).catch((error: unknown) => {
       callbacks.current.onRuntimeLog(
@@ -383,11 +461,62 @@ export function MicroPythonRuntimeHost({
     });
   }
 
+  function pulseButton(deviceId: DeviceId, button: 'A' | 'B') {
+    const adapter = adapters.current.get(deviceId);
+    if (!adapter) {
+      return;
+    }
+
+    void (async () => {
+      await adapter.setButton(button, true);
+      await adapter.setButton(button, false);
+    })().catch((error: unknown) => {
+      callbacks.current.onRuntimeLog(
+        deviceId,
+        'internal-error',
+        error instanceof Error ? error.message : `Unable to apply button ${button} input`,
+      );
+    });
+  }
+
+  function pulseButtonAB(deviceId: DeviceId) {
+    const adapter = adapters.current.get(deviceId);
+    if (!adapter) {
+      return;
+    }
+
+    void (async () => {
+      await adapter.setButton('A', true);
+      await adapter.setButton('B', true);
+      await adapter.setButton('B', false);
+      await adapter.setButton('A', false);
+    })().catch((error: unknown) => {
+      callbacks.current.onRuntimeLog(
+        deviceId,
+        'internal-error',
+        error instanceof Error ? error.message : 'Unable to apply button AB input',
+      );
+    });
+  }
+
   function handleRuntimeEvent(deviceId: DeviceId, event: RuntimeAdapterEvent) {
     switch (event.type) {
       case 'radio-output': {
         const runtimeRadioConfig = runtimeRadioConfigFromPacket(event.packet);
+        debugMakeCodeRadio('tx-packet', {
+          deviceId,
+          bytes: event.packet.data.byteLength,
+          preview: [...event.packet.data.slice(0, 8)],
+          packetGroup: event.packet.group,
+          packetChannel: event.packet.channel,
+          packetSignalStrength: event.packet.signalStrength,
+        });
         if (runtimeRadioConfig.group !== undefined || runtimeRadioConfig.channel !== undefined) {
+          debugMakeCodeRadio('tx-packet-config', {
+            deviceId,
+            group: runtimeRadioConfig.group,
+            channel: runtimeRadioConfig.channel,
+          });
           callbacks.current.onRadioConfigHint?.(deviceId, runtimeRadioConfig);
         }
         const recipients = callbacks.current.onRadioPacket(deviceId, event.packet);
@@ -403,6 +532,11 @@ export function MicroPythonRuntimeHost({
         break;
       }
       case 'radio-config-change':
+        debugMakeCodeRadio('runtime-config-change', {
+          deviceId,
+          group: event.config.group,
+          channel: event.config.channel,
+        });
         callbacks.current.onRadioConfigHint?.(deviceId, event.config);
         break;
       case 'serial-output':
@@ -419,13 +553,14 @@ export function MicroPythonRuntimeHost({
               callbacks.current.onRuntimeLog(
                 deviceId,
                 'internal-error',
-                'MicroPython runtime emitted invalid LED data',
+                'MakeCode runtime emitted invalid LED data',
               );
               invalidDisplayFrameLogged.current.add(deviceId);
             }
-            break;
+            return;
           }
           invalidDisplayFrameLogged.current.delete(deviceId);
+          setDisplaySnapshots((current) => ({ ...current, [deviceId]: normalized }));
           callbacks.current.onDisplayChange?.(deviceId, normalized);
         }
         break;
@@ -435,10 +570,11 @@ export function MicroPythonRuntimeHost({
     }
   }
 
-  const readyFrames = devices.filter((device) => readyDeviceIds.has(device.id)).length;
-  const allFramesReady = devices.length > 0 && readyFrames === devices.length;
-  const selectedFrameReady = selectedRuntimeDevice ? readyDeviceIds.has(selectedRuntimeDevice.id) : false;
   const preparedDeviceIds = new Set(adapters.current.keys());
+  const readyFrames = devices.filter((device) => readyDeviceIds.has(device.id)).length;
+  const allFramesReady =
+    devices.length > 0 && (!requiresRunnerFrames || readyFrames === devices.length);
+  const selectedFrameReady = selectedRuntimeDevice ? readyDeviceIds.has(selectedRuntimeDevice.id) : false;
   const selectedPrepared = selectedDeviceId ? preparedDeviceIds.has(selectedDeviceId) : false;
   const hasPreparedRuntime = preparedDeviceIds.size > 0;
   const canPrepareSelected = Boolean(selectedRuntimeDevice && selectedFrameReady);
@@ -463,26 +599,19 @@ export function MicroPythonRuntimeHost({
   }, [autoPrepare, devices, allFramesReady, isLoading]);
 
   return (
-    <div className="runtime-host-card" aria-label="MicroPython runtime host">
+    <div className="runtime-host-card" aria-label="MakeCode runtime host">
       <div>
-        <span className="metric-label">MicroPython runtime host</span>
+        <span className="metric-label">MakeCode runtime host</span>
         <strong>
-          {devices.length === 0
-            ? 'No MicroPython runtime'
-            : `${readyFrames}/${devices.length} simulator(s) ready`}
+          {devices.length === 0 ? 'No MakeCode runtime' : `${readyFrames}/${devices.length} simulator(s) ready`}
         </strong>
         <p className="hint">
-          Prepared code is sent when the simulator frame asks for it. Press Play in the
-          frame after preparing the runtime.
+          Patched MakeCode simulator runners execute programs and receive environment-driven inputs.
         </p>
       </div>
       <div className="runtime-host-actions">
         {autoPrepare ? (
-          <button
-            type="button"
-            onClick={() => loadRuntimes(devices)}
-            disabled={isLoading || !allFramesReady}
-          >
+          <button type="button" onClick={() => loadRuntimes(devices)} disabled={isLoading || !allFramesReady}>
             {isLoading ? 'Loading runtimes...' : devices.length <= 1 ? 'Reload runtime' : 'Reload all'}
           </button>
         ) : (
@@ -496,11 +625,7 @@ export function MicroPythonRuntimeHost({
                 {isLoading ? 'Preparing runtime...' : 'Prepare selected'}
               </button>
             ) : null}
-            <button
-              type="button"
-              onClick={() => loadRuntimes(devices)}
-              disabled={isLoading || !allFramesReady}
-            >
+            <button type="button" onClick={() => loadRuntimes(devices)} disabled={isLoading || !allFramesReady}>
               {isLoading ? 'Preparing runtimes...' : devices.length <= 1 ? 'Prepare runtime' : 'Prepare all'}
             </button>
           </>
@@ -531,20 +656,84 @@ export function MicroPythonRuntimeHost({
           >
             <div className="runtime-frame-card__header">
               <strong>{device.name}</strong>
-              <span>{preparedDeviceIds.has(device.id) ? 'prepared' : readyDeviceIds.has(device.id) ? 'ready' : 'loading'}</span>
+              <span>
+                {preparedDeviceIds.has(device.id) ? 'prepared' : readyDeviceIds.has(device.id) ? 'ready' : 'loading'}
+              </span>
             </div>
             <iframe
               ref={frameRefs.get(device.id)}
-              title={`MicroPython simulator for ${device.name}`}
-              src={MICRO_PYTHON_SIMULATOR_URL}
+              title={`MakeCode simulator for ${device.name}`}
+              src={MAKECODE_SIMULATOR_RUNNER_URL}
               sandbox="allow-scripts allow-same-origin"
               scrolling="no"
             />
           </article>
         ))}
       </div>
+      {showSimulatorFrames ? (
+        <div className="runtime-frame-grid">
+          {devices.map((device) => {
+            const prepared = preparedDeviceIds.has(device.id);
+            const ledPixels = displaySnapshots[device.id] ?? EMPTY_LED_PIXELS;
+            return (
+              <article key={device.id} className="runtime-frame-card runtime-frame-card--virtual">
+                <div className="runtime-frame-card__header">
+                  <strong>{device.name}</strong>
+                  <span>{prepared ? 'prepared' : 'standby'}</span>
+                </div>
+                <div className="runtime-frame-card__body runtime-frame-card__body--makecode">
+                  <div className="virtual-simulator" aria-label={`MakeCode simulator for ${device.name}`}>
+                    <div className="virtual-simulator__led-grid">
+                      {ledPixels.map((brightness, pixelIndex) => {
+                        const lit = brightness > 0;
+                        return (
+                          <span
+                            key={pixelIndex}
+                            data-runtime-led={`${device.id}:${pixelIndex}`}
+                            className={lit ? 'virtual-led-pixel virtual-led-pixel--lit' : 'virtual-led-pixel'}
+                            style={lit ? { opacity: 0.35 + (brightness / 9) * 0.65 } : undefined}
+                          />
+                        );
+                      })}
+                    </div>
+                    <div className="virtual-simulator__button-row">
+                      <button
+                        type="button"
+                        aria-label={`Press A for ${device.name}`}
+                        onClick={() => pulseButton(device.id, 'A')}
+                        disabled={!prepared}
+                      >
+                        A
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Press B for ${device.name}`}
+                        onClick={() => pulseButton(device.id, 'B')}
+                        disabled={!prepared}
+                      >
+                        B
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Press A+B for ${device.name}`}
+                        onClick={() => pulseButtonAB(device.id)}
+                        disabled={!prepared}
+                      >
+                        A+B
+                      </button>
+                    </div>
+                  </div>
+                  <p className="runtime-frame-card__note">
+                    Host view of runtime I/O mirrored from the simulator.
+                  </p>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
       {loadResults.length > 0 ? (
-        <div className="runtime-load-list" aria-label="Runtime load results">
+        <div className="runtime-load-list" aria-label="MakeCode runtime load results">
           {loadResults.map((result) => (
             <p key={result.deviceId}>
               <strong data-state={result.status}>{result.status}</strong> {result.deviceId}
@@ -566,32 +755,52 @@ function makeRuntimeProject(project: SwarmProject, devices: SwarmProject['device
   };
 }
 
-function createMicroPythonIframeAdapter(
+function createMakeCodeRuntimeAdapter(
   prepared: PreparedDeviceRuntimeProgram,
   frameWindow: Window,
   ready: boolean,
 ): MicrobitRuntimeAdapter {
-  return new MicroPythonIframeRuntimeAdapter({
+  return new MakeCodeIframeRuntimeAdapter({
     targetWindow: frameWindow,
-    targetOrigin: MICRO_PYTHON_SIMULATOR_URL,
+    targetOrigin: window.location.origin,
     eventTarget: window,
     messageSource: frameWindow,
     initialReady: ready,
-    deferFlashUntilRequest: true,
-    name: `MicroPython iframe for ${prepared.device.name}`,
+    name: `MakeCode iframe for ${prepared.device.name}`,
   });
 }
 
-function normalizeDeferredFlashResults(results: DeviceProgramLoadResult[]): DeviceProgramLoadResult[] {
-  return results.map((result) =>
-    result.status === 'loaded'
-      ? {
-          ...result,
-          status: 'prepared',
-          diagnostic: 'Prepared; press Play in the simulator frame to start.',
-        }
-      : result,
-  );
+function extractMakeCodeRadioConfig(
+  program: RuntimeProgram,
+): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>> {
+  if (program.source !== 'makecode-pxt') {
+    return {};
+  }
+
+  const sourceText = Object.values(program.sourceFiles ?? {}).join('\n');
+  const group = sourceText.match(/radio\.setGroup\(\s*(\d+)\s*\)/)?.[1];
+  const channel = sourceText.match(/radio\.setFrequencyBand\(\s*(\d+)\s*\)/)?.[1];
+
+  return {
+    ...(group === undefined ? {} : { group: Number.parseInt(group, 10) }),
+    ...(channel === undefined ? {} : { channel: Number.parseInt(channel, 10) }),
+  };
+}
+
+function runtimeRadioConfigFromPacket(
+  packet: RuntimeRadioPacket,
+): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>> {
+  return {
+    ...(packet.group === undefined ? {} : { group: packet.group }),
+    ...(packet.channel === undefined ? {} : { channel: packet.channel }),
+  };
+}
+
+function debugMakeCodeRadio(event: string, details: Record<string, unknown>): void {
+  if (!ENABLE_RADIO_DEBUG_LOGS) {
+    return;
+  }
+  console.debug('[swarm-radio-debug]', `makecode-host:${event}`, details);
 }
 
 function disposeAdapters(
@@ -645,46 +854,8 @@ function disposeAdapterForDevice(
   artifactIds.delete(deviceId);
 }
 
+const EMPTY_LED_PIXELS = Array.from({ length: 25 }, () => 0);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
-}
-
-function extractMicroPythonRadioConfig(
-  program: RuntimeProgram,
-): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>> {
-  if (program.source !== 'micropython') {
-    return {};
-  }
-
-  const mainPy = program.filesystem['main.py'];
-  if (!mainPy) {
-    return {};
-  }
-
-  const source = new TextDecoder().decode(mainPy);
-  const configArgs = source.match(/radio\.config\(([^)]*)\)/)?.[1];
-  if (!configArgs) {
-    return {};
-  }
-
-  const parsed: Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>> = {};
-  const group = configArgs.match(/\bgroup\s*=\s*(\d+)\b/)?.[1];
-  const channel = configArgs.match(/\bchannel\s*=\s*(\d+)\b/)?.[1];
-  if (group) {
-    parsed.group = Number.parseInt(group, 10);
-  }
-  if (channel) {
-    parsed.channel = Number.parseInt(channel, 10);
-  }
-
-  return parsed;
-}
-
-function runtimeRadioConfigFromPacket(
-  packet: RuntimeRadioPacket,
-): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>> {
-  return {
-    ...(packet.group === undefined ? {} : { group: packet.group }),
-    ...(packet.channel === undefined ? {} : { channel: packet.channel }),
-  };
 }

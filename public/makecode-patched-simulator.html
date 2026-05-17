@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en" data-framework="typescript">
+  <head>
+    <meta charset="utf-8" />
+    <title>Patched BBC micro:bit simulator</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        width: 100%;
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: transparent;
+      }
+    </style>
+    <script src="https://cdn.makecode.com/blob/5d475bb1e350ee095419e8757b8e3cd6a09b1291/pxtsim.js"></script>
+    <script src="https://cdn.makecode.com/blob/9d07f74640d92282a192245b78ab9f27865735de/sim.js"></script>
+  </head>
+  <body>
+    <script>
+      (() => {
+        const RUNNER_ORIGIN = window.location.origin;
+        const pendingMessages = [];
+        let simulatorReady = false;
+        let lastDisplay = '';
+        let lastSound = -1;
+        let lastRadioConfigKey = 'none';
+        const desiredSensors = {
+          lightLevel: 0,
+          soundLevel: 0,
+        };
+        const patchedRadioStates = new WeakSet();
+        const observedRadioConfig = {
+          group: undefined,
+          channel: undefined,
+        };
+
+        window.addEventListener('message', (event) => {
+          if (event.source !== window.parent || event.origin !== RUNNER_ORIGIN) {
+            return;
+          }
+          const data = event.data;
+          if (!isRecord(data) || typeof data.type !== 'string') {
+            return;
+          }
+          if (!data.type.startsWith('swarm-') && data.type !== 'radiopacket') {
+            return;
+          }
+          pendingMessages.push(data);
+          flushPendingMessages();
+        });
+
+        const tick = () => {
+          const board = getBoard();
+          if (board && !simulatorReady) {
+            simulatorReady = true;
+            postToRunner({ type: 'swarm-simulator-ready' });
+          }
+          patchRadioStateHooks(board);
+          flushPendingMessages();
+          applyDesiredSensors(board);
+          publishState(board);
+          window.setTimeout(tick, 40);
+        };
+        tick();
+
+        function flushPendingMessages() {
+          const board = getBoard();
+          if (!board || pendingMessages.length === 0) {
+            return;
+          }
+
+          for (const message of pendingMessages.splice(0, pendingMessages.length)) {
+            try {
+              if (message.type === 'swarm-set-sensor') {
+                updateDesiredSensor(message);
+              } else if (message.type === 'swarm-set-button') {
+                applyButton(board, message);
+              } else if (message.type === 'radiopacket') {
+                applyRadioPacket(board, message);
+              }
+            } catch (error) {
+              postToRunner({
+                type: 'swarm-runtime-event',
+                eventType: 'internal-error',
+                payload: { message: toErrorMessage(error) },
+              });
+            }
+          }
+          applyDesiredSensors(board);
+        }
+
+        function updateDesiredSensor(message) {
+          const sensor = message.sensor;
+          const value = clampByte(Number(message.value));
+          if (sensor === 'lightLevel') {
+            desiredSensors.lightLevel = value;
+          } else if (sensor === 'soundLevel') {
+            desiredSensors.soundLevel = value;
+          }
+        }
+
+        function applyDesiredSensors(board) {
+          if (!board) {
+            return;
+          }
+          let changed = false;
+          if (board.lightSensorState) {
+            const currentLight = clampByte(Number(board.lightSensorState.lightLevel ?? 0));
+            if (!board.lightSensorState.usesLightLevel || currentLight !== desiredSensors.lightLevel) {
+              board.lightSensorState.usesLightLevel = true;
+              board.lightSensorState.lightLevel = desiredSensors.lightLevel;
+              changed = true;
+            }
+          }
+          if (board.microphoneState) {
+            const currentSound = clampByte(Number(board.microphoneState.getLevel?.() ?? 0));
+            if (currentSound !== desiredSensors.soundLevel) {
+              board.microphoneState.setUsed?.();
+              board.microphoneState.setLevel?.(desiredSensors.soundLevel);
+              changed = true;
+            }
+          }
+          if (changed) {
+            queueDisplayUpdate();
+          }
+        }
+
+        function applyButton(board, message) {
+          const pair = board.buttonPairState;
+          if (!pair || !board.bus) {
+            return;
+          }
+          const button = message.button === 'B' ? pair.bBtn : pair.aBtn;
+          const pressed = Boolean(message.pressed);
+          if (pressed === Boolean(button.pressed)) {
+            return;
+          }
+
+          button.pressed = pressed;
+          board.bus.queue(button.id, pressed ? 1 : 2);
+          if (!pressed) {
+            board.bus.queue(button.id, 3);
+          }
+
+          const bothPressed = Boolean(pair.aBtn.pressed && pair.bBtn.pressed);
+          if (bothPressed !== Boolean(pair.abBtn.pressed)) {
+            pair.abBtn.pressed = bothPressed;
+            board.bus.queue(pair.abBtn.id, bothPressed ? 1 : 2);
+            if (!bothPressed) {
+              board.bus.queue(pair.abBtn.id, 3);
+            }
+          }
+          queueDisplayUpdate();
+        }
+
+        function applyRadioPacket(board, message) {
+          const radioState = board.radioState;
+          if (!radioState || typeof radioState.receivePacket !== 'function') {
+            return;
+          }
+          const payload = isRecord(message.payload) ? message.payload : {};
+          const packet = {
+            type: 'radiopacket',
+            rssi: Number.isFinite(Number(message.rssi)) ? Number(message.rssi) : -75,
+            serial: Number.isFinite(Number(message.serial)) ? Number(message.serial) : 0,
+            time: Number.isFinite(Number(message.time)) ? Number(message.time) : Date.now(),
+            payload: {
+              type: 0,
+              groupId: Number.isFinite(Number(payload.groupId)) ? Number(payload.groupId) : 0,
+              bufferData: normalizeBufferData(payload.bufferData),
+            },
+          };
+          radioState.receivePacket(packet);
+        }
+
+        function publishState(board) {
+          if (!board) {
+            return;
+          }
+          const displayPixels = readDisplayPixels(board);
+          const soundLevel = readSoundLevel(board);
+          const radio = readRadioConfig(board);
+          const displayKey = displayPixels.join(',');
+          const radioConfigKey = `${radio.group ?? 'none'}:${radio.channel ?? 'none'}`;
+          if (displayKey === lastDisplay && soundLevel === lastSound && radioConfigKey === lastRadioConfigKey) {
+            return;
+          }
+          lastDisplay = displayKey;
+          lastSound = soundLevel;
+          lastRadioConfigKey = radioConfigKey;
+          postToRunner({
+            type: 'swarm-simulator-state',
+            displayPixels,
+            soundLevel,
+            ...(radio.group === undefined && radio.channel === undefined ? {} : { radio }),
+          });
+        }
+
+        function patchRadioStateHooks(board) {
+          if (!board || !isRecord(board.radioState)) {
+            return;
+          }
+          const radioState = board.radioState;
+          if (patchedRadioStates.has(radioState)) {
+            return;
+          }
+          patchedRadioStates.add(radioState);
+          patchMethod(radioState, 'setGroup', (args) => {
+            const group = toOptionalGroup(args[0]);
+            if (group !== undefined) {
+              observedRadioConfig.group = group;
+            }
+          });
+          patchMethod(radioState, 'setFrequencyBand', (args) => {
+            const channel = toOptionalChannel(args[0]);
+            if (channel !== undefined) {
+              observedRadioConfig.channel = channel;
+            }
+          });
+          patchMethod(radioState, 'setBand', (args) => {
+            const channel = toOptionalChannel(args[0]);
+            if (channel !== undefined) {
+              observedRadioConfig.channel = channel;
+            }
+          });
+          patchMethod(radioState, 'setChannel', (args) => {
+            const channel = toOptionalChannel(args[0]);
+            if (channel !== undefined) {
+              observedRadioConfig.channel = channel;
+            }
+          });
+        }
+
+        function patchMethod(target, name, onInvoke) {
+          if (!isRecord(target) || typeof target[name] !== 'function') {
+            return;
+          }
+          const original = target[name];
+          target[name] = function patchedRadioMethod(...args) {
+            const result = original.apply(this, args);
+            onInvoke?.(args);
+            publishState(getBoard());
+            return result;
+          };
+        }
+
+        function readDisplayPixels(board) {
+          const data = board.ledMatrixState?.image?.data;
+          if (!data || typeof data.length !== 'number') {
+            return Array.from({ length: 25 }, () => 0);
+          }
+          const pixels = [];
+          for (let index = 0; index < 25; index += 1) {
+            const raw = Number(data[index] ?? 0);
+            pixels.push(clampDisplay(raw));
+          }
+          return pixels;
+        }
+
+        function readSoundLevel(board) {
+          const level = board.microphoneState?.getLevel?.();
+          return clampByte(Number(level ?? 0));
+        }
+
+        function readRadioConfig(board) {
+          if (!board) {
+            return {};
+          }
+          return {
+            ...(observedRadioConfig.group === undefined ? {} : { group: observedRadioConfig.group }),
+            ...(observedRadioConfig.channel === undefined
+              ? {}
+              : { channel: observedRadioConfig.channel }),
+          };
+        }
+
+        function normalizeBufferData(value) {
+          if (value instanceof Uint8Array) {
+            return value;
+          }
+          if (Array.isArray(value)) {
+            return new Uint8Array(value.map((entry) => Number(entry) & 0xff));
+          }
+          if (typeof value === 'string') {
+            return new TextEncoder().encode(value);
+          }
+          return new Uint8Array();
+        }
+
+        function queueDisplayUpdate() {
+          try {
+            window.pxsim?.runtime?.queueDisplayUpdate?.();
+          } catch {
+            // Ignore transient runtime teardown races between program reloads.
+          }
+        }
+
+        function getBoard() {
+          try {
+            if (!window.pxsim || typeof window.pxsim.board !== 'function') {
+              return undefined;
+            }
+            return window.pxsim.board();
+          } catch {
+            return undefined;
+          }
+        }
+
+        function clampByte(value) {
+          if (!Number.isFinite(value)) {
+            return 0;
+          }
+          return Math.max(0, Math.min(255, Math.round(value)));
+        }
+
+        function clampDisplay(raw) {
+          const numeric = Number(raw);
+          if (!Number.isFinite(numeric)) {
+            return 0;
+          }
+          const bounded = Math.max(0, Math.min(255, Math.round(numeric)));
+          return Math.round((bounded / 255) * 9);
+        }
+
+        function toOptionalGroup(value) {
+          const numeric = Number(value);
+          if (!Number.isInteger(numeric) || numeric < 0 || numeric > 255) {
+            return undefined;
+          }
+          return numeric;
+        }
+
+        function toOptionalChannel(value) {
+          const numeric = Number(value);
+          if (!Number.isInteger(numeric) || numeric < 0 || numeric > 83) {
+            return undefined;
+          }
+          return numeric;
+        }
+
+        function postToRunner(message) {
+          window.parent.postMessage(message, RUNNER_ORIGIN);
+        }
+
+        function toErrorMessage(error) {
+          if (error instanceof Error) {
+            return error.message;
+          }
+          return typeof error === 'string' ? error : 'Patched simulator error';
+        }
+
+        function isRecord(value) {
+          return typeof value === 'object' && value !== null;
+        }
+      })();
+    </script>
+  </body>
+</html>

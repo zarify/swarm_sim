@@ -8,8 +8,12 @@ import {
   type Point,
   type SwarmProject,
 } from '../domain/project';
-import { MicroPythonRuntimeHost } from './MicroPythonRuntimeHost';
+import { SwarmRuntimeHosts } from './SwarmRuntimeHosts';
 import { evaluateArtifactRuntimeReadiness } from '../runtime/artifactReadiness';
+import { extractHexSource } from '../runtime/sourceExtraction';
+import { decompressLzmaSource } from '../runtime/lzmaDecompressor';
+import { normalizeRuntimeDisplayPixels } from '../runtime/displayPixels';
+import { MICROBIT_BUILTIN_SENSOR_DOMAINS } from '../runtime/microbitSensorDomains';
 import {
   appendDeviceRuntimeLog,
   moveDevice,
@@ -18,6 +22,8 @@ import {
   resumeSimulation,
   resetSimulation,
   routeRadioPacket,
+  setDeviceButton,
+  setDeviceRadioConfig,
   startSimulation,
   type DeviceRuntimeState,
   type SimulationState,
@@ -42,13 +48,33 @@ interface SwarmCanvasPanelProps {
   RuntimeHost?: (props: MicroPythonRuntimeHostProps) => ReactElement;
 }
 
+interface ArtifactUploadIssue {
+  severity: 'warning' | 'error';
+  message: string;
+}
+
+interface DeviceRuntimeActivity {
+  tx: boolean;
+  sound: boolean;
+}
+
 const canvasSize = { width: 860, height: 520 };
 const defaultRadioOptions = {
   defaultRadioRangeRadius: 160,
   minRadioRangeRadius: 40,
   maxRadioRangeRadius: 240,
 };
-export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: SwarmCanvasPanelProps = {}) {
+const runtimeActivityPulseMs = 480;
+const displayMinFrameMs = 420;
+const buttonPulseMs = 110;
+const MICROBIT_SENSOR_LEVEL_MIN = MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel.min;
+const MICROBIT_SENSOR_LEVEL_MAX = MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel.max;
+const RADIO_GROUP_MIN = 0;
+const RADIO_GROUP_MAX = 255;
+const RADIO_CHANNEL_MIN = 0;
+const RADIO_CHANNEL_MAX = 83;
+const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
+export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanvasPanelProps = {}) {
   const [model, setModel] = useState<CanvasModel>(() => {
     const project = createDemoProject();
     return {
@@ -61,11 +87,19 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
   const [runtimeLoadResults, setRuntimeLoadResults] = useState<DeviceProgramLoadResult[]>([]);
   const [displaySnapshots, setDisplaySnapshots] = useState<Record<DeviceId, number[]>>({});
+  const [runtimeActivity, setRuntimeActivity] = useState<Record<DeviceId, DeviceRuntimeActivity>>({});
   const [scenarioResetSignal, setScenarioResetSignal] = useState(0);
-  const [artifactUploadErrors, setArtifactUploadErrors] = useState<Record<DeviceId, string>>({});
+  const [artifactUploadIssues, setArtifactUploadIssues] = useState<Record<DeviceId, ArtifactUploadIssue>>({});
   const svgRef = useRef<SVGSVGElement | null>(null);
   const modelRef = useRef(model);
   const uploadTokens = useRef(new Map<DeviceId, number>());
+  const runtimeActivityTimers = useRef(new Map<string, number>());
+  const displayFrameTimers = useRef(new Map<DeviceId, number>());
+  const displayLastUpdateMs = useRef(new Map<DeviceId, number>());
+  const buttonPulseTimers = useRef(new Map<string, number>());
+  const pendingRadioConfigHints = useRef(
+    new Map<DeviceId, Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>>>(),
+  );
   const nextDeviceNumber = useRef(model.project.devices.length + 1);
   const capturedPointerId = useRef<number | null>(null);
   const { project, simulationState } = model;
@@ -79,7 +113,15 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
       ? project.environmentSources.find((source) => source.id === selected.id)
       : undefined;
 
-  useEffect(() => () => releaseCanvasPointer(), []);
+  useEffect(
+    () => () => {
+      releaseCanvasPointer();
+      clearRuntimeActivityTimers(runtimeActivityTimers.current);
+      clearDisplayFrameTimers(displayFrameTimers.current);
+      clearButtonPulseTimers(buttonPulseTimers.current);
+    },
+    [],
+  );
   useEffect(() => {
     modelRef.current = model;
   }, [model]);
@@ -91,12 +133,87 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
       ) as Record<DeviceId, number[]>;
       return Object.keys(next).length === Object.keys(current).length ? current : next;
     });
+    setRuntimeActivity((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([deviceId]) => activeDeviceIds.has(deviceId)),
+      ) as Record<DeviceId, DeviceRuntimeActivity>;
+      if (Object.keys(next).length === Object.keys(current).length) {
+        return current;
+      }
+      for (const key of runtimeActivityTimers.current.keys()) {
+        const [deviceId] = key.split(':');
+        if (deviceId && !activeDeviceIds.has(deviceId)) {
+          const timerId = runtimeActivityTimers.current.get(key);
+          if (timerId !== undefined) {
+            globalThis.clearTimeout(timerId);
+          }
+          runtimeActivityTimers.current.delete(key);
+        }
+      }
+      return next;
+    });
+    for (const [deviceId, timerId] of displayFrameTimers.current.entries()) {
+      if (!activeDeviceIds.has(deviceId)) {
+        globalThis.clearTimeout(timerId);
+        displayFrameTimers.current.delete(deviceId);
+      }
+    }
+    for (const [deviceId] of displayLastUpdateMs.current.entries()) {
+      if (!activeDeviceIds.has(deviceId)) {
+        displayLastUpdateMs.current.delete(deviceId);
+      }
+    }
+    for (const [key, timerId] of buttonPulseTimers.current.entries()) {
+      const [deviceId] = key.split(':');
+      if (!deviceId || activeDeviceIds.has(deviceId)) {
+        continue;
+      }
+      globalThis.clearTimeout(timerId);
+      buttonPulseTimers.current.delete(key);
+    }
+
+    if (pendingRadioConfigHints.current.size > 0) {
+      setModel((current) => {
+        let simulationState = current.simulationState;
+        let changed = false;
+        for (const [deviceId, config] of [...pendingRadioConfigHints.current.entries()]) {
+          if (!activeDeviceIds.has(deviceId)) {
+            continue;
+          }
+          const runtime = simulationState.devices[deviceId];
+          if (!runtime) {
+            continue;
+          }
+          if (
+            (config.group === undefined || runtime.radio.group === config.group) &&
+            (config.channel === undefined || runtime.radio.channel === config.channel)
+          ) {
+            pendingRadioConfigHints.current.delete(deviceId);
+            continue;
+          }
+          simulationState = setDeviceRadioConfig(simulationState, deviceId, config);
+          pendingRadioConfigHints.current.delete(deviceId);
+          changed = true;
+        }
+        if (!changed) {
+          return current;
+        }
+        const next = { ...current, simulationState };
+        modelRef.current = next;
+        return next;
+      });
+    }
   }, [project.devices]);
 
   function setSimulationMode(nextMode: SimulationMode) {
     if (nextMode === 'idle') {
       setScenarioResetSignal((current) => current + 1);
       setDisplaySnapshots({});
+      setRuntimeActivity({});
+      clearRuntimeActivityTimers(runtimeActivityTimers.current);
+      clearDisplayFrameTimers(displayFrameTimers.current);
+      clearButtonPulseTimers(buttonPulseTimers.current);
+      displayLastUpdateMs.current.clear();
     }
 
     setModel((current) => {
@@ -166,7 +283,7 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
             type,
             position: { x: type === 'light' ? 220 : 650, y: type === 'light' ? 360 : 140 },
             radius: type === 'light' ? 180 : 150,
-            intensity: type === 'light' ? 0.78 : 0.66,
+            intensity: sensorLevelToIntensity(type === 'light' ? 200 : 168),
           },
         ],
       };
@@ -196,9 +313,18 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
       if (readiness.artifactKind !== 'hex') {
         throw new Error('Only micro:bit .hex files can be assigned to devices right now');
       }
-      if (readiness.runtimeSource === 'unknown') {
-        throw new Error(readiness.diagnostic ?? 'Unable to identify this HEX as MicroPython or MakeCode');
-      }
+      const { runtimeSource, issue } = await resolveRuntimeSource(
+        file.name,
+        bytes,
+        readiness.runtimeSource,
+      );
+      debugRadioPanel('artifact-runtime-source', {
+        deviceId,
+        filename: file.name,
+        heuristicRuntimeSource: readiness.runtimeSource,
+        resolvedRuntimeSource: runtimeSource,
+        issue: issue?.message,
+      });
 
       const now = new Date().toISOString();
       const artifactId = makeArtifactId(deviceId, file.name, now);
@@ -209,7 +335,7 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
           id: artifactId,
           name: file.name,
           artifactKind: readiness.artifactKind,
-          runtimeSource: readiness.runtimeSource,
+          runtimeSource,
           bytes,
           createdAt: now,
         }),
@@ -218,7 +344,14 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
         ),
       }));
       setDisplaySnapshots((current) => removeDisplaySnapshot(current, deviceId));
-      setArtifactUploadErrors((current) => {
+      setArtifactUploadIssues((current) => {
+        if (issue) {
+          return {
+            ...current,
+            [deviceId]: issue,
+          };
+        }
+
         const { [deviceId]: _removed, ...rest } = current;
         return rest;
       });
@@ -227,19 +360,54 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
         return;
       }
 
-      setArtifactUploadErrors((current) => ({
+      setArtifactUploadIssues((current) => ({
         ...current,
-        [deviceId]: error instanceof Error ? error.message : 'Unable to upload artifact',
+        [deviceId]: {
+          severity: 'error',
+          message: error instanceof Error ? error.message : 'Unable to upload artifact',
+        },
       }));
     }
   }
 
   function handleRuntimeRadioPacket(deviceId: DeviceId, packet: RuntimeRadioPacket): DeviceId[] {
+    pulseRuntimeActivity(deviceId, 'tx');
     let recipients: DeviceId[] = [];
     flushSync(() => {
       setModel((current) => {
-        const simulationState = routeRadioPacket(current.simulationState, deviceId, packet);
-        recipients = simulationState.radioEvents.at(-1)?.recipients ?? [];
+        const senderRuntime = current.simulationState.devices[deviceId];
+        const senderGroup = senderRuntime?.radio.group;
+        const normalized = normalizeRuntimeRadioPacket(
+          packet,
+          current.simulationState.options.maxSignalStrength,
+          senderGroup,
+        );
+        let simulationState = routeRadioPacket(current.simulationState, deviceId, normalized.packet);
+        for (const diagnostic of normalized.diagnostics) {
+          simulationState = appendDeviceRuntimeLog(
+            simulationState,
+            deviceId,
+            'runtime-error',
+            diagnostic,
+          );
+        }
+        const routedEvent = simulationState.radioEvents.at(-1);
+        recipients = routedEvent?.recipients ?? [];
+        debugRadioPanel('route-radio-packet', {
+          senderDeviceId: deviceId,
+          senderRadio: senderRuntime?.radio,
+          rawPacket: summarizeRadioPacket(packet),
+          normalizedPacket: summarizeRadioPacket(normalized.packet),
+          diagnostics: normalized.diagnostics,
+          recipients,
+          blocked:
+            routedEvent?.blockedTargets.map((target) => ({
+              deviceId: target.deviceId,
+              reason: target.reason,
+              targetGroup: target.targetGroup,
+              targetChannel: target.targetChannel,
+            })) ?? [],
+        });
         const next = { ...current, simulationState };
         modelRef.current = next;
         return next;
@@ -270,15 +438,144 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
   }
 
   function handleRuntimeDisplayChange(deviceId: DeviceId, pixels: number[]) {
-    if (pixels.length !== 25 || pixels.some((pixel) => !Number.isFinite(pixel))) {
-      handleRuntimeLog(deviceId, 'internal-error', 'MicroPython display bridge emitted invalid LED data');
+    const normalized = normalizeRuntimeDisplayPixels(pixels);
+    if (!normalized) {
+      handleRuntimeLog(deviceId, 'internal-error', 'Runtime display bridge emitted invalid LED data');
+      return;
+    }
+    const now = Date.now();
+    const lastUpdate = displayLastUpdateMs.current.get(deviceId) ?? 0;
+    const elapsed = now - lastUpdate;
+
+    const applyDisplay = () => {
+      displayLastUpdateMs.current.set(deviceId, Date.now());
+      setDisplaySnapshots((current) => ({
+        ...current,
+        [deviceId]: normalized,
+      }));
+    };
+
+    if (elapsed < displayMinFrameMs) {
+      const existingTimer = displayFrameTimers.current.get(deviceId);
+      if (existingTimer !== undefined) {
+        globalThis.clearTimeout(existingTimer);
+      }
+      const timeoutId = globalThis.setTimeout(() => {
+        displayFrameTimers.current.delete(deviceId);
+        applyDisplay();
+      }, displayMinFrameMs - elapsed);
+      displayFrameTimers.current.set(deviceId, timeoutId);
       return;
     }
 
-    setDisplaySnapshots((current) => ({
+    applyDisplay();
+  }
+
+  function handleRuntimeRadioConfigHint(
+    deviceId: DeviceId,
+    config: Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>>,
+  ) {
+    if (config.group === undefined && config.channel === undefined) {
+      return;
+    }
+
+    flushSync(() => {
+      setModel((current) => {
+        const runtime = current.simulationState.devices[deviceId];
+        if (!runtime) {
+          const existing = pendingRadioConfigHints.current.get(deviceId) ?? {};
+          pendingRadioConfigHints.current.set(deviceId, { ...existing, ...config });
+          debugRadioPanel('queue-radio-config-hint', { deviceId, config });
+          return current;
+        }
+
+        if (
+          (config.group === undefined || runtime.radio.group === config.group) &&
+          (config.channel === undefined || runtime.radio.channel === config.channel)
+        ) {
+          return current;
+        }
+
+        const simulationState = setDeviceRadioConfig(current.simulationState, deviceId, config);
+        pendingRadioConfigHints.current.delete(deviceId);
+        debugRadioPanel('apply-radio-config-hint', { deviceId, config });
+        const next = { ...current, simulationState };
+        modelRef.current = next;
+        return next;
+      });
+    });
+  }
+
+  function handleRuntimeSoundOutput(deviceId: DeviceId, _level: number) {
+    pulseRuntimeActivity(deviceId, 'sound');
+  }
+
+  function pulseRuntimeActivity(deviceId: DeviceId, activity: keyof DeviceRuntimeActivity) {
+    const timerKey = `${deviceId}:${activity}`;
+    const existingTimer = runtimeActivityTimers.current.get(timerKey);
+    if (existingTimer !== undefined) {
+      globalThis.clearTimeout(existingTimer);
+    }
+
+    setRuntimeActivity((current) => ({
       ...current,
-      [deviceId]: pixels.map((pixel) => Math.max(0, Math.min(9, Math.round(pixel)))),
+      [deviceId]: {
+        tx: current[deviceId]?.tx ?? false,
+        sound: current[deviceId]?.sound ?? false,
+        [activity]: true,
+      },
     }));
+
+    const timeoutId = globalThis.setTimeout(() => {
+      runtimeActivityTimers.current.delete(timerKey);
+      setRuntimeActivity((current) => {
+        const deviceActivity = current[deviceId];
+        if (!deviceActivity || !deviceActivity[activity]) {
+          return current;
+        }
+
+        const nextDeviceActivity = { ...deviceActivity, [activity]: false };
+        const hasAnyActivity = nextDeviceActivity.tx || nextDeviceActivity.sound;
+        if (!hasAnyActivity) {
+          const { [deviceId]: _removed, ...rest } = current;
+          return rest;
+        }
+
+        return {
+          ...current,
+          [deviceId]: nextDeviceActivity,
+        };
+      });
+    }, runtimeActivityPulseMs);
+
+    runtimeActivityTimers.current.set(timerKey, timeoutId);
+  }
+
+  function pulseDeviceButton(deviceId: DeviceId, button: 'A' | 'B') {
+    setModel((current) => {
+      const simulationState = setDeviceButton(current.simulationState, deviceId, button, true);
+      const next = { ...current, simulationState };
+      modelRef.current = next;
+      return next;
+    });
+
+    const timerKey = `${deviceId}:${button}`;
+    const existingTimer = buttonPulseTimers.current.get(timerKey);
+    if (existingTimer !== undefined) {
+      globalThis.clearTimeout(existingTimer);
+    }
+
+    const timeoutId = globalThis.setTimeout(() => {
+      buttonPulseTimers.current.delete(timerKey);
+      setModel((current) => {
+        const simulationState = setDeviceButton(current.simulationState, deviceId, button, false);
+        const next = { ...current, simulationState };
+        modelRef.current = next;
+        return next;
+      });
+    }, buttonPulseMs);
+
+    buttonPulseTimers.current.set(timerKey, timeoutId);
   }
 
   function updateDragPosition(clientX: number, clientY: number) {
@@ -439,6 +736,9 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
             {Object.values(simulationState.devices).map((device) => {
               const isSelected = selected.type === 'device' && selected.id === device.deviceId;
               const ledPixels = displaySnapshots[device.deviceId] ?? emptyLedPixels;
+              const activity = runtimeActivity[device.deviceId];
+              const txActive = activity?.tx ?? false;
+              const soundActive = activity?.sound ?? false;
               return (
                 <g
                   key={device.deviceId}
@@ -450,9 +750,49 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
                     setDragTarget({ type: 'device', id: device.deviceId });
                   }}
                 >
-                  <rect className="microbit-body" x="-34" y="-24" width="68" height="48" rx="12" />
-                  <circle className="button-dot" cx="-23" cy="-1" r="5" />
-                  <circle className="button-dot" cx="23" cy="-1" r="5" />
+                  <circle
+                    data-runtime-activity={`tx:${device.deviceId}`}
+                    className={
+                      txActive
+                        ? 'runtime-activity runtime-activity--tx runtime-activity--active'
+                        : 'runtime-activity runtime-activity--tx'
+                    }
+                    r="48"
+                  />
+                  <circle
+                    data-runtime-activity={`sound:${device.deviceId}`}
+                    className={
+                      soundActive
+                        ? 'runtime-activity runtime-activity--sound runtime-activity--active'
+                        : 'runtime-activity runtime-activity--sound'
+                    }
+                    r="54"
+                  />
+                  <rect className="microbit-body" x="-42" y="-30" width="84" height="60" rx="14" />
+                  <circle
+                    className="button-dot button-dot--interactive"
+                    data-device-button={`${device.deviceId}:A`}
+                    data-testid={`device-button-${device.deviceId}-A`}
+                    cx="-27"
+                    cy="-2"
+                    r="6"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      pulseDeviceButton(device.deviceId, 'A');
+                    }}
+                  />
+                  <circle
+                    className="button-dot button-dot--interactive"
+                    data-device-button={`${device.deviceId}:B`}
+                    data-testid={`device-button-${device.deviceId}-B`}
+                    cx="27"
+                    cy="-2"
+                    r="6"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      pulseDeviceButton(device.deviceId, 'B');
+                    }}
+                  />
                   {ledPixels.map((brightness, pixelIndex) => {
                     const column = pixelIndex % 5;
                     const row = Math.floor(pixelIndex / 5);
@@ -463,11 +803,11 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
                         data-led-pixel={`${device.deviceId}:${pixelIndex}`}
                         className={lit ? 'led-pixel led-pixel--lit' : 'led-pixel'}
                         style={lit ? { opacity: 0.35 + (brightness / 9) * 0.65 } : undefined}
-                        x={-12 + column * 6}
-                        y={-12 + row * 6}
-                        width="3.6"
-                        height="3.6"
-                        rx="1"
+                        x={-16 + column * 8}
+                        y={-16 + row * 8}
+                        width="4.8"
+                        height="4.8"
+                        rx="1.2"
                       />
                     );
                   })}
@@ -513,7 +853,7 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
                     (result) => result.deviceId === selectedDevice.id,
                   )}
                   deviceId={selectedDevice.id}
-                  uploadError={artifactUploadErrors[selectedDevice.id]}
+                  uploadIssue={artifactUploadIssues[selectedDevice.id]}
                   logs={simulationState.deviceLogs.filter((log) => log.deviceId === selectedDevice.id)}
                   onArtifactUpload={uploadArtifactForDevice}
                 />
@@ -533,6 +873,8 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
             onRadioPacket={handleRuntimeRadioPacket}
             onRuntimeLog={handleRuntimeLog}
             onDisplayChange={handleRuntimeDisplayChange}
+            onSoundOutput={handleRuntimeSoundOutput}
+            onRadioConfigHint={handleRuntimeRadioConfigHint}
             onLoadResultsChange={setRuntimeLoadResults}
           />
 
@@ -559,8 +901,8 @@ export function SwarmCanvasPanel({ RuntimeHost = MicroPythonRuntimeHost }: Swarm
                   .reverse()
                   .map((event) => (
                     <article key={event.id} className="radio-event">
-                      <strong>{decodePacketPreview(event.data)}</strong>
-                      <p>
+                      <p className="radio-event__payload">{decodePacketPreview(event.data)}</p>
+                      <p className="radio-event__meta">
                         {event.senderId} to {event.recipients.length} received /{' '}
                         {event.blockedTargets.length} blocked
                       </p>
@@ -580,7 +922,7 @@ function DeviceSelection({
   deviceId,
   runtime,
   runtimeLoadResult,
-  uploadError,
+  uploadIssue,
   logs,
   onArtifactUpload,
 }: {
@@ -588,7 +930,7 @@ function DeviceSelection({
   deviceId: DeviceId;
   runtime?: DeviceRuntimeState;
   runtimeLoadResult?: DeviceProgramLoadResult;
-  uploadError?: string;
+  uploadIssue?: ArtifactUploadIssue;
   logs: SimulationState['deviceLogs'];
   onArtifactUpload: (deviceId: DeviceId, file: File) => void;
 }) {
@@ -596,6 +938,9 @@ function DeviceSelection({
   if (!device) {
     return <p className="hint">Device missing from project.</p>;
   }
+  const assignedArtifact = device.programArtifactId
+    ? project.artifacts.find((artifact) => artifact.id === device.programArtifactId)
+    : undefined;
 
   return (
     <>
@@ -618,7 +963,12 @@ function DeviceSelection({
         />
       </label>
       <p>{device.programArtifactId ? `Assigned: ${artifactName(project, device.programArtifactId)}` : 'No code assigned yet'}</p>
-      {uploadError ? <p className="hint hint--error">{uploadError}</p> : null}
+      {assignedArtifact ? <p>Runtime source: {assignedArtifact.runtimeSource}</p> : null}
+      {uploadIssue ? (
+        <p className={uploadIssue.severity === 'error' ? 'hint hint--error' : 'hint'}>
+          {uploadIssue.message}
+        </p>
+      ) : null}
       {runtimeLoadResult ? (
         <p>
           Runtime: <strong>{runtimeLoadResult.status}</strong>
@@ -644,7 +994,7 @@ function DeviceSelection({
       ) : null}
       <details className="device-log compact-inspector" aria-label={`Event log for ${device.name}`}>
         <summary>
-          <span className="metric-label">Device log</span>
+          <span className="metric-label">Runtime log</span>
           <strong>{logs.length}</strong>
         </summary>
         <div className="compact-inspector__body">
@@ -655,8 +1005,9 @@ function DeviceSelection({
               .slice(-6)
               .reverse()
               .map((log) => (
-                <p key={log.id}>
-                  <strong>{log.type}</strong> {log.message}
+                <p key={log.id} className="device-log__line">
+                  <span className="device-log__type">{formatDeviceLogType(log.type)}</span>
+                  <span>{log.message}</span>
                 </p>
               ))
           )}
@@ -673,6 +1024,7 @@ function SourceSelection({
   source: EnvironmentSource;
   updateSource: (sourceId: EnvironmentSourceId, patch: Partial<EnvironmentSource>) => void;
 }) {
+  const peakLevel = intensityToSensorLevel(source.intensity);
   return (
     <>
       <strong>
@@ -689,14 +1041,18 @@ function SourceSelection({
         />
       </label>
       <label className="range-field">
-        Intensity
+        Peak level (micro:bit scale)
         <input
           type="range"
-          min="0"
-          max="1"
-          step="0.01"
-          value={source.intensity}
-          onChange={(event) => updateSource(source.id, { intensity: Number(event.target.value) })}
+          min={MICROBIT_SENSOR_LEVEL_MIN}
+          max={MICROBIT_SENSOR_LEVEL_MAX}
+          step="1"
+          value={peakLevel}
+          onChange={(event) =>
+            updateSource(source.id, {
+              intensity: sensorLevelToIntensity(Number(event.target.value)),
+            })
+          }
         />
       </label>
     </>
@@ -730,12 +1086,124 @@ function decodePacketPreview(data: Uint8Array): string {
   if (data[0] === 0x01 && data[1] === 0x00 && data[2] === 0x01) {
     const microPythonString = new TextDecoder().decode(data.subarray(3));
     if (microPythonString.trim() !== '') {
-      return microPythonString;
+      return truncatePreview(microPythonString.trim(), 36);
     }
   }
 
-  const decoded = new TextDecoder().decode(data);
-  return decoded.trim() === '' ? `${data.byteLength} byte packet` : decoded;
+  const makeCodeValue = decodeMakeCodeRadioPacket(data);
+  if (makeCodeValue) {
+    return truncatePreview(makeCodeValue, 36);
+  }
+
+  const decoded = new TextDecoder().decode(data).trim();
+  if (decoded !== '' && /^[\x20-\x7e]+$/.test(decoded)) {
+    return truncatePreview(decoded, 36);
+  }
+
+  const hex = [...data.slice(0, 8)]
+    .map((value) => value.toString(16).padStart(2, '0'))
+    .join(' ');
+  const suffix = data.length > 8 ? ' …' : '';
+  return `${data.byteLength}B${hex ? ` ${hex}${suffix}` : ''}`;
+}
+
+function truncatePreview(value: string, maxLength: number): string {
+  return value.length <= maxLength ? value : `${value.slice(0, maxLength - 1)}…`;
+}
+
+function decodeMakeCodeRadioPacket(data: Uint8Array): string | undefined {
+  if (data.length < 10) {
+    return undefined;
+  }
+
+  const packetType = data[0];
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+
+  switch (packetType) {
+    case 0: // PACKET_TYPE_NUMBER
+      return data.length >= 13 ? String(view.getInt32(9, true)) : undefined;
+    case 1: { // PACKET_TYPE_VALUE
+      if (data.length < 14) {
+        return undefined;
+      }
+      const value = view.getInt32(9, true);
+      const name = decodePacketText(data, 14, data[13] ?? 0, 8);
+      return name ? `${name}:${value}` : String(value);
+    }
+    case 2: { // PACKET_TYPE_STRING
+      const text = decodePacketText(data, 10, data[9] ?? 0, 19);
+      return text || undefined;
+    }
+    case 3: { // PACKET_TYPE_BUFFER
+      const bufferLength = Math.max(0, Math.min(data[9] ?? 0, 19, data.length - 10));
+      if (bufferLength <= 0) {
+        return undefined;
+      }
+      const payload = data.slice(10, 10 + bufferLength);
+      const text = new TextDecoder().decode(payload).trim();
+      if (text !== '' && /^[\x20-\x7e]+$/.test(text)) {
+        return text;
+      }
+      return undefined;
+    }
+    case 4: // PACKET_TYPE_DOUBLE
+      return data.length >= 17 ? formatPacketNumber(view.getFloat64(9, true)) : undefined;
+    case 5: { // PACKET_TYPE_DOUBLE_VALUE
+      if (data.length < 18) {
+        return undefined;
+      }
+      const value = formatPacketNumber(view.getFloat64(9, true));
+      const name = decodePacketText(data, 18, data[17] ?? 0, 8);
+      return name ? `${name}:${value}` : value;
+    }
+    default:
+      return undefined;
+  }
+}
+
+function decodePacketText(
+  data: Uint8Array,
+  start: number,
+  declaredLength: number,
+  maxLength: number,
+): string {
+  const length = Math.max(0, Math.min(declaredLength, maxLength, data.length - start));
+  if (length <= 0) {
+    return '';
+  }
+  const text = new TextDecoder().decode(data.slice(start, start + length)).trim();
+  return /^[\x20-\x7e]+$/.test(text) ? text : '';
+}
+
+function formatPacketNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '0';
+  }
+  if (Number.isInteger(value)) {
+    return String(value);
+  }
+  return value.toFixed(3).replace(/\.?0+$/, '');
+}
+
+function formatDeviceLogType(type: SimulationState['deviceLogs'][number]['type']): string {
+  switch (type) {
+    case 'lifecycle':
+      return 'life';
+    case 'button-input':
+      return 'btn';
+    case 'radio-sent':
+      return 'tx';
+    case 'radio-received':
+      return 'rx';
+    case 'radio-blocked':
+      return 'drop';
+    case 'serial-output':
+      return 'serial';
+    case 'runtime-error':
+      return 'err';
+    default:
+      return type;
+  }
 }
 
 function makeArtifactId(deviceId: DeviceId, filename: string, timestamp: string): string {
@@ -780,6 +1248,55 @@ async function readHexFileBytes(file: File): Promise<Uint8Array> {
   }
 
   return new Uint8Array(await readFileWithFileReader(file));
+}
+
+async function resolveRuntimeSource(
+  filename: string,
+  bytes: Uint8Array,
+  heuristicRuntimeSource: SwarmProject['artifacts'][number]['runtimeSource'],
+): Promise<{
+  runtimeSource: SwarmProject['artifacts'][number]['runtimeSource'];
+  issue?: ArtifactUploadIssue;
+}> {
+  try {
+    const extracted = await extractHexSource(filename, bytes, { decompressLzma: decompressLzmaSource });
+    if (
+      heuristicRuntimeSource !== 'unknown' &&
+      heuristicRuntimeSource !== extracted.runtimeSource
+    ) {
+      return {
+        runtimeSource: extracted.runtimeSource,
+        issue: {
+          severity: 'warning',
+          message: `Runtime source corrected from ${heuristicRuntimeSource} to ${extracted.runtimeSource}`,
+        },
+      };
+    }
+    return { runtimeSource: extracted.runtimeSource };
+  } catch (error) {
+    if (heuristicRuntimeSource !== 'unknown') {
+      return {
+        runtimeSource: heuristicRuntimeSource,
+        issue: {
+          severity: 'warning',
+          message:
+            error instanceof Error
+              ? `Runtime source extraction failed; using heuristic ${heuristicRuntimeSource}: ${error.message}`
+              : `Runtime source extraction failed; using heuristic ${heuristicRuntimeSource}`,
+        },
+      };
+    }
+    return {
+      runtimeSource: 'unknown',
+      issue: {
+        severity: 'warning',
+        message:
+          error instanceof Error
+            ? `Assigned, but runtime source could not be identified yet: ${error.message}`
+            : 'Assigned, but runtime source could not be identified yet',
+      },
+    };
+  }
 }
 
 function readFileWithFileReader(file: File): Promise<ArrayBuffer> {
@@ -836,6 +1353,27 @@ function clampPoint(point: Point): Point {
 
 const emptyLedPixels = Array.from({ length: 25 }, () => 0);
 
+function clearRuntimeActivityTimers(timers: Map<string, number>): void {
+  for (const timer of timers.values()) {
+    globalThis.clearTimeout(timer);
+  }
+  timers.clear();
+}
+
+function clearDisplayFrameTimers(timers: Map<DeviceId, number>): void {
+  for (const timer of timers.values()) {
+    globalThis.clearTimeout(timer);
+  }
+  timers.clear();
+}
+
+function clearButtonPulseTimers(timers: Map<string, number>): void {
+  for (const timer of timers.values()) {
+    globalThis.clearTimeout(timer);
+  }
+  timers.clear();
+}
+
 function removeDisplaySnapshot(
   snapshots: Record<DeviceId, number[]>,
   deviceId: DeviceId,
@@ -846,4 +1384,87 @@ function removeDisplaySnapshot(
 
   const { [deviceId]: _removed, ...rest } = snapshots;
   return rest;
+}
+
+function intensityToSensorLevel(intensity: number): number {
+  return Math.round(clampNumber(intensity, 0, 1) * MICROBIT_SENSOR_LEVEL_MAX);
+}
+
+function sensorLevelToIntensity(level: number): number {
+  return (
+    clampNumber(level, MICROBIT_SENSOR_LEVEL_MIN, MICROBIT_SENSOR_LEVEL_MAX) /
+    MICROBIT_SENSOR_LEVEL_MAX
+  );
+}
+
+function normalizeRuntimeRadioPacket(
+  packet: RuntimeRadioPacket,
+  maxSignalStrength: number,
+  senderGroup?: number,
+): { packet: RuntimeRadioPacket; diagnostics: string[] } {
+  const diagnostics: string[] = [];
+  const normalized: RuntimeRadioPacket = {
+    data: packet.data,
+  };
+
+  if (packet.group !== undefined) {
+    if (Number.isInteger(packet.group) && packet.group >= RADIO_GROUP_MIN && packet.group <= RADIO_GROUP_MAX) {
+      if (packet.group === RADIO_GROUP_MIN && senderGroup !== undefined && senderGroup !== RADIO_GROUP_MIN) {
+        diagnostics.push(
+          `Ignored placeholder runtime radio group 0 in favor of sender group ${senderGroup}`,
+        );
+      } else {
+        normalized.group = packet.group;
+      }
+    } else {
+      diagnostics.push(`Ignored invalid runtime radio group: ${packet.group}`);
+    }
+  }
+
+  if (packet.channel !== undefined) {
+    if (
+      Number.isInteger(packet.channel) &&
+      packet.channel >= RADIO_CHANNEL_MIN &&
+      packet.channel <= RADIO_CHANNEL_MAX
+    ) {
+      normalized.channel = packet.channel;
+    } else {
+      diagnostics.push(`Ignored invalid runtime radio channel: ${packet.channel}`);
+    }
+  }
+
+  if (packet.signalStrength !== undefined) {
+    if (
+      Number.isInteger(packet.signalStrength) &&
+      packet.signalStrength >= 0 &&
+      packet.signalStrength <= maxSignalStrength
+    ) {
+      normalized.signalStrength = packet.signalStrength;
+    } else {
+      diagnostics.push(`Ignored invalid runtime radio signal strength: ${packet.signalStrength}`);
+    }
+  }
+
+  return { packet: normalized, diagnostics };
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function summarizeRadioPacket(packet: RuntimeRadioPacket): Record<string, unknown> {
+  return {
+    bytes: packet.data.byteLength,
+    preview: [...packet.data.slice(0, 8)],
+    group: packet.group,
+    channel: packet.channel,
+    signalStrength: packet.signalStrength,
+  };
+}
+
+function debugRadioPanel(event: string, details: Record<string, unknown>): void {
+  if (!ENABLE_RADIO_DEBUG_LOGS) {
+    return;
+  }
+  console.debug('[swarm-radio-debug]', `panel:${event}`, details);
 }

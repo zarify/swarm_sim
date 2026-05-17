@@ -273,6 +273,63 @@ describe('MicroPythonRuntimeHost', () => {
     expect(displayChanges).toEqual(['device-alpha:9000909090009000909090009']);
   });
 
+  it('filters malformed display frames with the same host guardrails used by MakeCode', async () => {
+    const displayChanges: string[] = [];
+    const logs: string[] = [];
+    let emitRuntimeEvent: ((event: RuntimeAdapterEvent) => void) | undefined;
+    const project = makeProject();
+    render(
+      <MicroPythonRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        onRadioPacket={() => []}
+        onRuntimeLog={(deviceId, _type, message) => logs.push(`${deviceId}:${message}`)}
+        onDisplayChange={(deviceId, pixels) => displayChanges.push(`${deviceId}:${pixels.join('')}`)}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={() =>
+          makeEventAdapter((listener) => {
+            emitRuntimeEvent = listener;
+          })
+        }
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(emitRuntimeEvent).toBeDefined());
+
+    emitRuntimeEvent?.({ type: 'display-change', pixels: [1, 2, 3] });
+    emitRuntimeEvent?.({ type: 'display-change', pixels: [4, 5, 6] });
+    emitRuntimeEvent?.({
+      type: 'display-change',
+      pixels: Array.from({ length: 25 }, (_, index) => (index === 24 ? 9 : 0)),
+    });
+
+    expect(logs.filter((entry) => entry.includes('MicroPython runtime emitted invalid LED data'))).toHaveLength(1);
+    expect(displayChanges).toEqual(['device-alpha:0000000000000000000000009']);
+  });
+
+  it('publishes MicroPython radio config hints from prepared source', async () => {
+    const hints: string[] = [];
+    const project = makeProject();
+    render(
+      <MicroPythonRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        onRadioConfigHint={(deviceId, config) => {
+          hints.push(`${deviceId}:${config.group ?? 'none'}`);
+        }}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={() => makeAdapter([], true)}
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+
+    await waitFor(() => expect(hints).toContain('device-alpha:42'));
+  });
+
   it('disposes adapter listeners when MicroPython devices are removed from the runtime set', async () => {
     const disposed: string[] = [];
     const unsubscribed: string[] = [];
