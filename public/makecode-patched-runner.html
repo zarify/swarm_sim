@@ -30,12 +30,14 @@
         const PATCHED_SIMULATOR_URL = `${HOST_ORIGIN}/makecode-patched-simulator.html`;
         const simulators = document.getElementById('simulators');
         const encoder = new TextEncoder();
+        const TRACE_RADIO = window.location.hostname === 'localhost';
         const state = {
           runnerReady: false,
           activeSimulatorWindow: null,
           lastSourceFiles: null,
           simulatorReady: false,
           runtimeRadioConfig: {},
+          outboundRadioSequence: 0,
           recentOutboundRadioFingerprint: null,
           recentSerialFingerprint: null,
           resolveSimulatorReady: null,
@@ -128,6 +130,7 @@
             state.activeSimulatorWindow = null;
             state.simulatorReady = false;
             state.runtimeRadioConfig = {};
+            state.outboundRadioSequence = 0;
             state.recentOutboundRadioFingerprint = null;
             state.recentSerialFingerprint = null;
 
@@ -284,12 +287,21 @@
           if (!state.activeSimulatorWindow || !isRecord(packet)) {
             return;
           }
+          const sequence = ++state.outboundRadioSequence;
           const group = Number.isFinite(Number(packet.group)) ? Number(packet.group) : 0;
           const signalStrength = Number.isFinite(Number(packet.signalStrength)) ? Number(packet.signalStrength) : -75;
           const bytes = normalizeByteArray(packet.data);
+          traceRadio('tx-to-simulator', {
+            sequence,
+            group,
+            signalStrength,
+            bytes: bytes.length,
+            preview: bytes.slice(0, 8),
+          });
           state.activeSimulatorWindow.postMessage(
             {
-              type: 'radiopacket',
+              type: 'swarm-radiopacket',
+              swarmSeq: sequence,
               rssi: signalStrength,
               serial: 0,
               time: Date.now(),
@@ -467,6 +479,11 @@
         function emitRuntimeRadioPayload(payload) {
           const fingerprint = `${payload.group ?? 'none'}:${payload.channel ?? 'none'}:${payload.signalStrength ?? 'none'}:${payload.data.join(',')}`;
           if (state.recentOutboundRadioFingerprint === fingerprint) {
+            traceRadio('dedupe-outbound-radio', {
+              fingerprint,
+              bytes: payload.data.length,
+              preview: payload.data.slice(0, 8),
+            });
             return;
           }
           state.recentOutboundRadioFingerprint = fingerprint;
@@ -480,6 +497,13 @@
             eventType: 'radio',
             payload,
           });
+        }
+
+        function traceRadio(event, details) {
+          if (!TRACE_RADIO) {
+            return;
+          }
+          console.debug('[swarm-radio-trace]', `runner:${event}`, details);
         }
 
         function isSerialLikeType(type) {
