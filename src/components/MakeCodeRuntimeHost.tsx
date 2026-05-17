@@ -24,6 +24,7 @@ type RuntimeLoadPrograms = (
 
 const MAKECODE_SIMULATOR_RUNNER_URL = '/makecode-patched-runner.html';
 const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
+const RADIO_DUPLICATE_WINDOW_MS = 8;
 
 export interface MakeCodeRuntimeHostProps {
   project: SwarmProject;
@@ -85,6 +86,7 @@ export function MakeCodeRuntimeHost({
   const loadRequestId = useRef(0);
   const [readyDeviceIds, setReadyDeviceIds] = useState<Set<DeviceId>>(() => new Set());
   const invalidDisplayFrameLogged = useRef(new Set<DeviceId>());
+  const recentRadioPackets = useRef(new Map<DeviceId, { fingerprint: string; atMs: number }>());
   const callbacks = useRef({
     onRadioPacket,
     onRuntimeLog,
@@ -173,6 +175,7 @@ export function MakeCodeRuntimeHost({
         lastSensorValues.current.delete(deviceId);
         lastButtonValues.current.delete(deviceId);
         invalidDisplayFrameLogged.current.delete(deviceId);
+        recentRadioPackets.current.delete(deviceId);
       }
     }
     setReadyDeviceIds((current) => {
@@ -336,6 +339,7 @@ export function MakeCodeRuntimeHost({
       lastSensorValues.current.delete(device.id);
       lastButtonValues.current.delete(device.id);
       invalidDisplayFrameLogged.current.delete(device.id);
+      recentRadioPackets.current.delete(device.id);
     }
 
     const requestAdapters: { deviceId: DeviceId; adapter: MicrobitRuntimeAdapter }[] = [];
@@ -448,6 +452,7 @@ export function MakeCodeRuntimeHost({
         lastSensorValues.current.delete(deviceId);
         lastButtonValues.current.delete(deviceId);
         invalidDisplayFrameLogged.current.delete(deviceId);
+        recentRadioPackets.current.delete(deviceId);
         if (runtime) {
           await syncRuntimeInputs(deviceId, adapter, runtime, true);
         }
@@ -502,6 +507,17 @@ export function MakeCodeRuntimeHost({
   function handleRuntimeEvent(deviceId: DeviceId, event: RuntimeAdapterEvent) {
     switch (event.type) {
       case 'radio-output': {
+        if (isDuplicateRecentRadioPacket(recentRadioPackets.current, deviceId, event.packet)) {
+          debugMakeCodeRadio('dedupe-tx-packet', {
+            deviceId,
+            bytes: event.packet.data.byteLength,
+            preview: [...event.packet.data.slice(0, 8)],
+            packetGroup: event.packet.group,
+            packetChannel: event.packet.channel,
+            packetSignalStrength: event.packet.signalStrength,
+          });
+          break;
+        }
         const runtimeRadioConfig = runtimeRadioConfigFromPacket(event.packet);
         debugMakeCodeRadio('tx-packet', {
           deviceId,
@@ -794,6 +810,18 @@ function runtimeRadioConfigFromPacket(
     ...(packet.group === undefined ? {} : { group: packet.group }),
     ...(packet.channel === undefined ? {} : { channel: packet.channel }),
   };
+}
+
+function isDuplicateRecentRadioPacket(
+  cache: Map<DeviceId, { fingerprint: string; atMs: number }>,
+  deviceId: DeviceId,
+  packet: RuntimeRadioPacket,
+): boolean {
+  const nowMs = Date.now();
+  const fingerprint = `${packet.group ?? 'none'}:${packet.channel ?? 'none'}:${packet.signalStrength ?? 'none'}:${[...packet.data].join(',')}`;
+  const previous = cache.get(deviceId);
+  cache.set(deviceId, { fingerprint, atMs: nowMs });
+  return Boolean(previous && previous.fingerprint === fingerprint && nowMs - previous.atMs <= RADIO_DUPLICATE_WINDOW_MS);
 }
 
 function debugMakeCodeRadio(event: string, details: Record<string, unknown>): void {
