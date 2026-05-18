@@ -47,7 +47,7 @@ export interface MakeCodeRuntimeHostProps {
   onSoundOutput?: (deviceId: DeviceId, level: number) => void;
   onRadioConfigHint?: (
     deviceId: DeviceId,
-    config: Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>>,
+    config: Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>>,
   ) => void;
   onLoadResultsChange?: (results: DeviceProgramLoadResult[]) => void;
   onRuntimeHostStateChange?: (state: RuntimeHostState) => void;
@@ -397,11 +397,16 @@ export function MakeCodeRuntimeHost({
             readyDeviceIds.has(prepared.device.id),
           );
           const radioConfigHint = extractMakeCodeRadioConfig(prepared.program);
-          if (radioConfigHint.group !== undefined || radioConfigHint.channel !== undefined) {
+          if (
+            radioConfigHint.group !== undefined ||
+            radioConfigHint.channel !== undefined ||
+            radioConfigHint.signalStrength !== undefined
+          ) {
             debugMakeCodeRadio('source-hint', {
               deviceId: prepared.device.id,
               group: radioConfigHint.group,
               channel: radioConfigHint.channel,
+              signalStrength: radioConfigHint.signalStrength,
             });
             callbacks.current.onRadioConfigHint?.(prepared.device.id, radioConfigHint);
           }
@@ -550,11 +555,16 @@ export function MakeCodeRuntimeHost({
           packetChannel: event.packet.channel,
           packetSignalStrength: event.packet.signalStrength,
         });
-        if (runtimeRadioConfig.group !== undefined || runtimeRadioConfig.channel !== undefined) {
+        if (
+          runtimeRadioConfig.group !== undefined ||
+          runtimeRadioConfig.channel !== undefined ||
+          runtimeRadioConfig.signalStrength !== undefined
+        ) {
           debugMakeCodeRadio('tx-packet-config', {
             deviceId,
             group: runtimeRadioConfig.group,
             channel: runtimeRadioConfig.channel,
+            signalStrength: runtimeRadioConfig.signalStrength,
           });
           callbacks.current.onRadioConfigHint?.(deviceId, runtimeRadioConfig);
         }
@@ -575,6 +585,7 @@ export function MakeCodeRuntimeHost({
           deviceId,
           group: event.config.group,
           channel: event.config.channel,
+          signalStrength: event.config.signalStrength,
         });
         callbacks.current.onRadioConfigHint?.(deviceId, event.config);
         break;
@@ -841,7 +852,7 @@ function createMakeCodeRuntimeAdapter(
 
 function extractMakeCodeRadioConfig(
   program: RuntimeProgram,
-): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>> {
+): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>> {
   if (program.source !== 'makecode-pxt') {
     return {};
   }
@@ -849,19 +860,22 @@ function extractMakeCodeRadioConfig(
   const sourceText = Object.values(program.sourceFiles ?? {}).join('\n');
   const group = sourceText.match(/radio\.setGroup\(\s*(\d+)\s*\)/)?.[1];
   const channel = sourceText.match(/radio\.setFrequencyBand\(\s*(\d+)\s*\)/)?.[1];
+  const signalStrength = sourceText.match(/radio\.setTransmitPower\(\s*(\d+)\s*\)/)?.[1];
 
   return {
     ...(group === undefined ? {} : { group: Number.parseInt(group, 10) }),
     ...(channel === undefined ? {} : { channel: Number.parseInt(channel, 10) }),
+    ...(signalStrength === undefined ? {} : { signalStrength: Number.parseInt(signalStrength, 10) }),
   };
 }
 
 function runtimeRadioConfigFromPacket(
   packet: RuntimeRadioPacket,
-): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>> {
+): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>> {
   return {
     ...(packet.group === undefined ? {} : { group: packet.group }),
     ...(packet.channel === undefined ? {} : { channel: packet.channel }),
+    ...(packet.signalStrength === undefined ? {} : { signalStrength: packet.signalStrength }),
   };
 }
 

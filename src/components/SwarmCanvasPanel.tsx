@@ -80,6 +80,7 @@ interface DeviceRuntimeActivity {
 
 type ArtifactUploadState = 'uploading' | 'ready' | 'failed';
 type RuntimeNodeState = 'pending' | 'ready' | 'failed';
+type RuntimeRadioConfigHint = Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>>;
 
 const canvasSize = { width: 860, height: 520 };
 const defaultRadioOptions = {
@@ -133,9 +134,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const displayLastUpdateMs = useRef(new Map<DeviceId, number>());
   const buttonPulseTimers = useRef(new Map<string, number>());
   const recentRoutedPackets = useRef(new Map<DeviceId, string>());
-  const pendingRadioConfigHints = useRef(
-    new Map<DeviceId, Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>>>(),
-  );
+  const pendingRadioConfigHints = useRef(new Map<DeviceId, RuntimeRadioConfigHint>());
   const runtimeResetNonce = useRef(0);
   const nextDeviceNumber = useRef(model.project.devices.length + 1);
   const capturedPointerId = useRef<number | null>(null);
@@ -264,14 +263,20 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           if (!runtime) {
             continue;
           }
+          const normalizedConfig = normalizeRuntimeRadioConfigHint(
+            config,
+            simulationState.options.maxSignalStrength,
+          );
           if (
-            (config.group === undefined || runtime.radio.group === config.group) &&
-            (config.channel === undefined || runtime.radio.channel === config.channel)
+            (normalizedConfig.group === undefined || runtime.radio.group === normalizedConfig.group) &&
+            (normalizedConfig.channel === undefined || runtime.radio.channel === normalizedConfig.channel) &&
+            (normalizedConfig.signalStrength === undefined ||
+              runtime.radio.signalStrength === normalizedConfig.signalStrength)
           ) {
             pendingRadioConfigHints.current.delete(deviceId);
             continue;
           }
-          simulationState = setDeviceRadioConfig(simulationState, deviceId, config);
+          simulationState = setDeviceRadioConfig(simulationState, deviceId, normalizedConfig);
           pendingRadioConfigHints.current.delete(deviceId);
           changed = true;
         }
@@ -753,9 +758,17 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
 
   function handleRuntimeRadioConfigHint(
     deviceId: DeviceId,
-    config: Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>>,
+    config: RuntimeRadioConfigHint,
   ) {
-    if (config.group === undefined && config.channel === undefined) {
+    const normalizedConfig = normalizeRuntimeRadioConfigHint(
+      config,
+      modelRef.current.simulationState.options.maxSignalStrength,
+    );
+    if (
+      normalizedConfig.group === undefined &&
+      normalizedConfig.channel === undefined &&
+      normalizedConfig.signalStrength === undefined
+    ) {
       return;
     }
 
@@ -766,19 +779,21 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         const runtime = current.simulationState.devices[deviceId];
         if (!runtime) {
           const existing = pendingRadioConfigHints.current.get(deviceId) ?? {};
-          pendingRadioConfigHints.current.set(deviceId, { ...existing, ...config });
+          pendingRadioConfigHints.current.set(deviceId, { ...existing, ...normalizedConfig });
           queuedHint = true;
           return current;
         }
 
         if (
-          (config.group === undefined || runtime.radio.group === config.group) &&
-          (config.channel === undefined || runtime.radio.channel === config.channel)
+          (normalizedConfig.group === undefined || runtime.radio.group === normalizedConfig.group) &&
+          (normalizedConfig.channel === undefined || runtime.radio.channel === normalizedConfig.channel) &&
+          (normalizedConfig.signalStrength === undefined ||
+            runtime.radio.signalStrength === normalizedConfig.signalStrength)
         ) {
           return current;
         }
 
-        const simulationState = setDeviceRadioConfig(current.simulationState, deviceId, config);
+        const simulationState = setDeviceRadioConfig(current.simulationState, deviceId, normalizedConfig);
         pendingRadioConfigHints.current.delete(deviceId);
         appliedHint = true;
         const next = { ...current, simulationState };
@@ -787,9 +802,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       });
     });
     if (queuedHint) {
-      debugRadioPanel('queue-radio-config-hint', { deviceId, config });
+      debugRadioPanel('queue-radio-config-hint', { deviceId, config: normalizedConfig });
     } else if (appliedHint) {
-      debugRadioPanel('apply-radio-config-hint', { deviceId, config });
+      debugRadioPanel('apply-radio-config-hint', { deviceId, config: normalizedConfig });
     }
   }
 
@@ -2231,6 +2246,38 @@ function sensorLevelToIntensity(level: number): number {
     clampNumber(level, MICROBIT_SENSOR_LEVEL_MIN, MICROBIT_SENSOR_LEVEL_MAX) /
     MICROBIT_SENSOR_LEVEL_MAX
   );
+}
+
+function normalizeRuntimeRadioConfigHint(
+  config: RuntimeRadioConfigHint,
+  maxSignalStrength: number,
+): RuntimeRadioConfigHint {
+  const normalized: RuntimeRadioConfigHint = {};
+  if (
+    config.group !== undefined &&
+    Number.isInteger(config.group) &&
+    config.group >= RADIO_GROUP_MIN &&
+    config.group <= RADIO_GROUP_MAX
+  ) {
+    normalized.group = config.group;
+  }
+  if (
+    config.channel !== undefined &&
+    Number.isInteger(config.channel) &&
+    config.channel >= RADIO_CHANNEL_MIN &&
+    config.channel <= RADIO_CHANNEL_MAX
+  ) {
+    normalized.channel = config.channel;
+  }
+  if (
+    config.signalStrength !== undefined &&
+    Number.isInteger(config.signalStrength) &&
+    config.signalStrength >= 0 &&
+    config.signalStrength <= maxSignalStrength
+  ) {
+    normalized.signalStrength = config.signalStrength;
+  }
+  return normalized;
 }
 
 function normalizeRuntimeRadioPacket(

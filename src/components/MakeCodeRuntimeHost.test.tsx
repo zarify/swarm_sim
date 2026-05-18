@@ -81,7 +81,7 @@ describe('MakeCodeRuntimeHost', () => {
         onRuntimeLog={(deviceId, _type, message) => logs.push(`${deviceId}:${message}`)}
         onSoundOutput={(deviceId, level) => sounds.push(`${deviceId}:${level}`)}
         onRadioConfigHint={(deviceId, config) => {
-          radioHints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}`);
+          radioHints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
         }}
         loadPrograms={async (_project, options) => {
           const adapter = await options.createAdapter?.({
@@ -129,11 +129,11 @@ describe('MakeCodeRuntimeHost', () => {
       });
       emitRuntimeEvent?.({
         type: 'radio-output',
-        packet: { data: new TextEncoder().encode('ping'), group: 17, channel: 9 },
+        packet: { data: new TextEncoder().encode('ping'), group: 17, channel: 9, signalStrength: 6 },
       });
       emitRuntimeEvent?.({
         type: 'radio-config-change',
-        config: { group: 42, channel: 7 },
+        config: { group: 42, channel: 7, signalStrength: 5 },
       });
       emitRuntimeEvent?.({
         type: 'serial-output',
@@ -152,7 +152,7 @@ describe('MakeCodeRuntimeHost', () => {
     expect(packets).toEqual(['device-alpha:ping']);
     expect(logs).toContain('device-alpha:mc-receive');
     expect(sounds).toEqual(['device-alpha:7']);
-    expect(radioHints).toEqual(['device-alpha:17:9', 'device-alpha:42:7']);
+    expect(radioHints).toEqual(['device-alpha:17:9:6', 'device-alpha:42:7:5']);
     await waitFor(() =>
       expect(document.querySelector('[data-runtime-led="device-alpha:0"]')).toHaveClass('virtual-led-pixel--lit'),
     );
@@ -458,7 +458,7 @@ describe('MakeCodeRuntimeHost', () => {
     expect(resets).toEqual(['reset']);
   });
 
-  it('publishes MakeCode radio group hints from prepared source', async () => {
+  it('publishes MakeCode radio config hints from prepared source, including tx power', async () => {
     const hints: string[] = [];
 
     render(
@@ -468,7 +468,7 @@ describe('MakeCodeRuntimeHost', () => {
         onRuntimeLog={() => {}}
         createAdapter={() => makeEventAdapter(() => {})}
         onRadioConfigHint={(deviceId, config) => {
-          hints.push(`${deviceId}:${config.group ?? 'none'}`);
+          hints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
         }}
         loadPrograms={async (_project, options) => {
           await options.createAdapter?.({
@@ -479,7 +479,7 @@ describe('MakeCodeRuntimeHost', () => {
               source: 'makecode-pxt',
               sourceFiles: {
                 'main.ts': 'radio.sendString("ping")',
-                'custom.ts': 'radio.setGroup(42)',
+                'custom.ts': 'radio.setGroup(42)\nradio.setFrequencyBand(23)\nradio.setTransmitPower(6)',
               },
             },
           });
@@ -498,7 +498,7 @@ describe('MakeCodeRuntimeHost', () => {
     await markRunnerReady('Alpha');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare runtime' })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
-    await waitFor(() => expect(hints).toContain('device-alpha:42'));
+    await waitFor(() => expect(hints).toContain('device-alpha:42:23:6'));
   });
 
   it('preserves existing runner readiness when adding a second MakeCode device', async () => {

@@ -33,6 +33,7 @@ export interface RuntimeRadioPacket {
 export interface RuntimeRadioConfig {
   group?: number;
   channel?: number;
+  signalStrength?: number;
 }
 
 export type RuntimeAdapterEvent =

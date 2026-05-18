@@ -226,7 +226,7 @@ export class MakeCodeIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
       }
       case 'radio-config': {
         const config = normalizeRadioConfigPayload(payload);
-        if (config.group !== undefined || config.channel !== undefined) {
+        if (config.group !== undefined || config.channel !== undefined || config.signalStrength !== undefined) {
           this.emit({ type: 'radio-config-change', config });
         }
         break;
@@ -302,12 +302,22 @@ function normalizeRadioPacketPayload(payload: Record<string, unknown>): RuntimeR
   };
 }
 
-function normalizeRadioConfigPayload(payload: Record<string, unknown>): { group?: number; channel?: number } {
+function normalizeRadioConfigPayload(payload: Record<string, unknown>): {
+  group?: number;
+  channel?: number;
+  signalStrength?: number;
+} {
   const group = toOptionalBoundedInteger(payload.group, 0, 255);
   const channel = toOptionalBoundedInteger(payload.channel, 0, 83);
+  const signalStrength = toOptionalBoundedInteger(
+    payload.signalStrength ?? payload.power,
+    0,
+    255,
+  );
   return {
     ...(group === undefined ? {} : { group }),
     ...(channel === undefined ? {} : { channel }),
+    ...(signalStrength === undefined ? {} : { signalStrength }),
   };
 }
 

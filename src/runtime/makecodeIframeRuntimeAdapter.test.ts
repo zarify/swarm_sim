@@ -88,7 +88,7 @@ describe('MakeCode iframe runtime adapter', () => {
     eventTarget.dispatchMessage({
       type: 'swarm-runtime-event',
       eventType: 'radio-config',
-      payload: { group: 12, channel: 8 },
+      payload: { group: 12, channel: 8, signalStrength: 6 },
     });
     eventTarget.dispatchMessage({
       type: 'swarm-runtime-event',
@@ -110,7 +110,10 @@ describe('MakeCode iframe runtime adapter', () => {
       throw new Error('Expected radio-output event');
     }
     expect(new TextDecoder().decode(events[1].packet.data)).toBe('ping');
-    expect(events[2]).toEqual({ type: 'radio-config-change', config: { group: 12, channel: 8 } });
+    expect(events[2]).toEqual({
+      type: 'radio-config-change',
+      config: { group: 12, channel: 8, signalStrength: 6 },
+    });
     expect(events[3]).toMatchObject({ type: 'display-change' });
     expect(events[4]).toEqual({ type: 'sound-output', level: 7 });
   });

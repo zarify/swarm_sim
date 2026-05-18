@@ -50,7 +50,7 @@ export interface MicroPythonRuntimeHostProps {
   onSoundOutput?: (deviceId: DeviceId, level: number) => void;
   onRadioConfigHint?: (
     deviceId: DeviceId,
-    config: Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>>,
+    config: Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>>,
   ) => void;
   onLoadResultsChange?: (results: DeviceProgramLoadResult[]) => void;
   onRuntimeHostStateChange?: (state: RuntimeHostState) => void;
@@ -91,6 +91,8 @@ export function MicroPythonRuntimeHost({
   const adapterUnsubscribes = useRef(new Map<DeviceId, () => void>());
   const lastSensorValues = useRef(new Map<DeviceId, string>());
   const lastButtonValues = useRef(new Map<DeviceId, string>());
+  const recentRadioPackets = useRef(new Map<DeviceId, string>());
+  const recentSerialOutputs = useRef(new Map<DeviceId, string>());
   const scenarioResetRef = useRef(scenarioResetSignal);
   const loadRequestId = useRef(0);
   const callbacks = useRef({
@@ -147,6 +149,8 @@ export function MicroPythonRuntimeHost({
         );
         lastSensorValues.current.delete(deviceId);
         lastButtonValues.current.delete(deviceId);
+        recentRadioPackets.current.delete(deviceId);
+        recentSerialOutputs.current.delete(deviceId);
         invalidDisplayFrameLogged.current.delete(deviceId);
       }
     }
@@ -315,6 +319,8 @@ export function MicroPythonRuntimeHost({
       );
       lastSensorValues.current.delete(device.id);
       lastButtonValues.current.delete(device.id);
+      recentRadioPackets.current.delete(device.id);
+      recentSerialOutputs.current.delete(device.id);
       invalidDisplayFrameLogged.current.delete(device.id);
     }
     const requestAdapters: { deviceId: DeviceId; adapter: MicrobitRuntimeAdapter }[] = [];
@@ -340,7 +346,11 @@ export function MicroPythonRuntimeHost({
             readyDeviceIds.has(prepared.device.id),
           );
           const radioConfigHint = extractMicroPythonRadioConfig(prepared.program);
-          if (radioConfigHint.group !== undefined || radioConfigHint.channel !== undefined) {
+          if (
+            radioConfigHint.group !== undefined ||
+            radioConfigHint.channel !== undefined ||
+            radioConfigHint.signalStrength !== undefined
+          ) {
             callbacks.current.onRadioConfigHint?.(prepared.device.id, radioConfigHint);
           }
           adapters.current.set(prepared.device.id, adapter);
@@ -396,6 +406,8 @@ export function MicroPythonRuntimeHost({
           return;
         }
         invalidDisplayFrameLogged.current.delete(deviceId);
+        recentRadioPackets.current.delete(deviceId);
+        recentSerialOutputs.current.delete(deviceId);
         await adapter.reset();
       }),
     ).catch((error: unknown) => {
@@ -410,8 +422,15 @@ export function MicroPythonRuntimeHost({
   function handleRuntimeEvent(deviceId: DeviceId, event: RuntimeAdapterEvent) {
     switch (event.type) {
       case 'radio-output': {
+        if (isDuplicateRecentRadioPacket(recentRadioPackets.current, deviceId, event.packet)) {
+          break;
+        }
         const runtimeRadioConfig = runtimeRadioConfigFromPacket(event.packet);
-        if (runtimeRadioConfig.group !== undefined || runtimeRadioConfig.channel !== undefined) {
+        if (
+          runtimeRadioConfig.group !== undefined ||
+          runtimeRadioConfig.channel !== undefined ||
+          runtimeRadioConfig.signalStrength !== undefined
+        ) {
           callbacks.current.onRadioConfigHint?.(deviceId, runtimeRadioConfig);
         }
         const deliveries = callbacks.current.onRadioPacket(deviceId, event.packet);
@@ -430,6 +449,9 @@ export function MicroPythonRuntimeHost({
         callbacks.current.onRadioConfigHint?.(deviceId, event.config);
         break;
       case 'serial-output':
+        if (isDuplicateRecentSerialOutput(recentSerialOutputs.current, deviceId, event.data)) {
+          break;
+        }
         callbacks.current.onRuntimeLog(deviceId, 'serial-output', event.data);
         break;
       case 'internal-error':
@@ -699,7 +721,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function extractMicroPythonRadioConfig(
   program: RuntimeProgram,
-): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>> {
+): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>> {
   if (program.source !== 'micropython') {
     return {};
   }
@@ -715,14 +737,18 @@ function extractMicroPythonRadioConfig(
     return {};
   }
 
-  const parsed: Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>> = {};
+  const parsed: Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>> = {};
   const group = configArgs.match(/\bgroup\s*=\s*(\d+)\b/)?.[1];
   const channel = configArgs.match(/\bchannel\s*=\s*(\d+)\b/)?.[1];
+  const signalStrength = configArgs.match(/\bpower\s*=\s*(\d+)\b/)?.[1];
   if (group) {
     parsed.group = Number.parseInt(group, 10);
   }
   if (channel) {
     parsed.channel = Number.parseInt(channel, 10);
+  }
+  if (signalStrength) {
+    parsed.signalStrength = Number.parseInt(signalStrength, 10);
   }
 
   return parsed;
@@ -730,9 +756,41 @@ function extractMicroPythonRadioConfig(
 
 function runtimeRadioConfigFromPacket(
   packet: RuntimeRadioPacket,
-): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel'>> {
+): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>> {
   return {
     ...(packet.group === undefined ? {} : { group: packet.group }),
     ...(packet.channel === undefined ? {} : { channel: packet.channel }),
+    ...(packet.signalStrength === undefined ? {} : { signalStrength: packet.signalStrength }),
   };
+}
+
+function isDuplicateRecentRadioPacket(
+  cache: Map<DeviceId, string>,
+  deviceId: DeviceId,
+  packet: RuntimeRadioPacket,
+): boolean {
+  const fingerprint = `${packet.group ?? 'none'}:${packet.channel ?? 'none'}:${packet.signalStrength ?? 'none'}:${[...packet.data].join(',')}`;
+  const previous = cache.get(deviceId);
+  cache.set(deviceId, fingerprint);
+  queueMicrotask(() => {
+    if (cache.get(deviceId) === fingerprint) {
+      cache.delete(deviceId);
+    }
+  });
+  return previous === fingerprint;
+}
+
+function isDuplicateRecentSerialOutput(
+  cache: Map<DeviceId, string>,
+  deviceId: DeviceId,
+  data: string,
+): boolean {
+  const previous = cache.get(deviceId);
+  cache.set(deviceId, data);
+  queueMicrotask(() => {
+    if (cache.get(deviceId) === data) {
+      cache.delete(deviceId);
+    }
+  });
+  return previous === data;
 }

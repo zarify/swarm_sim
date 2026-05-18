@@ -22,6 +22,22 @@ describe('project bundle codec', () => {
 
     await expect(decodeProjectBundle(legacyBytes)).rejects.toThrow('Unsupported canvas bundle format');
   });
+
+  it('round-trips mixed MakeCode and MicroPython artifact assignments', async () => {
+    const project = makeMixedRuntimeProject();
+
+    const reopened = await decodeProjectBundle(await encodeProjectBundle(project));
+
+    const artifactsById = new Map(reopened.artifacts.map((artifact) => [artifact.id, artifact]));
+    expect(reopened.devices.map((device) => device.programArtifactId)).toEqual([
+      'artifact-mc',
+      'artifact-mp',
+    ]);
+    expect(artifactsById.get('artifact-mc')?.runtimeSource).toBe('makecode-pxt');
+    expect(artifactsById.get('artifact-mp')?.runtimeSource).toBe('micropython');
+    expect([...artifactsById.get('artifact-mc')!.bytes]).toEqual([...encoder.encode(':10000000MAKECODE')]);
+    expect([...artifactsById.get('artifact-mp')!.bytes]).toEqual([...encoder.encode(':10000000MICROPY')]);
+  });
 });
 
 function makeProjectWithDuplicateArtifacts(): SwarmProject {
@@ -58,6 +74,44 @@ function makeProjectWithDuplicateArtifacts(): SwarmProject {
         name: 'Node 2',
         position: { x: 30, y: 40 },
         programArtifactId: 'artifact-b',
+      },
+    ],
+  };
+}
+
+function makeMixedRuntimeProject(): SwarmProject {
+  return {
+    ...createBlankProject({ id: 'project-2', name: 'Mixed runtime bundle', now }),
+    artifacts: [
+      {
+        id: 'artifact-mc',
+        name: 'mc.hex',
+        artifactKind: 'hex',
+        runtimeSource: 'makecode-pxt',
+        bytes: encoder.encode(':10000000MAKECODE'),
+        createdAt: now,
+      },
+      {
+        id: 'artifact-mp',
+        name: 'mp.hex',
+        artifactKind: 'hex',
+        runtimeSource: 'micropython',
+        bytes: encoder.encode(':10000000MICROPY'),
+        createdAt: now,
+      },
+    ],
+    devices: [
+      {
+        id: 'device-a',
+        name: 'Node A',
+        position: { x: 40, y: 40 },
+        programArtifactId: 'artifact-mc',
+      },
+      {
+        id: 'device-b',
+        name: 'Node B',
+        position: { x: 80, y: 80 },
+        programArtifactId: 'artifact-mp',
       },
     ],
   };

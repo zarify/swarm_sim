@@ -88,6 +88,31 @@ test.describe('core canvas workflows', () => {
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
   });
 
+  test('persists MicroPython assignment across browser save/load workflow', async ({ page }) => {
+    const saveName = 'MicroPython Persisted Layout';
+    await page.addInitScript((layoutName) => {
+      window.prompt = () => layoutName;
+    }, saveName);
+
+    await page.goto('/');
+    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Canvas state' }).click();
+    await page.getByRole('button', { name: 'Save to browser' }).click({ force: true });
+    const loadButton = page.getByRole('button', { name: `Load ${saveName}` });
+    await expect(loadButton).toBeVisible();
+
+    await page.getByRole('button', { name: 'Add device' }).click();
+    await expect(page.getByText(/2 nodes \//)).toBeVisible();
+
+    await loadButton.click();
+    await expect(page.getByText(/1 nodes \//)).toBeVisible();
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+  });
+
   test('renames selected nodes from the side panel for both devices and sources', async ({ page }) => {
     await page.goto('/');
 

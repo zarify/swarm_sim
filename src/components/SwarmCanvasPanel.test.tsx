@@ -247,6 +247,15 @@ describe('SwarmCanvasPanel', () => {
     });
   });
 
+  it('updates sender range from runtime radio config hints that include tx power', async () => {
+    render(<SwarmCanvasPanel RuntimeHost={(props) => <SignalStrengthHintHost {...props} />} />);
+
+    await waitFor(() => {
+      const rangeValue = screen.getByText('Range').parentElement?.querySelector('dd');
+      expect(rangeValue).toHaveTextContent('240');
+    });
+  });
+
   it('shows serial output in runtime logs and renders compact radio packet previews', async () => {
     render(<SwarmCanvasPanel RuntimeHost={(props) => <SerialAndRadioEmitterHost {...props} />} />);
 
@@ -442,6 +451,22 @@ function SignalStrengthRangeHost({ onRadioPacket }: MicroPythonRuntimeHostProps)
     }, 0);
     return () => globalThis.clearTimeout(timerId);
   }, [onRadioPacket]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
+function SignalStrengthHintHost({ onRadioConfigHint }: MicroPythonRuntimeHostProps) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    if (emitted.current) {
+      return;
+    }
+    emitted.current = true;
+    const timerId = globalThis.setTimeout(() => {
+      onRadioConfigHint?.('device-alpha', { signalStrength: 7 });
+    }, 0);
+    return () => globalThis.clearTimeout(timerId);
+  }, [onRadioConfigHint]);
 
   return <div aria-label="MicroPython runtime host" />;
 }

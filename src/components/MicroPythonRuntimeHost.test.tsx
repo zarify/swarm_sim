@@ -273,6 +273,127 @@ describe('MicroPythonRuntimeHost', () => {
     expect(displayChanges).toEqual(['device-alpha:9000909090009000909090009']);
   });
 
+  it('forwards MicroPython adapter radio, serial, and sound events through host callbacks', async () => {
+    const logs: string[] = [];
+    const packets: string[] = [];
+    const sounds: string[] = [];
+    const hints: string[] = [];
+    const forwardedPackets: string[] = [];
+    let emitRuntimeEvent: ((event: RuntimeAdapterEvent) => void) | undefined;
+    const project = makeProject();
+    render(
+      <MicroPythonRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        onRadioPacket={(deviceId, packet) => {
+          packets.push(`${deviceId}:${new TextDecoder().decode(packet.data)}`);
+          return [
+            {
+              recipientId: 'device-alpha',
+              packet: { data: new TextEncoder().encode('pong'), signalStrength: 4 },
+            },
+          ];
+        }}
+        onRuntimeLog={(deviceId, _type, message) => logs.push(`${deviceId}:${message}`)}
+        onSoundOutput={(deviceId, level) => sounds.push(`${deviceId}:${level}`)}
+        onRadioConfigHint={(deviceId, config) => {
+          hints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
+        }}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={() =>
+          makeEventAdapter(
+            (listener) => {
+              emitRuntimeEvent = listener;
+            },
+            (packet) => {
+              forwardedPackets.push(new TextDecoder().decode(packet.data));
+            },
+          )
+        }
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(emitRuntimeEvent).toBeDefined());
+
+    emitRuntimeEvent?.({
+      type: 'radio-output',
+      packet: { data: new TextEncoder().encode('ping'), group: 17, channel: 9, signalStrength: 6 },
+    });
+    emitRuntimeEvent?.({
+      type: 'radio-config-change',
+      config: { group: 42, channel: 7, signalStrength: 5 },
+    });
+    emitRuntimeEvent?.({ type: 'serial-output', data: 'mp-receive' });
+    emitRuntimeEvent?.({ type: 'sound-output', level: 7 });
+
+    await waitFor(() => expect(forwardedPackets).toEqual(['pong']));
+    expect(packets).toEqual(['device-alpha:ping']);
+    expect(logs).toContain('device-alpha:mp-receive');
+    expect(sounds).toEqual(['device-alpha:7']);
+    expect(hints).toEqual(['device-alpha:42:9:6', 'device-alpha:17:9:6', 'device-alpha:42:7:5']);
+  });
+
+  it('deduplicates immediate identical radio packets from the same runtime device', async () => {
+    const packets: string[] = [];
+    let emitRuntimeEvent: ((event: RuntimeAdapterEvent) => void) | undefined;
+    const project = makeProject();
+    render(
+      <MicroPythonRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        onRadioPacket={(deviceId, packet) => {
+          packets.push(`${deviceId}:${new TextDecoder().decode(packet.data)}`);
+          return [];
+        }}
+        onRuntimeLog={() => {}}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={() =>
+          makeEventAdapter((listener) => {
+            emitRuntimeEvent = listener;
+          })
+        }
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(emitRuntimeEvent).toBeDefined());
+
+    const packet = { data: new TextEncoder().encode('light:76'), group: 42 };
+    emitRuntimeEvent?.({ type: 'radio-output', packet });
+    emitRuntimeEvent?.({ type: 'radio-output', packet });
+
+    expect(packets).toEqual(['device-alpha:light:76']);
+  });
+
+  it('deduplicates immediate identical serial outputs from the same runtime device', async () => {
+    const logs: string[] = [];
+    let emitRuntimeEvent: ((event: RuntimeAdapterEvent) => void) | undefined;
+    const project = makeProject();
+    render(
+      <MicroPythonRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        onRadioPacket={() => []}
+        onRuntimeLog={(deviceId, _type, message) => logs.push(`${deviceId}:${message}`)}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={() =>
+          makeEventAdapter((listener) => {
+            emitRuntimeEvent = listener;
+          })
+        }
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(emitRuntimeEvent).toBeDefined());
+
+    emitRuntimeEvent?.({ type: 'serial-output', data: 'light:66' });
+    emitRuntimeEvent?.({ type: 'serial-output', data: 'light:66' });
+
+    expect(logs).toEqual(['device-alpha:light:66']);
+  });
+
   it('filters malformed display frames with the same host guardrails used by MakeCode', async () => {
     const displayChanges: string[] = [];
     const logs: string[] = [];
@@ -318,7 +439,7 @@ describe('MicroPythonRuntimeHost', () => {
         onRadioPacket={() => []}
         onRuntimeLog={() => {}}
         onRadioConfigHint={(deviceId, config) => {
-          hints.push(`${deviceId}:${config.group ?? 'none'}`);
+          hints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
         }}
         loadPrograms={loadTargetProjectDevices}
         createAdapter={() => makeAdapter([], true)}
@@ -327,7 +448,7 @@ describe('MicroPythonRuntimeHost', () => {
     dispatchReadyFor('MicroPython simulator for Alpha');
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
 
-    await waitFor(() => expect(hints).toContain('device-alpha:42'));
+    await waitFor(() => expect(hints).toContain('device-alpha:42:9:6'));
   });
 
   it('disposes adapter listeners when MicroPython devices are removed from the runtime set', async () => {
@@ -523,7 +644,7 @@ async function loadTargetProjectDevices(project: SwarmProject, options: LoadProj
       const program: RuntimeProgram = {
         source: 'micropython',
         filesystem: {
-          'main.py': new TextEncoder().encode('import radio\nradio.config(group=42)\nradio.send("ping")'),
+          'main.py': new TextEncoder().encode('import radio\nradio.config(group=42, channel=9, power=6)\nradio.send("ping")'),
         },
       };
       const adapter = await options.createAdapter?.({
@@ -650,9 +771,15 @@ function makeSensorAdapter(sensorValues: string[]): MicrobitRuntimeAdapter {
   };
 }
 
-function makeEventAdapter(captureListener: (listener: (event: RuntimeAdapterEvent) => void) => void): MicrobitRuntimeAdapter {
+function makeEventAdapter(
+  captureListener: (listener: (event: RuntimeAdapterEvent) => void) => void,
+  onSendRadio?: (packet: { data: Uint8Array }) => void,
+): MicrobitRuntimeAdapter {
   return {
     ...makeAdapter([], true),
+    sendRadio: async (packet) => {
+      onSendRadio?.(packet);
+    },
     onEvent: (listener) => {
       captureListener(listener);
       return () => {};
