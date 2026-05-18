@@ -1,5 +1,5 @@
 import { createBlankProject, type SwarmProject } from '../domain/project';
-import { deserializeProject, serializeProject } from '../domain/projectSerialization';
+import { decodeProjectBundle, encodeProjectBundle } from '../domain/projectBundle';
 import { loadProjectRuntimePrograms } from '../runtime/programLoader';
 import type { RuntimeProgram } from '../runtime/runtimeAdapter';
 import {
@@ -17,9 +17,9 @@ const now = '2026-05-16T04:20:00.000Z';
 const encoder = new TextEncoder();
 
 describe('MVP acceptance coverage', () => {
-  it('exports and imports a portable project containing both provided HEX artifacts', () => {
+  it('exports and imports a portable project containing both provided HEX artifacts', async () => {
     const project = makeTenDeviceProject();
-    const reopened = deserializeProject(serializeProject(project));
+    const reopened = await decodeProjectBundle(await encodeProjectBundle(project));
 
     expect(reopened).toMatchObject({
       id: project.id,
@@ -62,8 +62,8 @@ describe('MVP acceptance coverage', () => {
     );
   });
 
-  it('reopens and resets deterministically from serialized project data', () => {
-    const reopened = deserializeProject(serializeProject(makeTenDeviceProject()));
+  it('reopens and resets deterministically from serialized project data', async () => {
+    const reopened = await decodeProjectBundle(await encodeProjectBundle(makeTenDeviceProject()));
     const initial = createSimulationState(reopened);
     const changed = routeRadioPacket(
       moveDevice(initial, 'device-2', { x: 480, y: 80 }),
@@ -161,6 +161,7 @@ function makeTenDeviceProject(): SwarmProject {
       {
         id: 'light-1',
         type: 'light',
+        name: 'Light 1',
         position: { x: 130, y: 130 },
         radius: 180,
         intensity: 0.75,
@@ -168,6 +169,7 @@ function makeTenDeviceProject(): SwarmProject {
       {
         id: 'sound-1',
         type: 'sound',
+        name: 'Sound 1',
         position: { x: 210, y: 130 },
         radius: 160,
         intensity: 0.65,

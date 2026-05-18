@@ -1,4 +1,5 @@
 import {
+  defaultEnvironmentSourceName,
   PROJECT_SCHEMA_VERSION,
   type EnvironmentSource,
   type ProgramArtifact,
@@ -84,6 +85,7 @@ function parseDevice(value: unknown): VirtualDevice {
 
 function parseEnvironmentSource(value: unknown): EnvironmentSource {
   const source = expectRecord(value, 'environmentSource');
+  const id = expectString(source.id, 'environmentSource.id');
   const type = expectString(source.type, 'environmentSource.type');
 
   if (type !== 'light' && type !== 'sound') {
@@ -91,8 +93,12 @@ function parseEnvironmentSource(value: unknown): EnvironmentSource {
   }
 
   return {
-    id: expectString(source.id, 'environmentSource.id'),
+    id,
     type,
+    name:
+      typeof source.name === 'string' && source.name.trim() !== ''
+        ? source.name
+        : defaultEnvironmentSourceName({ id, type }),
     position: parsePoint(source.position, 'environmentSource.position'),
     radius: expectNumber(source.radius, 'environmentSource.radius'),
     intensity: expectNumber(source.intensity, 'environmentSource.intensity'),

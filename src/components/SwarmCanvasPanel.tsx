@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type Rea
 import { flushSync } from 'react-dom';
 import {
   createBlankProject,
+  defaultDeviceNameForId,
+  defaultEnvironmentSourceName,
   type DeviceId,
   type EnvironmentSource,
   type EnvironmentSourceId,
@@ -28,16 +30,18 @@ import {
 } from '../simulation/simulationEngine';
 import type { DeviceProgramLoadResult } from '../runtime/programLoader';
 import type { RuntimeRadioPacket } from '../runtime/runtimeAdapter';
-import type { MicroPythonRuntimeHostProps } from './MicroPythonRuntimeHost';
+import type { MicroPythonRuntimeHostProps, RoutedRadioDelivery } from './MicroPythonRuntimeHost';
 import type { RuntimeResetRequest } from './runtimeHostControls';
 import type { BrowserProjectStore } from '../domain/browserProjectStore';
 import { createBrowserProjectStore } from '../domain/browserProjectStore';
-import { deserializeProject, serializeProject } from '../domain/projectSerialization';
+import { decodeProjectBundle, encodeProjectBundle } from '../domain/projectBundle';
+import { findReusableArtifact } from '../domain/projectArtifacts';
 
 type Selection =
   | { type: 'device'; id: DeviceId }
   | { type: 'source'; id: EnvironmentSourceId }
   | { type: 'none' };
+type RenamableSelection = Exclude<Selection, { type: 'none' }>;
 
 type DragTarget =
   | { type: 'device'; id: DeviceId }
@@ -46,6 +50,18 @@ type DragTarget =
 interface CanvasModel {
   project: SwarmProject;
   simulationState: SimulationState;
+}
+
+async function readBundleFileBytes(file: File): Promise<Uint8Array> {
+  if (typeof file.arrayBuffer === 'function') {
+    return new Uint8Array(await file.arrayBuffer());
+  }
+
+  if (typeof file.text === 'function') {
+    return new TextEncoder().encode(await file.text());
+  }
+
+  return new Uint8Array(await readFileWithFileReader(file));
 }
 
 interface SwarmCanvasPanelProps {
@@ -81,6 +97,8 @@ const RADIO_GROUP_MAX = 255;
 const RADIO_CHANNEL_MIN = 0;
 const RADIO_CHANNEL_MAX = 83;
 const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
+const MAX_CANVAS_NODE_NAME = 11;
+const MAX_SIDEBAR_NODE_NAME = 28;
 export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanvasPanelProps = {}) {
   const [model, setModel] = useState<CanvasModel>(() => {
     const project = createDemoProject();
@@ -105,6 +123,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const [artifactUploadIssues, setArtifactUploadIssues] = useState<Record<DeviceId, ArtifactUploadIssue>>({});
   const [artifactUploadState, setArtifactUploadState] = useState<Record<DeviceId, ArtifactUploadState>>({});
   const [isSidebarDragActive, setIsSidebarDragActive] = useState(false);
+  const [renameTarget, setRenameTarget] = useState<RenamableSelection | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
   const svgRef = useRef<SVGSVGElement | null>(null);
   const modelRef = useRef(model);
   const uploadTokens = useRef(new Map<DeviceId, number>());
@@ -162,6 +182,28 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }
     void refreshSavedProjects();
   }, [isCanvasStateMenuOpen]);
+
+  useEffect(() => {
+    if (!renameTarget) {
+      return;
+    }
+    if (selected.type !== renameTarget.type || selected.id !== renameTarget.id) {
+      setRenameTarget(null);
+      setRenameDraft('');
+      return;
+    }
+    if (renameTarget.type === 'device') {
+      if (!project.devices.some((device) => device.id === renameTarget.id)) {
+        setRenameTarget(null);
+        setRenameDraft('');
+      }
+      return;
+    }
+    if (!project.environmentSources.some((source) => source.id === renameTarget.id)) {
+      setRenameTarget(null);
+      setRenameDraft('');
+    }
+  }, [renameTarget, selected, project.devices, project.environmentSources]);
 
   useEffect(() => {
     const activeDeviceIds = new Set(project.devices.map((device) => device.id));
@@ -306,6 +348,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           {
             id,
             type,
+            name: defaultEnvironmentSourceName({ id, type }),
             position: { x: type === 'light' ? 220 : 650, y: type === 'light' ? 360 : 140 },
             radius: type === 'light' ? 180 : 150,
             intensity: sensorLevelToIntensity(type === 'light' ? 200 : 168),
@@ -322,6 +365,46 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         source.id === sourceId ? { ...source, ...patch } : source,
       ),
     }));
+  }
+
+  function beginRename(target: RenamableSelection, currentName: string) {
+    setRenameTarget(target);
+    setRenameDraft(currentName);
+  }
+
+  function cancelRename() {
+    setRenameTarget(null);
+    setRenameDraft('');
+  }
+
+  function commitRename() {
+    if (!renameTarget) {
+      return;
+    }
+    updateProject((current) => {
+      const trimmed = renameDraft.trim();
+      if (renameTarget.type === 'device') {
+        const nextName = trimmed || defaultDeviceNameForId(renameTarget.id);
+        return {
+          ...current,
+          devices: current.devices.map((device) =>
+            device.id === renameTarget.id ? { ...device, name: nextName } : device,
+          ),
+        };
+      }
+      const targetSource = current.environmentSources.find((source) => source.id === renameTarget.id);
+      if (!targetSource) {
+        return current;
+      }
+      const nextName = trimmed || defaultEnvironmentSourceName(targetSource);
+      return {
+        ...current,
+        environmentSources: current.environmentSources.map((source) =>
+          source.id === renameTarget.id ? { ...source, name: nextName } : source,
+        ),
+      };
+    });
+    cancelRename();
   }
 
   function resetAllDevices() {
@@ -469,22 +552,32 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       });
 
       const now = new Date().toISOString();
-      const artifactId = makeArtifactId(deviceId, file.name, now);
-      updateProject((current) => ({
-        ...current,
-        updatedAt: now,
-        artifacts: replaceDeviceArtifact(current, deviceId, {
-          id: artifactId,
-          name: file.name,
+      updateProject((current) => {
+        const reusableArtifact = findReusableArtifact(current.artifacts, {
           artifactKind: readiness.artifactKind,
           runtimeSource,
           bytes,
-          createdAt: now,
-        }),
-        devices: current.devices.map((device) =>
-          device.id === deviceId ? { ...device, programArtifactId: artifactId } : device,
-        ),
-      }));
+        });
+        const nextArtifact =
+          reusableArtifact ??
+          ({
+            id: makeArtifactId(deviceId, file.name, now),
+            name: file.name,
+            artifactKind: readiness.artifactKind,
+            runtimeSource,
+            bytes,
+            createdAt: now,
+          } as const);
+
+        return {
+          ...current,
+          updatedAt: now,
+          artifacts: replaceDeviceArtifact(current, deviceId, nextArtifact),
+          devices: current.devices.map((device) =>
+            device.id === deviceId ? { ...device, programArtifactId: nextArtifact.id } : device,
+          ),
+        };
+      });
       setDisplaySnapshots((current) => removeDisplaySnapshot(current, deviceId));
       setArtifactUploadIssues((current) => {
         if (issue) {
@@ -514,7 +607,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }
   }
 
-  function handleRuntimeRadioPacket(deviceId: DeviceId, packet: RuntimeRadioPacket): DeviceId[] {
+  function handleRuntimeRadioPacket(deviceId: DeviceId, packet: RuntimeRadioPacket): RoutedRadioDelivery[] {
     const senderRadio = modelRef.current.simulationState.devices[deviceId]?.radio;
     const effectiveGroup = packet.group ?? senderRadio?.group;
     const effectiveChannel = packet.channel ?? senderRadio?.channel;
@@ -534,7 +627,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       return [];
     }
     pulseRuntimeActivity(deviceId, 'tx');
-    let recipients: DeviceId[] = [];
+    let deliveries: RoutedRadioDelivery[] = [];
     let routeDebugDetails: Record<string, unknown> | undefined;
     flushSync(() => {
       setModel((current) => {
@@ -545,7 +638,16 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           current.simulationState.options.maxSignalStrength,
           senderGroup,
         );
-        let simulationState = routeRadioPacket(current.simulationState, deviceId, normalized.packet);
+        let simulationState = current.simulationState;
+        if (
+          normalized.packet.signalStrength !== undefined &&
+          senderRuntime?.radio.signalStrength !== normalized.packet.signalStrength
+        ) {
+          simulationState = setDeviceRadioConfig(simulationState, deviceId, {
+            signalStrength: normalized.packet.signalStrength,
+          });
+        }
+        simulationState = routeRadioPacket(simulationState, deviceId, normalized.packet);
         for (const diagnostic of normalized.diagnostics) {
           simulationState = appendDeviceRuntimeLog(
             simulationState,
@@ -555,14 +657,26 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           );
         }
         const routedEvent = simulationState.radioEvents.at(-1);
-        recipients = routedEvent?.recipients ?? [];
+        deliveries = (routedEvent?.receivedPackets ?? []).map((receivedPacket) => ({
+          recipientId: receivedPacket.deviceId,
+          packet: {
+            data: new Uint8Array(normalized.packet.data),
+            ...(normalized.packet.group === undefined ? {} : { group: normalized.packet.group }),
+            ...(normalized.packet.channel === undefined ? {} : { channel: normalized.packet.channel }),
+            signalStrength: receivedPacket.rssi,
+          },
+        }));
         routeDebugDetails = {
           senderDeviceId: deviceId,
           senderRadio: senderRuntime?.radio,
           rawPacket: summarizeRadioPacket(packet),
           normalizedPacket: summarizeRadioPacket(normalized.packet),
           diagnostics: normalized.diagnostics,
-          recipients,
+          recipients: deliveries.map((delivery) => delivery.recipientId),
+          deliveries: deliveries.map((delivery) => ({
+            recipientId: delivery.recipientId,
+            signalStrength: delivery.packet.signalStrength,
+          })),
           blocked:
             routedEvent?.blockedTargets.map((target) => ({
               deviceId: target.deviceId,
@@ -580,7 +694,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       debugRadioPanel('route-radio-packet', routeDebugDetails);
     }
 
-    return recipients;
+    return deliveries;
   }
 
   function handleRuntimeLog(
@@ -926,18 +1040,25 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }
   }
 
-  function downloadCanvasBundle() {
-    const serialized = serializeProject(project);
-    const blob = new Blob([serialized], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = `${slugForFilename(project.name)}.swarm.json`;
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
-    setCanvasStateMessage('Downloaded canvas bundle');
+  async function downloadCanvasBundle() {
+    try {
+      const bundleBytes = await encodeProjectBundle(project);
+      const bundleBuffer = new Uint8Array(bundleBytes).buffer;
+      const blob = new Blob([bundleBuffer], { type: 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${slugForFilename(project.name)}.swarm`;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setCanvasStateMessage('Downloaded canvas bundle');
+    } catch (error) {
+      setCanvasStateMessage(
+        error instanceof Error ? error.message : 'Unable to download canvas bundle',
+      );
+    }
   }
 
   async function importCanvasBundle(file: File) {
@@ -951,8 +1072,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }
 
     try {
-      const serialized = await file.text();
-      const imported = deserializeProject(serialized);
+      const imported = await decodeProjectBundle(await readBundleFileBytes(file));
       replaceScenarioProject(imported);
       setCanvasStateMessage(`Imported "${imported.name}"`);
     } catch (error) {
@@ -1045,14 +1165,14 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
             <button type="button" onClick={() => void saveCurrentLayoutToBrowser()}>
               Save to browser
             </button>
-            <button type="button" onClick={downloadCanvasBundle}>
+            <button type="button" onClick={() => void downloadCanvasBundle()}>
               Download bundle
             </button>
             <label className="canvas-state-upload">
               Upload bundle
               <input
                 type="file"
-                accept=".json,.swarm,.swarm.json"
+                accept=".swarm"
                 onChange={handleBundleFileInput}
               />
             </label>
@@ -1178,11 +1298,16 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
 
             {Object.values(simulationState.devices).map((device) => {
               const isSelected = selected.type === 'device' && selected.id === device.deviceId;
+              const projectDevice = project.devices.find((candidate) => candidate.id === device.deviceId);
               const ledPixels = displaySnapshots[device.deviceId] ?? emptyLedPixels;
               const activity = runtimeActivity[device.deviceId];
               const txActive = activity?.tx ?? false;
               const soundActive = activity?.sound ?? false;
               const runtimeState = runtimeNodeStates[device.deviceId];
+              const canvasNodeName = truncatePreview(
+                projectDevice?.name ?? defaultDeviceNameForId(device.deviceId),
+                MAX_CANVAS_NODE_NAME,
+              );
               return (
                 <g
                   key={device.deviceId}
@@ -1264,7 +1389,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                     );
                   })}
                   <text className="node-label" y="42" textAnchor="middle">
-                    {device.deviceId.replace('device-', '')}
+                    {canvasNodeName}
                   </text>
                 </g>
               );
@@ -1323,10 +1448,26 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   onResetRuntime={resetSelectedDevice}
                   onDeleteNode={deleteSelectedNode}
                   onArtifactUpload={uploadArtifactForDevice}
+                  isRenaming={renameTarget?.type === 'device' && renameTarget.id === selectedDevice.id}
+                  renameDraft={renameDraft}
+                  onRenameDraftChange={setRenameDraft}
+                  onBeginRename={() => beginRename({ type: 'device', id: selectedDevice.id }, selectedDevice.name)}
+                  onCommitRename={commitRename}
+                  onCancelRename={cancelRename}
                 />
               </>
             ) : selectedSource ? (
-              <SourceSelection source={selectedSource} updateSource={updateSource} onDeleteNode={deleteSelectedNode} />
+              <SourceSelection
+                source={selectedSource}
+                updateSource={updateSource}
+                onDeleteNode={deleteSelectedNode}
+                isRenaming={renameTarget?.type === 'source' && renameTarget.id === selectedSource.id}
+                renameDraft={renameDraft}
+                onRenameDraftChange={setRenameDraft}
+                onBeginRename={() => beginRename({ type: 'source', id: selectedSource.id }, selectedSource.name)}
+                onCommitRename={commitRename}
+                onCancelRename={cancelRename}
+              />
             ) : (
               <p className="hint">Select a node or environmental source.</p>
             )}
@@ -1395,6 +1536,12 @@ function DeviceSelection({
   onResetRuntime,
   onDeleteNode,
   onArtifactUpload,
+  isRenaming,
+  renameDraft,
+  onRenameDraftChange,
+  onBeginRename,
+  onCommitRename,
+  onCancelRename,
 }: {
   project: SwarmProject;
   deviceId: DeviceId;
@@ -1406,6 +1553,12 @@ function DeviceSelection({
   onResetRuntime: () => void;
   onDeleteNode: () => void;
   onArtifactUpload: (deviceId: DeviceId, file: File) => void;
+  isRenaming: boolean;
+  renameDraft: string;
+  onRenameDraftChange: (next: string) => void;
+  onBeginRename: () => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
 }) {
   const device = project.devices.find((candidate) => candidate.id === deviceId);
   if (!device) {
@@ -1417,7 +1570,15 @@ function DeviceSelection({
 
   return (
     <>
-      <strong>{device.name}</strong>
+      <SelectionNameEditor
+        displayName={device.name}
+        isRenaming={isRenaming}
+        renameDraft={renameDraft}
+        onRenameDraftChange={onRenameDraftChange}
+        onBeginRename={onBeginRename}
+        onCommitRename={onCommitRename}
+        onCancelRename={onCancelRename}
+      />
       <p>
         x {Math.round(device.position.x)} / y {Math.round(device.position.y)}
       </p>
@@ -1511,17 +1672,36 @@ function SourceSelection({
   source,
   updateSource,
   onDeleteNode,
+  isRenaming,
+  renameDraft,
+  onRenameDraftChange,
+  onBeginRename,
+  onCommitRename,
+  onCancelRename,
 }: {
   source: EnvironmentSource;
   updateSource: (sourceId: EnvironmentSourceId, patch: Partial<EnvironmentSource>) => void;
   onDeleteNode: () => void;
+  isRenaming: boolean;
+  renameDraft: string;
+  onRenameDraftChange: (next: string) => void;
+  onBeginRename: () => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
 }) {
   const peakLevel = intensityToSensorLevel(source.intensity);
   return (
     <>
-      <strong>
-        {source.type} source {source.id}
-      </strong>
+      <SelectionNameEditor
+        displayName={source.name}
+        isRenaming={isRenaming}
+        renameDraft={renameDraft}
+        onRenameDraftChange={onRenameDraftChange}
+        onBeginRename={onBeginRename}
+        onCommitRename={onCommitRename}
+        onCancelRename={onCancelRename}
+      />
+      <p className="hint">{source.type === 'light' ? 'Light source' : 'Sound source'}</p>
       <div className="selection-actions">
         <button type="button" onClick={onDeleteNode}>
           Delete node
@@ -1553,6 +1733,60 @@ function SourceSelection({
         />
       </label>
     </>
+  );
+}
+
+function SelectionNameEditor({
+  displayName,
+  isRenaming,
+  renameDraft,
+  onRenameDraftChange,
+  onBeginRename,
+  onCommitRename,
+  onCancelRename,
+}: {
+  displayName: string;
+  isRenaming: boolean;
+  renameDraft: string;
+  onRenameDraftChange: (next: string) => void;
+  onBeginRename: () => void;
+  onCommitRename: () => void;
+  onCancelRename: () => void;
+}) {
+  if (isRenaming) {
+    return (
+      <input
+        className="selection-name-input"
+        aria-label="Edit node name"
+        autoFocus
+        value={renameDraft}
+        onChange={(event) => onRenameDraftChange(event.target.value)}
+        onBlur={onCancelRename}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault();
+            onCommitRename();
+            return;
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault();
+            onCancelRename();
+          }
+        }}
+      />
+    );
+  }
+
+  const sidebarName = truncatePreview(displayName, MAX_SIDEBAR_NODE_NAME);
+  return (
+    <div className="selection-name-row">
+      <strong className="selection-name" title={displayName}>
+        {sidebarName}
+      </strong>
+      <button type="button" className="selection-name-edit" aria-label="Rename selected node" onClick={onBeginRename}>
+        ✎
+      </button>
+    </div>
   );
 }
 

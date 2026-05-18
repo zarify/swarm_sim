@@ -593,6 +593,49 @@ button:disabled {
   text-transform: uppercase;
 }
 
+.selection-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.selection-name {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--phosphor);
+  font-size: 1.2rem;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.selection-name-edit {
+  padding: 4px 8px;
+  min-width: auto;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.selection-name-input {
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid rgba(147, 169, 134, 0.36);
+  background: rgba(5, 13, 15, 0.96);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 8px 10px;
+}
+
+.selection-name-input:focus {
+  outline: 1px solid rgba(105, 247, 255, 0.65);
+  outline-offset: 1px;
+}
+
 .selection-card p,
 .telemetry-card p,
 .radio-inspector-card p {

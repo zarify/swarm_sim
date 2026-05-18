@@ -1,6 +1,7 @@
 import type { ProjectSummary, SwarmProject } from './project';
 import { summarizeProject } from './project';
-import { deserializeProject, serializeProject } from './projectSerialization';
+import { decodeProjectBundle, encodeProjectBundle } from './projectBundle';
+import { deserializeProject } from './projectSerialization';
 import {
   deleteProject as deleteProjectFromStorage,
   listProjectSummaries as listProjectSummariesFromStorage,
@@ -15,7 +16,8 @@ const SUMMARIES_STORE = 'summaries';
 
 interface StoredProjectRecord {
   id: string;
-  serializedProject: string;
+  bundleBytes?: Uint8Array;
+  serializedProject?: string;
   updatedAt: string;
 }
 
@@ -92,9 +94,10 @@ function createIndexedDbStore(indexedDbFactory: IDBFactory): BrowserProjectStore
       await runTransaction(db, [PROJECTS_STORE, SUMMARIES_STORE], 'readwrite', async (transaction) => {
         const projects = transaction.objectStore(PROJECTS_STORE);
         const summaries = transaction.objectStore(SUMMARIES_STORE);
+        const bundleBytes = await encodeProjectBundle(project);
         const record: StoredProjectRecord = {
           id: project.id,
-          serializedProject: serializeProject(project),
+          bundleBytes,
           updatedAt: project.updatedAt,
         };
         projects.put(record);
@@ -113,7 +116,14 @@ function createIndexedDbStore(indexedDbFactory: IDBFactory): BrowserProjectStore
         throw new Error(`Project not found: ${projectId}`);
       }
 
-      return deserializeProject(record.serializedProject);
+      if (record.bundleBytes instanceof Uint8Array) {
+        return decodeProjectBundle(record.bundleBytes);
+      }
+      if (record.serializedProject) {
+        return deserializeProject(record.serializedProject);
+      }
+
+      throw new Error(`Stored project is invalid: ${projectId}`);
     },
 
     list: async () => {

@@ -39,6 +39,16 @@ describe('project serialization', () => {
     expect(() => deserializeProject(serialized)).toThrow('Invalid environment source type: heat');
   });
 
+  it('fills fallback names for legacy environment sources without name', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as {
+      environmentSources: Array<Record<string, unknown>>;
+    };
+    delete parsed.environmentSources[0]?.name;
+
+    const deserialized = deserializeProject(JSON.stringify(parsed));
+    expect(deserialized.environmentSources[0]?.name).toBe('Light 1');
+  });
+
   it('rejects malformed project JSON shape', () => {
     expect(() => deserializeProject('{"schemaVersion":1,"devices":[]}')).toThrow(
       'Expected id to be a non-empty string',
@@ -72,6 +82,7 @@ function makeProject(): SwarmProject {
       {
         id: 'light-1',
         type: 'light',
+        name: 'Light 1',
         position: { x: 40, y: 20 },
         radius: 160,
         intensity: 0.8,

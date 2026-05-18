@@ -31,6 +31,7 @@ export interface VirtualDevice {
 export interface EnvironmentSource {
   id: EnvironmentSourceId;
   type: 'light' | 'sound';
+  name: string;
   position: Point;
   radius: number;
   intensity: number;
@@ -80,4 +81,40 @@ export function summarizeProject(project: SwarmProject): ProjectSummary {
     artifactCount: project.artifacts.length,
     updatedAt: project.updatedAt,
   };
+}
+
+export function defaultDeviceNameForId(deviceId: DeviceId): string {
+  const suffix = suffixFromId(deviceId, 'device-');
+  if (/^\d+$/.test(suffix)) {
+    return `Node ${suffix}`;
+  }
+  return toTitleCaseWords(suffix) || 'Device';
+}
+
+export function defaultEnvironmentSourceName(source: Pick<EnvironmentSource, 'id' | 'type'>): string {
+  const typeLabel = source.type === 'light' ? 'Light' : 'Sound';
+  const suffix = suffixFromId(source.id, `${source.type}-`);
+  if (/^\d+$/.test(suffix)) {
+    return `${typeLabel} ${suffix}`;
+  }
+  const normalizedSuffix = toTitleCaseWords(suffix);
+  return normalizedSuffix ? `${typeLabel} ${normalizedSuffix}` : typeLabel;
+}
+
+function suffixFromId(value: string, prefix: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith(prefix)) {
+    return trimmed.slice(prefix.length);
+  }
+  return trimmed;
+}
+
+function toTitleCaseWords(value: string): string {
+  const words = value
+    .trim()
+    .replace(/[-_]+/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => `${word[0]?.toUpperCase() ?? ''}${word.slice(1)}`);
+  return words.join(' ');
 }

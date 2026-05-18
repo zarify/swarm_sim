@@ -63,6 +63,22 @@ test.describe('core canvas workflows', () => {
     await expect(page.getByText(/0 nodes \//)).toBeVisible();
   });
 
+  test('rejects legacy JSON files in bundle uploader', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.confirm = () => true;
+    });
+    await page.goto('/');
+
+    await page.getByRole('button', { name: 'Canvas state' }).click();
+    await page.getByLabel('Upload bundle').setInputFiles({
+      name: 'legacy.swarm',
+      mimeType: 'application/octet-stream',
+      buffer: Buffer.from('{"schemaVersion":1}', 'utf-8'),
+    });
+
+    await expect(page.getByText('Unsupported canvas bundle format')).toBeVisible();
+  });
+
   test('uploads MicroPython fixture for selected device', async ({ page }) => {
     await page.goto('/');
 
@@ -70,5 +86,27 @@ test.describe('core canvas workflows', () => {
 
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+  });
+
+  test('renames selected nodes from the side panel for both devices and sources', async ({ page }) => {
+    await page.goto('/');
+
+    const longDeviceName = 'Device name that is intentionally too long for compact labels';
+    await page.getByRole('button', { name: 'Rename selected node' }).click();
+    await page.getByLabel('Edit node name').fill(longDeviceName);
+    await page.getByLabel('Edit node name').press('Enter');
+
+    const sidebarName = page.locator('.selection-name').first();
+    await expect(sidebarName).toHaveAttribute('title', longDeviceName);
+    await expect(sidebarName).toContainText(/…$/);
+    await expect(page.locator('.node-label').first()).toContainText(/…$/);
+
+    await page.getByRole('button', { name: 'Add light' }).click();
+    await page.locator('g.source-node--light').first().click();
+    await page.getByRole('button', { name: 'Rename selected node' }).click();
+    await page.getByLabel('Edit node name').fill('Ambient source');
+    await page.getByLabel('Edit node name').press('Enter');
+
+    await expect(page.locator('.selection-name').first()).toHaveAttribute('title', 'Ambient source');
   });
 });

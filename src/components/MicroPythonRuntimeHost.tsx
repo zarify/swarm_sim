@@ -25,6 +25,11 @@ type RuntimeLoadPrograms = (
   options: LoadProjectRuntimeProgramsOptions,
 ) => Promise<DeviceProgramLoadResult[]>;
 
+export interface RoutedRadioDelivery {
+  recipientId: DeviceId;
+  packet: RuntimeRadioPacket;
+}
+
 export interface MicroPythonRuntimeHostProps {
   project: SwarmProject;
   selectedDeviceId?: DeviceId;
@@ -35,7 +40,7 @@ export interface MicroPythonRuntimeHostProps {
   prepareEnabled?: boolean;
   showSimulatorFrames?: boolean;
   headless?: boolean;
-  onRadioPacket: (deviceId: DeviceId, packet: RuntimeRadioPacket) => DeviceId[];
+  onRadioPacket: (deviceId: DeviceId, packet: RuntimeRadioPacket) => RoutedRadioDelivery[];
   onRuntimeLog: (
     deviceId: DeviceId,
     type: Extract<RuntimeAdapterEvent['type'], 'serial-output' | 'internal-error'>,
@@ -409,9 +414,9 @@ export function MicroPythonRuntimeHost({
         if (runtimeRadioConfig.group !== undefined || runtimeRadioConfig.channel !== undefined) {
           callbacks.current.onRadioConfigHint?.(deviceId, runtimeRadioConfig);
         }
-        const recipients = callbacks.current.onRadioPacket(deviceId, event.packet);
+        const deliveries = callbacks.current.onRadioPacket(deviceId, event.packet);
         void Promise.all(
-          recipients.map((recipientId) => adapters.current.get(recipientId)?.sendRadio(event.packet)),
+          deliveries.map(({ recipientId, packet }) => adapters.current.get(recipientId)?.sendRadio(packet)),
         ).catch((error: unknown) => {
           callbacks.current.onRuntimeLog(
             deviceId,

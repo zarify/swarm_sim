@@ -289,12 +289,12 @@
           }
           const sequence = ++state.outboundRadioSequence;
           const group = Number.isFinite(Number(packet.group)) ? Number(packet.group) : 0;
-          const signalStrength = Number.isFinite(Number(packet.signalStrength)) ? Number(packet.signalStrength) : -75;
+          const rssi = toInboundRssi(packet.signalStrength);
           const bytes = normalizeByteArray(packet.data);
           traceRadio('tx-to-simulator', {
             sequence,
             group,
-            signalStrength,
+            rssi,
             bytes: bytes.length,
             preview: bytes.slice(0, 8),
           });
@@ -302,7 +302,7 @@
             {
               type: 'swarm-radiopacket',
               swarmSeq: sequence,
-              rssi: signalStrength,
+              rssi,
               serial: 0,
               time: Date.now(),
               payload: {
@@ -569,6 +569,14 @@
             return undefined;
           }
           return numeric;
+        }
+
+        function toInboundRssi(value) {
+          const numeric = Number(value);
+          if (!Number.isFinite(numeric)) {
+            return -75;
+          }
+          return Math.round(numeric);
         }
 
         function toOptionalGroup(value) {

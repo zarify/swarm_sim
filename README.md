@@ -34,7 +34,7 @@ The spike records the current technical position:
 - Runtime hosts now stay mounted for every assigned runtime type so mixed MicroPython + MakeCode scenarios run at the same time, and assigned runtimes auto-load after HEX upload (no manual prepare step required in the canvas workflow).
 - Canvas device cards are now the primary interaction surface: they are larger and their A/B buttons are clickable, with button state propagated into runtime adapters for both runtimes. Runtime host panels can run without exposing simulator cards in the main canvas workflow.
 - A shared micro:bit sensor-domain contract now defines canonical ranges/defaults for current and planned built-in sensors (light/sound/temperature/compass/acceleration/logo touch), so environment mapping and future sensor integrations normalize through one place instead of ad-hoc per feature.
-- Project persistence now has a schema-versioned domain model, self-contained JSON export/import with artifact bytes encoded inline, an IndexedDB-first browser layout store (with storage fallback), and a canvas-state menu for save/load/download/upload/clear workflows.
+- Project persistence now has a schema-versioned domain model, compressed self-contained bundle export/import, an IndexedDB-first browser layout store (with storage fallback), and a canvas-state menu for save/load/download/upload/clear workflows.
 - The simulation engine covers run/pause/resume/reset, 6-10 device radio routing, signal-strength-to-radius mapping, group/channel filtering, movement recalculation, light/sound source influence, and radio message events. MicroPython runtime reset can target one prepared device or all prepared devices in the scenario.
 
 ## Simulator adapter decision

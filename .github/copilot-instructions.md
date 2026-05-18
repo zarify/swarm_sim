@@ -42,7 +42,7 @@ There is currently no lint script in `package.json`.
   These convert simulator `postMessage` traffic into repository runtime events.
 - Project persistence is schema-versioned:
   - Domain types: `src/domain/project.ts`
-  - Serialization with artifact bytes encoded inline: `src/domain/projectSerialization.ts`
+  - Compressed bundle codec and serializer: `src/domain/projectBundle.ts`, `src/domain/projectSerialization.ts`
   - Browser storage abstraction with IndexedDB-first fallback: `src/domain/browserProjectStore.ts`, `src/domain/localProjectStore.ts`
 
 ## Key repository conventions
@@ -60,4 +60,4 @@ There is currently no lint script in `package.json`.
   - Use domain min/max/defaults for clamping and value normalization across simulation and runtime adapters.
 - Preserve project schema compatibility:
   - `PROJECT_SCHEMA_VERSION` gates deserialization.
-  - Artifact bytes are persisted as base64 (`bytesBase64`) in exported/imported project JSON.
+  - Canvas bundles are exported/imported as compressed `.swarm` files; JSON serializer remains an internal compatibility surface.

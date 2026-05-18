@@ -60,6 +60,12 @@ export interface BlockedRadioTarget {
   targetChannel: number;
 }
 
+export interface ReceivedRadioPacket {
+  deviceId: DeviceId;
+  distance: number;
+  rssi: number;
+}
+
 export interface RadioMessageEvent {
   id: string;
   sequence: number;
@@ -71,6 +77,7 @@ export interface RadioMessageEvent {
   signalStrength?: number;
   rangeRadius: number;
   recipients: DeviceId[];
+  receivedPackets: ReceivedRadioPacket[];
   blockedTargets: BlockedRadioTarget[];
 }
 
@@ -112,6 +119,9 @@ const DEFAULT_OPTIONS: Required<SimulationOptions> = {
 const DEFAULT_RADIO_GROUP = 0;
 const DEFAULT_RADIO_CHANNEL = 7;
 const SENSOR_MAX_LEVEL = MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel.max;
+const RSSI_AT_CLOSE_RANGE = -45;
+const RSSI_AT_RANGE_LIMIT = -75;
+const DEVICE_TOUCH_DISTANCE = 84;
 
 export function createSimulationState(
   project: SwarmProject,
@@ -344,7 +354,7 @@ export function routeRadioPacket(
   }
 
   const rangeRadius = radioRangeForSignalStrength(signalStrength, state.options);
-  const recipients: DeviceId[] = [];
+  const receivedPackets: ReceivedRadioPacket[] = [];
   const blockedTargets: BlockedRadioTarget[] = [];
 
   for (const device of Object.values(state.devices)) {
@@ -363,9 +373,14 @@ export function routeRadioPacket(
         targetChannel: device.radio.channel,
       });
     } else {
-      recipients.push(device.deviceId);
+      receivedPackets.push({
+        deviceId: device.deviceId,
+        distance,
+        rssi: radioRssiForDistance(distance, rangeRadius),
+      });
     }
   }
+  const recipients = receivedPackets.map((packetDelivery) => packetDelivery.deviceId);
 
   const sequence = state.sequence + 1;
   const event: RadioMessageEvent = {
@@ -379,6 +394,7 @@ export function routeRadioPacket(
     ...(signalStrength === undefined ? {} : { signalStrength }),
     rangeRadius,
     recipients,
+    receivedPackets,
     blockedTargets,
   };
   const logs = makeRadioLogs(event);
@@ -562,6 +578,15 @@ function getRadioBlockReason(
   }
 
   return undefined;
+}
+
+function radioRssiForDistance(distance: number, rangeRadius: number): number {
+  const edgeDistance = Math.max(0, distance - DEVICE_TOUCH_DISTANCE);
+  const propagationSpan = Math.max(rangeRadius - DEVICE_TOUCH_DISTANCE, 1);
+  const normalizedDistance = clamp(edgeDistance / propagationSpan, 0, 1);
+  return Math.round(
+    RSSI_AT_CLOSE_RANGE + normalizedDistance * (RSSI_AT_RANGE_LIMIT - RSSI_AT_CLOSE_RANGE),
+  );
 }
 
 function normalizeRadioConfig(

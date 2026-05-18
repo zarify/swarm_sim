@@ -56,6 +56,13 @@ describe('simulation engine', () => {
 
     expect(routed.radioEvents).toHaveLength(1);
     expect(routed.radioEvents[0]?.recipients).toEqual(['device-b']);
+    expect(routed.radioEvents[0]?.receivedPackets).toEqual([
+      expect.objectContaining({
+        deviceId: 'device-b',
+        distance: 50,
+        rssi: -45,
+      }),
+    ]);
     expect(routed.radioEvents[0]?.blockedTargets.map((target) => target.reason)).toEqual([
       'group-mismatch',
       'channel-mismatch',
@@ -105,6 +112,7 @@ describe('simulation engine', () => {
         {
           id: 'light-new',
           type: 'light',
+          name: 'Light New',
           position: { x: 30, y: 0 },
           radius: 120,
           intensity: 1,
@@ -142,6 +150,45 @@ describe('simulation engine', () => {
     expect(linkFromAToB(state)?.canCommunicate).toBe(true);
   });
 
+  it('computes recipient RSSI from tx power-derived range and distance', () => {
+    const project = makeProject();
+    let state = createSimulationState(project, {
+      minRadioRangeRadius: 40,
+      maxRadioRangeRadius: 240,
+    });
+    state = setDeviceRadioConfig(state, 'device-a', { group: 42, signalStrength: 7 });
+    state = setDeviceRadioConfig(state, 'device-b', { group: 42 });
+
+    state = moveDevice(state, 'device-b', { x: 0, y: 0 });
+    const closeRssi = routeRadioPacket(state, 'device-a', {
+      data: new TextEncoder().encode('ping'),
+    }).radioEvents[0]?.receivedPackets[0]?.rssi;
+    expect(closeRssi).toBe(-45);
+
+    state = moveDevice(state, 'device-b', { x: 84, y: 0 });
+    const touchingRssi = routeRadioPacket(state, 'device-a', {
+      data: new TextEncoder().encode('ping'),
+    }).radioEvents[0]?.receivedPackets[0]?.rssi;
+    expect(touchingRssi).toBe(-45);
+
+    state = moveDevice(state, 'device-b', { x: 240, y: 0 });
+    const edgeRssi = routeRadioPacket(state, 'device-a', {
+      data: new TextEncoder().encode('ping'),
+    }).radioEvents[0]?.receivedPackets[0]?.rssi;
+    expect(edgeRssi).toBe(-75);
+
+    state = moveDevice(state, 'device-b', { x: 100, y: 0 });
+    const lowPowerState = setDeviceRadioConfig(state, 'device-a', { signalStrength: 3 });
+    const highPowerState = setDeviceRadioConfig(state, 'device-a', { signalStrength: 7 });
+    const lowPowerRssi = routeRadioPacket(lowPowerState, 'device-a', {
+      data: new TextEncoder().encode('ping'),
+    }).radioEvents[0]?.receivedPackets[0]?.rssi;
+    const highPowerRssi = routeRadioPacket(highPowerState, 'device-a', {
+      data: new TextEncoder().encode('ping'),
+    }).radioEvents[0]?.receivedPackets[0]?.rssi;
+    expect(highPowerRssi).toBeGreaterThan(lowPowerRssi ?? Number.NEGATIVE_INFINITY);
+  });
+
   it('calculates light and sound levels from environmental source radius and intensity', () => {
     const state = createSimulationState(makeProject());
 
@@ -169,6 +216,7 @@ describe('simulation engine', () => {
           {
             id: 'bad-light',
             type: 'light',
+            name: 'Bad Light',
             position: { x: 0, y: 0 },
             radius: 100,
             intensity: Number.NaN,
@@ -203,6 +251,7 @@ function makeProject(): SwarmProject {
       {
         id: 'light-1',
         type: 'light',
+        name: 'Light 1',
         position: { x: 0, y: 0 },
         radius: 100,
         intensity: 1,
@@ -210,6 +259,7 @@ function makeProject(): SwarmProject {
       {
         id: 'sound-1',
         type: 'sound',
+        name: 'Sound 1',
         position: { x: 0, y: 100 },
         radius: 100,
         intensity: 1,
