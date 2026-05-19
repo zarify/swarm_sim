@@ -107,6 +107,30 @@ test.describe('core canvas workflows', () => {
       .toEqual([]);
   });
 
+  test('delivers radio packets between two default MicroPython nodes', async ({ page }) => {
+    await page.goto('/');
+
+    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Add device' }).click();
+    await page.getByLabel(/Load code onto Node 2/).setInputFiles(microPythonFixture);
+    await expect(page.getByText(/2 nodes \//)).toBeVisible();
+
+    const radioInspector = page.locator('details[aria-label="Radio message inspector"]');
+    await radioInspector.locator('summary').click();
+
+    await expect
+      .poll(
+        async () => {
+          const metaLines = await page.locator('.radio-event__meta').allTextContents();
+          return metaLines.some((line) => /to\s+1\s+received/i.test(line));
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(true);
+  });
+
   test('coalesces fragmented MicroPython serial output into one runtime log line', async ({ page }) => {
     await page.goto('/');
     await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);

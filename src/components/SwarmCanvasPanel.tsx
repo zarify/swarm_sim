@@ -334,7 +334,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           {
             id,
             name: `Node ${deviceNumber}`,
-            position: { x: 130 + deviceNumber * 42, y: 130 + deviceNumber * 28 },
+            position: defaultNewDevicePosition(current.devices),
           },
         ],
       };
@@ -2203,6 +2203,25 @@ function clientPointToCanvasPoint(svg: SVGSVGElement, clientX: number, clientY: 
     x: ((clientX - rect.left) / rect.width) * canvasSize.width,
     y: ((clientY - rect.top) / rect.height) * canvasSize.height,
   };
+}
+
+function defaultNewDevicePosition(existingDevices: SwarmProject['devices']): Point {
+  if (existingDevices.length === 0) {
+    return {
+      x: canvasSize.width / 2,
+      y: canvasSize.height / 2,
+    };
+  }
+
+  const anchor = existingDevices[0]?.position ?? { x: canvasSize.width / 2, y: canvasSize.height / 2 };
+  const slotIndex = existingDevices.length - 1;
+  const ringIndex = Math.floor(slotIndex / 8);
+  const angle = (slotIndex % 8) * (Math.PI / 4);
+  const radius = 96 + ringIndex * 72;
+  return clampPoint({
+    x: anchor.x + Math.cos(angle) * radius,
+    y: anchor.y + Math.sin(angle) * radius,
+  });
 }
 
 function clampPoint(point: Point): Point {

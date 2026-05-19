@@ -12,6 +12,13 @@ npm run test:e2e
 npm run build
 ```
 
+## Static hosting notes
+
+- The app is static-hostable (`npm run build` + serve `dist/` from any HTTP server).
+- Runtime debug traces (`[swarm-radio-debug]`) are development-only and intentionally suppressed in production bundles.
+- Browser warnings about iframe sandbox flags (`allow-scripts` + `allow-same-origin`) are expected with the current simulator embedding strategy.
+- New devices now spawn within default radio range of the first node, so two-node MicroPython smoke tests produce received packets without manual repositioning.
+
 ## Current implementation
 
 The app now includes the React + TypeScript + Vite shell, schema-versioned project persistence, source extraction for editor-generated HEX files, a runtime program loading pipeline, a MicroPython iframe adapter for the Foundation simulator API, a pure TypeScript swarm simulation engine, and an interactive SVG swarm canvas with selected-device code upload, radio telemetry, compact per-device logs, radio message inspection, per-node runtime activity rings (radio transmit and speaker/sound output), and persistent embedded MicroPython simulator frames for assigned devices.
