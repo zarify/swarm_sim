@@ -30,6 +30,7 @@ import {
 } from '../simulation/simulationEngine';
 import type { DeviceProgramLoadResult } from '../runtime/programLoader';
 import type { RuntimeRadioPacket } from '../runtime/runtimeAdapter';
+import type { RuntimeSource } from '../runtime/types';
 import type { MicroPythonRuntimeHostProps, RoutedRadioDelivery } from './MicroPythonRuntimeHost';
 import type { RuntimeResetRequest } from './runtimeHostControls';
 import type { BrowserProjectStore } from '../domain/browserProjectStore';
@@ -79,7 +80,7 @@ interface DeviceRuntimeActivity {
 }
 
 type ArtifactUploadState = 'uploading' | 'ready' | 'failed';
-type RuntimeNodeState = 'pending' | 'ready' | 'failed';
+type RuntimeNodeState = 'pending' | 'ready' | 'failed' | 'error';
 type RuntimeRadioConfigHint = Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>>;
 
 const canvasSize = { width: 860, height: 520 };
@@ -123,6 +124,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const [runtimeResetRequest, setRuntimeResetRequest] = useState<RuntimeResetRequest>();
   const [artifactUploadIssues, setArtifactUploadIssues] = useState<Record<DeviceId, ArtifactUploadIssue>>({});
   const [artifactUploadState, setArtifactUploadState] = useState<Record<DeviceId, ArtifactUploadState>>({});
+  const [runtimeErrorByDevice, setRuntimeErrorByDevice] = useState<Record<DeviceId, string>>({});
   const [isSidebarDragActive, setIsSidebarDragActive] = useState(false);
   const [renameTarget, setRenameTarget] = useState<RenamableSelection | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
@@ -240,6 +242,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     for (const [deviceId] of displayLastUpdateMs.current.entries()) {
       if (!activeDeviceIds.has(deviceId)) {
         displayLastUpdateMs.current.delete(deviceId);
+        setRuntimeErrorByDevice((current) => {
+          if (!(deviceId in current)) {
+            return current;
+          }
+          const { [deviceId]: _removed, ...rest } = current;
+          return rest;
+        });
       }
     }
     for (const [key, timerId] of buttonPulseTimers.current.entries()) {
@@ -416,6 +425,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     setScenarioResetSignal((current) => current + 1);
     setDisplaySnapshots({});
     setRuntimeActivity({});
+    setRuntimeErrorByDevice({});
     clearRuntimeActivityTimers(runtimeActivityTimers.current);
     clearDisplayFrameTimers(displayFrameTimers.current);
     clearButtonPulseTimers(buttonPulseTimers.current);
@@ -460,6 +470,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       displayFrameTimers.current.delete(deviceId);
     }
     displayLastUpdateMs.current.delete(deviceId);
+    setRuntimeErrorByDevice((current) => {
+      if (!(deviceId in current)) {
+        return current;
+      }
+      const { [deviceId]: _removed, ...rest } = current;
+      return rest;
+    });
   }
 
   function deleteSelectedNode() {
@@ -475,6 +492,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         return rest;
       });
       setArtifactUploadState((current) => {
+        const { [deletingId]: _removed, ...rest } = current;
+        return rest;
+      });
+      setRuntimeErrorByDevice((current) => {
         const { [deletingId]: _removed, ...rest } = current;
         return rest;
       });
@@ -529,6 +550,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     const token = (uploadTokens.current.get(deviceId) ?? 0) + 1;
     uploadTokens.current.set(deviceId, token);
     setArtifactUploadState((current) => ({ ...current, [deviceId]: 'uploading' }));
+    setRuntimeErrorByDevice((current) => {
+      if (!(deviceId in current)) {
+        return current;
+      }
+      const { [deviceId]: _removed, ...rest } = current;
+      return rest;
+    });
 
     try {
       const bytes = await readHexFileBytes(file);
@@ -637,12 +665,14 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     flushSync(() => {
       setModel((current) => {
         const senderRuntime = current.simulationState.devices[deviceId];
+        const senderRuntimeSource = resolveDeviceRuntimeSource(current.project, deviceId);
         const senderGroup = senderRuntime?.radio.group;
         const normalized = normalizeRuntimeRadioPacket(
           packet,
           current.simulationState.options.maxSignalStrength,
           senderGroup,
         );
+        const diagnostics = [...normalized.diagnostics];
         let simulationState = current.simulationState;
         if (
           normalized.packet.signalStrength !== undefined &&
@@ -653,7 +683,30 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           });
         }
         simulationState = routeRadioPacket(simulationState, deviceId, normalized.packet);
-        for (const diagnostic of normalized.diagnostics) {
+        const routedEvent = simulationState.radioEvents.at(-1);
+        const outboundGroup = normalized.packet.group ?? senderRuntime?.radio.group;
+        const outboundChannel = normalized.packet.channel ?? senderRuntime?.radio.channel;
+        deliveries = (routedEvent?.receivedPackets ?? []).map((receivedPacket) => {
+          const recipientRuntimeSource = resolveDeviceRuntimeSource(current.project, receivedPacket.deviceId);
+          const translatedPacket = translateRuntimeRadioPacketForRecipient(
+            normalized.packet,
+            senderRuntimeSource,
+            recipientRuntimeSource,
+          );
+          if (translatedPacket.diagnostic) {
+            diagnostics.push(translatedPacket.diagnostic);
+          }
+          return {
+            recipientId: receivedPacket.deviceId,
+            packet: {
+              data: translatedPacket.data,
+              ...(outboundGroup === undefined ? {} : { group: outboundGroup }),
+              ...(outboundChannel === undefined ? {} : { channel: outboundChannel }),
+              signalStrength: receivedPacket.rssi,
+            },
+          };
+        });
+        for (const diagnostic of diagnostics) {
           simulationState = appendDeviceRuntimeLog(
             simulationState,
             deviceId,
@@ -661,22 +714,12 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
             diagnostic,
           );
         }
-        const routedEvent = simulationState.radioEvents.at(-1);
-        deliveries = (routedEvent?.receivedPackets ?? []).map((receivedPacket) => ({
-          recipientId: receivedPacket.deviceId,
-          packet: {
-            data: new Uint8Array(normalized.packet.data),
-            ...(normalized.packet.group === undefined ? {} : { group: normalized.packet.group }),
-            ...(normalized.packet.channel === undefined ? {} : { channel: normalized.packet.channel }),
-            signalStrength: receivedPacket.rssi,
-          },
-        }));
         routeDebugDetails = {
           senderDeviceId: deviceId,
           senderRadio: senderRuntime?.radio,
           rawPacket: summarizeRadioPacket(packet),
           normalizedPacket: summarizeRadioPacket(normalized.packet),
-          diagnostics: normalized.diagnostics,
+          diagnostics,
           recipients: deliveries.map((delivery) => delivery.recipientId),
           deliveries: deliveries.map((delivery) => ({
             recipientId: delivery.recipientId,
@@ -707,6 +750,12 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     type: 'serial-output' | 'internal-error',
     message: string,
   ) {
+    if (type === 'internal-error') {
+      setRuntimeErrorByDevice((current) => ({
+        ...current,
+        [deviceId]: message,
+      }));
+    }
     setModel((current) => {
       const next = {
         ...current,
@@ -719,6 +768,25 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       };
       modelRef.current = next;
       return next;
+    });
+  }
+
+  function handleRuntimeLoadResults(results: DeviceProgramLoadResult[]) {
+    setRuntimeLoadResults(results);
+    if (results.length === 0) {
+      return;
+    }
+    setRuntimeErrorByDevice((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const result of results) {
+        if (!(result.deviceId in next)) {
+          continue;
+        }
+        changed = true;
+        delete next[result.deviceId];
+      }
+      return changed ? next : current;
     });
   }
 
@@ -1151,7 +1219,12 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     void importCanvasBundle(file);
   }
 
-  const runtimeNodeStates = buildRuntimeNodeStates(project, runtimeLoadResults, artifactUploadState);
+  const runtimeNodeStates = buildRuntimeNodeStates(
+    project,
+    runtimeLoadResults,
+    artifactUploadState,
+    runtimeErrorByDevice,
+  );
 
   return (
     <section className="swarm-panel" aria-labelledby="swarm-title">
@@ -1459,6 +1532,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   uploadState={artifactUploadState[selectedDevice.id]}
                   deviceId={selectedDevice.id}
                   uploadIssue={artifactUploadIssues[selectedDevice.id]}
+                  runtimeError={runtimeErrorByDevice[selectedDevice.id]}
                   logs={simulationState.deviceLogs.filter((log) => log.deviceId === selectedDevice.id)}
                   onResetRuntime={resetSelectedDevice}
                   onDeleteNode={deleteSelectedNode}
@@ -1534,7 +1608,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         onDisplayChange={handleRuntimeDisplayChange}
         onSoundOutput={handleRuntimeSoundOutput}
         onRadioConfigHint={handleRuntimeRadioConfigHint}
-        onLoadResultsChange={setRuntimeLoadResults}
+        onLoadResultsChange={handleRuntimeLoadResults}
       />
     </section>
   );
@@ -1547,6 +1621,7 @@ function DeviceSelection({
   runtimeLoadResult,
   uploadState,
   uploadIssue,
+  runtimeError,
   logs,
   onResetRuntime,
   onDeleteNode,
@@ -1564,6 +1639,7 @@ function DeviceSelection({
   runtimeLoadResult?: DeviceProgramLoadResult;
   uploadState?: ArtifactUploadState;
   uploadIssue?: ArtifactUploadIssue;
+  runtimeError?: string;
   logs: SimulationState['deviceLogs'];
   onResetRuntime: () => void;
   onDeleteNode: () => void;
@@ -1639,6 +1715,11 @@ function DeviceSelection({
       ) : device.programArtifactId && uploadState !== 'uploading' ? (
         <p>
           Runtime: <strong>pending</strong>
+        </p>
+      ) : null}
+      {runtimeError ? (
+        <p className="hint hint--error">
+          Runtime: <strong>something went wrong</strong> — {runtimeError}
         </p>
       ) : null}
       {runtime ? (
@@ -1891,6 +1972,7 @@ function buildRuntimeNodeStates(
   project: SwarmProject,
   loadResults: DeviceProgramLoadResult[],
   uploadState: Record<DeviceId, ArtifactUploadState>,
+  runtimeErrors: Record<DeviceId, string>,
 ): Record<DeviceId, RuntimeNodeState> {
   const artifactById = new Map(project.artifacts.map((artifact) => [artifact.id, artifact]));
   const loadResultByDeviceId = new Map<DeviceId, DeviceProgramLoadResult>();
@@ -1911,6 +1993,10 @@ function buildRuntimeNodeStates(
       states[device.id] = 'pending';
       continue;
     }
+    if (runtimeErrors[device.id]) {
+      states[device.id] = 'error';
+      continue;
+    }
 
     const result = loadResultByDeviceId.get(device.id);
     if (!result) {
@@ -1924,6 +2010,157 @@ function buildRuntimeNodeStates(
     states[device.id] = 'ready';
   }
   return states;
+}
+
+function resolveDeviceRuntimeSource(project: SwarmProject, deviceId: DeviceId): RuntimeSource {
+  const device = project.devices.find((candidate) => candidate.id === deviceId);
+  if (!device?.programArtifactId) {
+    return 'unknown';
+  }
+  const artifact = project.artifacts.find((candidate) => candidate.id === device.programArtifactId);
+  return artifact?.runtimeSource ?? 'unknown';
+}
+
+export function translateRuntimeRadioPacketForRecipient(
+  packet: RuntimeRadioPacket,
+  senderRuntimeSource: RuntimeSource,
+  recipientRuntimeSource: RuntimeSource,
+): { data: Uint8Array; diagnostic?: string } {
+  if (
+    senderRuntimeSource === recipientRuntimeSource ||
+    senderRuntimeSource === 'unknown' ||
+    recipientRuntimeSource === 'unknown'
+  ) {
+    return { data: new Uint8Array(packet.data) };
+  }
+
+  if (senderRuntimeSource === 'makecode-pxt' && recipientRuntimeSource === 'micropython') {
+    const decoded = decodeMakeCodeRadioPacket(packet.data);
+    if (!decoded) {
+      return { data: new Uint8Array(packet.data) };
+    }
+    return {
+      data: new TextEncoder().encode(decoded),
+      diagnostic: `Translated MakeCode radio packet for MicroPython recipient: ${truncatePreview(decoded, 28)}`,
+    };
+  }
+
+  if (senderRuntimeSource === 'micropython' && recipientRuntimeSource === 'makecode-pxt') {
+    if (isLikelyMakeCodeTypedPacket(packet.data)) {
+      return { data: new Uint8Array(packet.data) };
+    }
+    const decoded = decodeMicroPythonRadioText(packet.data);
+    if (!decoded) {
+      return { data: new Uint8Array(packet.data) };
+    }
+    return {
+      data: encodeMakeCodeInteropPacketFromText(decoded),
+      diagnostic: `Translated MicroPython radio payload for MakeCode recipient: ${truncatePreview(decoded, 28)}`,
+    };
+  }
+
+  return { data: new Uint8Array(packet.data) };
+}
+
+function decodeMicroPythonRadioText(data: Uint8Array): string | undefined {
+  if (data[0] === 0x01 && data[1] === 0x00 && data[2] === 0x01) {
+    const decodedPrefixed = new TextDecoder().decode(data.subarray(3)).trim();
+    return decodedPrefixed === '' ? undefined : decodedPrefixed;
+  }
+  const decoded = new TextDecoder().decode(data).trim();
+  if (decoded === '' || !/^[\x20-\x7e]+$/.test(decoded)) {
+    return undefined;
+  }
+  return decoded;
+}
+
+function isLikelyMakeCodeTypedPacket(data: Uint8Array): boolean {
+  const packetType = data[0];
+  switch (packetType) {
+    case 0:
+      return data.length >= 13;
+    case 1:
+      return data.length >= 14;
+    case 2:
+    case 3:
+      return data.length >= 10;
+    case 4:
+      return data.length >= 17;
+    case 5:
+      return data.length >= 18;
+    default:
+      return false;
+  }
+}
+
+function encodeMakeCodeInteropPacketFromText(value: string): Uint8Array {
+  const numberValue = Number(value);
+  if (Number.isFinite(numberValue)) {
+    return Number.isInteger(numberValue)
+      ? encodeMakeCodeNumberPacket(numberValue)
+      : encodeMakeCodeDoublePacket(numberValue);
+  }
+
+  const valuePairMatch = /^([A-Za-z][A-Za-z0-9 _-]{0,31}):(-?\d+(?:\.\d+)?)$/.exec(value);
+  if (valuePairMatch) {
+    const name = valuePairMatch[1];
+    const numericValue = Number(valuePairMatch[2]);
+    if (name && name.length <= 8 && Number.isFinite(numericValue)) {
+      return Number.isInteger(numericValue)
+        ? encodeMakeCodeValuePacket(name, numericValue)
+        : encodeMakeCodeDoubleValuePacket(name, numericValue);
+    }
+  }
+
+  return encodeMakeCodeStringPacket(value);
+}
+
+function encodeMakeCodeNumberPacket(value: number): Uint8Array {
+  const packet = new Uint8Array(32);
+  packet[0] = 0;
+  const view = new DataView(packet.buffer);
+  view.setInt32(9, value, true);
+  return packet;
+}
+
+function encodeMakeCodeDoublePacket(value: number): Uint8Array {
+  const packet = new Uint8Array(32);
+  packet[0] = 4;
+  const view = new DataView(packet.buffer);
+  view.setFloat64(9, value, true);
+  return packet;
+}
+
+function encodeMakeCodeValuePacket(name: string, value: number): Uint8Array {
+  const packet = new Uint8Array(32);
+  packet[0] = 1;
+  const view = new DataView(packet.buffer);
+  view.setInt32(9, value, true);
+  const encodedName = new TextEncoder().encode(name.slice(0, 8));
+  packet[13] = encodedName.length;
+  packet.set(encodedName, 14);
+  return packet;
+}
+
+function encodeMakeCodeDoubleValuePacket(name: string, value: number): Uint8Array {
+  const packet = new Uint8Array(32);
+  packet[0] = 5;
+  const view = new DataView(packet.buffer);
+  view.setFloat64(9, value, true);
+  const encodedName = new TextEncoder().encode(name.slice(0, 8));
+  packet[17] = encodedName.length;
+  packet.set(encodedName, 18);
+  return packet;
+}
+
+function encodeMakeCodeStringPacket(value: string): Uint8Array {
+  const packet = new Uint8Array(32);
+  packet[0] = 2;
+  const encoded = new TextEncoder().encode(value);
+  const length = Math.min(encoded.length, 19);
+  packet[9] = length;
+  packet.set(encoded.slice(0, length), 10);
+  return packet;
 }
 
 function decodePacketPreview(data: Uint8Array): string {

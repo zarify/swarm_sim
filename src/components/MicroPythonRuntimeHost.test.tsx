@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createBlankProject, type SwarmProject } from '../domain/project';
 import type { LoadProjectRuntimeProgramsOptions } from '../runtime/programLoader';
+import { registerRuntimeRadioSink } from '../runtime/radioDeliveryRegistry';
 import type { MicrobitRuntimeAdapter, RuntimeAdapterEvent, RuntimeProgram } from '../runtime/runtimeAdapter';
 import type { DeviceRuntimeState } from '../simulation/simulationEngine';
 import {
@@ -445,6 +446,49 @@ describe('MicroPythonRuntimeHost', () => {
     emitRuntimeEvent?.({ type: 'radio-output', packet });
 
     expect(packets).toEqual(['device-alpha:light:76']);
+  });
+
+  it('delivers routed radio packets to recipients registered by other runtime hosts', async () => {
+    const delivered: string[] = [];
+    let emitRuntimeEvent: ((event: RuntimeAdapterEvent) => void) | undefined;
+    const unregister = registerRuntimeRadioSink('device-external', async (packet) => {
+      delivered.push(new TextDecoder().decode(packet.data));
+    });
+    const project = makeProject();
+
+    try {
+      render(
+        <MicroPythonRuntimeHost
+          project={project}
+          selectedDeviceId="device-alpha"
+          onRadioPacket={(_deviceId, packet) => [
+            {
+              recipientId: 'device-external',
+              packet,
+            },
+          ]}
+          onRuntimeLog={() => {}}
+          loadPrograms={loadTargetProjectDevices}
+          createAdapter={() =>
+            makeEventAdapter((listener) => {
+              emitRuntimeEvent = listener;
+            })
+          }
+        />,
+      );
+      dispatchReadyFor('MicroPython simulator for Alpha');
+      fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+      await waitFor(() => expect(emitRuntimeEvent).toBeDefined());
+
+      emitRuntimeEvent?.({
+        type: 'radio-output',
+        packet: { data: new TextEncoder().encode('light:75'), group: 42, channel: 7 },
+      });
+
+      await waitFor(() => expect(delivered).toEqual(['light:75']));
+    } finally {
+      unregister();
+    }
   });
 
   it('deduplicates immediate identical serial outputs from the same runtime device', async () => {

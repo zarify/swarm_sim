@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useEffect, useRef } from 'react';
 import { vi } from 'vitest';
-import type { MicroPythonRuntimeHostProps } from './MicroPythonRuntimeHost';
-import { SwarmCanvasPanel } from './SwarmCanvasPanel';
+import type { MicroPythonRuntimeHostProps, RoutedRadioDelivery } from './MicroPythonRuntimeHost';
+import { SwarmCanvasPanel, translateRuntimeRadioPacketForRecipient } from './SwarmCanvasPanel';
 import makeCodeBeaconHex from '../../hex_files/mc_beacon.hex?raw';
 
 describe('SwarmCanvasPanel', () => {
@@ -335,6 +335,78 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getAllByText('Received radio packet from Alpha')).toHaveLength(1);
   });
 
+  it('translates mixed-runtime radio packets between MakeCode and MicroPython devices', async () => {
+    const mcToMp = translateRuntimeRadioPacketForRecipient(
+      { data: makeMakeCodeValuePacket('light', 76) },
+      'makecode-pxt',
+      'micropython',
+    );
+    expect(new TextDecoder().decode(mcToMp.data)).toBe('light:76');
+
+    const mpToMc = translateRuntimeRadioPacketForRecipient(
+      { data: new TextEncoder().encode('sound:13') },
+      'micropython',
+      'makecode-pxt',
+    );
+    expect(describeMakeCodeValuePacket(mpToMc.data)).toBe('value:sound:13');
+  });
+
+  it('keeps sender runtime group when translating MicroPython text packets for MakeCode recipients', async () => {
+    const deliveredPackets: RoutedRadioDelivery[][] = [];
+    render(
+      <SwarmCanvasPanel
+        RuntimeHost={(props) => (
+          <MicroPythonToMakeCodeDeliveryProbeHost
+            {...props}
+            onDeliveries={(deliveries) => deliveredPackets.push(deliveries)}
+          />
+        )}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Load code onto Alpha/), {
+      target: { files: [makeUploadFile('mp.hex', makeHexWithAscii('MicroPython'))] },
+    });
+    await waitFor(() => expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
+      target: { files: [makeUploadFile('mc_beacon.hex', makeCodeBeaconHex)] },
+    });
+    await waitFor(() => expect(screen.getByText('Runtime source: makecode-pxt')).toBeInTheDocument(), {
+      timeout: 12000,
+    });
+
+    await waitFor(() => expect(deliveredPackets.length).toBeGreaterThan(0));
+    const firstDelivery = deliveredPackets.at(-1)?.[0];
+    expect(firstDelivery?.recipientId).toBe('device-2');
+    expect(firstDelivery?.packet.group).toBe(42);
+    expect(describeMakeCodeValuePacket(firstDelivery?.packet.data ?? new Uint8Array())).toBe(
+      'value:light:77',
+    );
+  }, 30000);
+
+  it('shows a per-device error runtime state when runtime internal errors are reported', async () => {
+    const { container } = render(
+      <SwarmCanvasPanel RuntimeHost={(props) => <RuntimeErrorEmitterHost {...props} />} />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Load code onto Alpha/), {
+      target: { files: [makeUploadFile('mp.hex', makeHexWithAscii('MicroPython'))] },
+    });
+    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-runtime-state="device-alpha:error"]')).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/something went wrong/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset selected' }));
+    await waitFor(() =>
+      expect(container.querySelector('[data-runtime-state="device-alpha:error"]')).not.toBeInTheDocument(),
+    );
+  });
+
   it('pulses canvas device buttons into runtime state so hosts can consume button input', async () => {
     const buttonStates: string[] = [];
     render(<SwarmCanvasPanel RuntimeHost={(props) => <ButtonProbeHost {...props} buttonStates={buttonStates} />} />);
@@ -564,6 +636,53 @@ function DuplicateRadioPacketHost({ project, onRadioConfigHint, onRadioPacket }:
   return <div aria-label="MicroPython runtime host" />;
 }
 
+function RuntimeErrorEmitterHost({ project, onRuntimeLog }: MicroPythonRuntimeHostProps) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    const alpha = project.devices.find((device) => device.id === 'device-alpha');
+    if (emitted.current || !alpha?.programArtifactId) {
+      return;
+    }
+    emitted.current = true;
+    const timerId = globalThis.setTimeout(() => {
+      onRuntimeLog('device-alpha', 'internal-error', 'Simulated runtime crash');
+    }, 0);
+    return () => globalThis.clearTimeout(timerId);
+  }, [project, onRuntimeLog]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
+function MicroPythonToMakeCodeDeliveryProbeHost({
+  project,
+  onRadioConfigHint,
+  onRadioPacket,
+  onDeliveries,
+}: MicroPythonRuntimeHostProps & { onDeliveries: (deliveries: RoutedRadioDelivery[]) => void }) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    const alpha = project.devices.find((device) => device.id === 'device-alpha');
+    const node2 = project.devices.find((device) => device.id === 'device-2');
+    if (emitted.current || !alpha?.programArtifactId || !node2?.programArtifactId) {
+      return;
+    }
+
+    emitted.current = true;
+    const timerId = globalThis.setTimeout(() => {
+      onRadioConfigHint?.('device-alpha', { group: 42 });
+      onRadioConfigHint?.('device-2', { group: 42 });
+      onDeliveries(
+        onRadioPacket('device-alpha', {
+          data: new TextEncoder().encode('light:77'),
+        }),
+      );
+    }, 0);
+    return () => globalThis.clearTimeout(timerId);
+  }, [project, onRadioConfigHint, onRadioPacket, onDeliveries]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
 
 function makeHexWithAscii(value: string): string {
   const bytes = [...new TextEncoder().encode(value)];
@@ -608,4 +727,15 @@ function makeMakeCodeValuePacket(name: string, value: number): Uint8Array {
   bytes[13] = encodedName.length;
   bytes.set(encodedName, 14);
   return bytes;
+}
+
+function describeMakeCodeValuePacket(data: Uint8Array): string {
+  if (data[0] !== 1 || data.length < 14) {
+    return 'none';
+  }
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const value = view.getInt32(9, true);
+  const nameLength = Math.max(0, Math.min(data[13] ?? 0, 8, data.length - 14));
+  const name = new TextDecoder().decode(data.slice(14, 14 + nameLength));
+  return `value:${name}:${value}`;
 }

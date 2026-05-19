@@ -10,6 +10,10 @@ import {
 import type { RuntimeHostState, RuntimeResetRequest } from './runtimeHostControls';
 import { decompressLzmaSource } from '../runtime/lzmaDecompressor';
 import { normalizeRuntimeDisplayPixels } from '../runtime/displayPixels';
+import {
+  deliverRuntimeRadioPacket,
+  registerRuntimeRadioSink,
+} from '../runtime/radioDeliveryRegistry';
 import type {
   MicrobitRuntimeAdapter,
   RuntimeAdapterEvent,
@@ -88,6 +92,7 @@ export function MakeCodeRuntimeHost({
   const adapters = useRef(new Map<DeviceId, MicrobitRuntimeAdapter>());
   const adapterArtifactIds = useRef(new Map<DeviceId, string>());
   const adapterUnsubscribes = useRef(new Map<DeviceId, () => void>());
+  const adapterRadioSinkUnsubscribes = useRef(new Map<DeviceId, () => void>());
   const activeDeviceIds = useRef(new Set<DeviceId>());
   const lastSensorValues = useRef(new Map<DeviceId, string>());
   const lastButtonValues = useRef(new Map<DeviceId, string>());
@@ -121,7 +126,14 @@ export function MakeCodeRuntimeHost({
   }, [onRadioPacket, onRuntimeLog, onDisplayChange, onSoundOutput, onRadioConfigHint]);
 
   useEffect(
-    () => () => disposeAdapters(adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current),
+    () =>
+      () =>
+        disposeAdapters(
+          adapters.current,
+          adapterUnsubscribes.current,
+          adapterRadioSinkUnsubscribes.current,
+          adapterArtifactIds.current,
+        ),
     [],
   );
 
@@ -179,6 +191,7 @@ export function MakeCodeRuntimeHost({
         disposeAdapterForDevice(
           adapters.current,
           adapterUnsubscribes.current,
+          adapterRadioSinkUnsubscribes.current,
           adapterArtifactIds.current,
           deviceId,
           adapter,
@@ -354,6 +367,7 @@ export function MakeCodeRuntimeHost({
       disposeAdapterForDevice(
         adapters.current,
         adapterUnsubscribes.current,
+        adapterRadioSinkUnsubscribes.current,
         adapterArtifactIds.current,
         device.id,
       );
@@ -413,6 +427,11 @@ export function MakeCodeRuntimeHost({
           adapters.current.set(prepared.device.id, adapter);
           requestAdapters.push({ deviceId: prepared.device.id, adapter });
           adapterArtifactIds.current.set(prepared.device.id, prepared.artifact.id);
+          adapterRadioSinkUnsubscribes.current.get(prepared.device.id)?.();
+          adapterRadioSinkUnsubscribes.current.set(
+            prepared.device.id,
+            registerRuntimeRadioSink(prepared.device.id, (packet) => adapter.sendRadio(packet)),
+          );
           adapterUnsubscribes.current.set(
             prepared.device.id,
             adapter.onEvent((event) => handleRuntimeEvent(prepared.device.id, event)),
@@ -422,7 +441,13 @@ export function MakeCodeRuntimeHost({
       });
 
       if (loadRequestId.current !== requestId) {
-        disposeRequestAdapters(requestAdapters, adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current);
+        disposeRequestAdapters(
+          requestAdapters,
+          adapters.current,
+          adapterUnsubscribes.current,
+          adapterRadioSinkUnsubscribes.current,
+          adapterArtifactIds.current,
+        );
         return;
       }
 
@@ -443,7 +468,13 @@ export function MakeCodeRuntimeHost({
       ]);
     } catch (error) {
       if (loadRequestId.current !== requestId) {
-        disposeRequestAdapters(requestAdapters, adapters.current, adapterUnsubscribes.current, adapterArtifactIds.current);
+        disposeRequestAdapters(
+          requestAdapters,
+          adapters.current,
+          adapterUnsubscribes.current,
+          adapterRadioSinkUnsubscribes.current,
+          adapterArtifactIds.current,
+        );
         return;
       }
 
@@ -570,7 +601,9 @@ export function MakeCodeRuntimeHost({
         }
         const deliveries = callbacks.current.onRadioPacket(deviceId, event.packet);
         void Promise.all(
-          deliveries.map(({ recipientId, packet }) => adapters.current.get(recipientId)?.sendRadio(packet)),
+          deliveries.map(({ recipientId, packet }) =>
+            deliverRuntimeRadioPacket(recipientId, packet),
+          ),
         ).catch((error: unknown) => {
           callbacks.current.onRuntimeLog(
             deviceId,
@@ -920,12 +953,17 @@ function debugMakeCodeRadio(event: string, details: Record<string, unknown>): vo
 function disposeAdapters(
   adapters: Map<DeviceId, MicrobitRuntimeAdapter>,
   unsubscribes: Map<DeviceId, () => void>,
+  radioSinkUnsubscribes: Map<DeviceId, () => void>,
   artifactIds: Map<DeviceId, string>,
 ): void {
   for (const unsubscribe of unsubscribes.values()) {
     unsubscribe();
   }
   unsubscribes.clear();
+  for (const unsubscribe of radioSinkUnsubscribes.values()) {
+    unsubscribe();
+  }
+  radioSinkUnsubscribes.clear();
 
   for (const adapter of adapters.values()) {
     if ('dispose' in adapter && typeof adapter.dispose === 'function') {
@@ -940,16 +978,25 @@ function disposeRequestAdapters(
   requestAdapters: { deviceId: DeviceId; adapter: MicrobitRuntimeAdapter }[],
   adapters: Map<DeviceId, MicrobitRuntimeAdapter>,
   unsubscribes: Map<DeviceId, () => void>,
+  radioSinkUnsubscribes: Map<DeviceId, () => void>,
   artifactIds: Map<DeviceId, string>,
 ): void {
   for (const { deviceId, adapter } of requestAdapters) {
-    disposeAdapterForDevice(adapters, unsubscribes, artifactIds, deviceId, adapter);
+    disposeAdapterForDevice(
+      adapters,
+      unsubscribes,
+      radioSinkUnsubscribes,
+      artifactIds,
+      deviceId,
+      adapter,
+    );
   }
 }
 
 function disposeAdapterForDevice(
   adapters: Map<DeviceId, MicrobitRuntimeAdapter>,
   unsubscribes: Map<DeviceId, () => void>,
+  radioSinkUnsubscribes: Map<DeviceId, () => void>,
   artifactIds: Map<DeviceId, string>,
   deviceId: DeviceId,
   expectedAdapter?: MicrobitRuntimeAdapter,
@@ -961,6 +1008,8 @@ function disposeAdapterForDevice(
 
   unsubscribes.get(deviceId)?.();
   unsubscribes.delete(deviceId);
+  radioSinkUnsubscribes.get(deviceId)?.();
+  radioSinkUnsubscribes.delete(deviceId);
   if ('dispose' in adapter && typeof adapter.dispose === 'function') {
     adapter.dispose();
   }

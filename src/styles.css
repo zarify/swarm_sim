@@ -491,6 +491,10 @@ button:disabled {
   fill: rgba(255, 95, 95, 0.95);
 }
 
+.runtime-state--error circle {
+  fill: rgba(255, 95, 95, 0.95);
+}
+
 .led-pixel {
   fill: rgba(147, 169, 134, 0.26);
 }

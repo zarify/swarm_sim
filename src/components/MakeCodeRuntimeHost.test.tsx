@@ -4,6 +4,7 @@ import type {
   DeviceProgramLoadResult,
   LoadProjectRuntimeProgramsOptions,
 } from '../runtime/programLoader';
+import { registerRuntimeRadioSink } from '../runtime/radioDeliveryRegistry';
 import type { RuntimeAdapterEvent, RuntimeProgram } from '../runtime/runtimeAdapter';
 import type { DeviceRuntimeState } from '../simulation/simulationEngine';
 import { MakeCodeRuntimeHost } from './MakeCodeRuntimeHost';
@@ -188,6 +189,7 @@ describe('MakeCodeRuntimeHost', () => {
               sourceFiles: { 'main.ts': 'radio.sendString("ping")' },
             },
           });
+
           await adapter?.flash({
             source: 'makecode-pxt',
             sourceFiles: { 'main.ts': 'radio.sendString("ping")' },
@@ -246,6 +248,7 @@ describe('MakeCodeRuntimeHost', () => {
               sourceFiles: { 'main.ts': 'radio.sendString("ping")' },
             },
           });
+
           await adapter?.flash({
             source: 'makecode-pxt',
             sourceFiles: { 'main.ts': 'radio.sendString("ping")' },
@@ -279,6 +282,54 @@ describe('MakeCodeRuntimeHost', () => {
     });
 
     expect(logs).toEqual(['device-alpha:light:66']);
+  });
+
+  it('delivers routed radio packets to recipients registered by other runtime hosts', async () => {
+    const delivered: string[] = [];
+    let emitRuntimeEvent: ((event: RuntimeAdapterEvent) => void) | undefined;
+    const unregister = registerRuntimeRadioSink('device-external' as DeviceId, async (packet) => {
+      delivered.push(new TextDecoder().decode(packet.data));
+    });
+
+    try {
+      render(
+        <MakeCodeRuntimeHost
+          project={makeProject()}
+          onDisplayChange={() => {}}
+          onRadioPacket={(_deviceId, packet) => [
+            {
+              recipientId: 'device-external',
+              packet,
+            },
+          ]}
+          onRuntimeLog={() => {}}
+          onSoundOutput={() => {}}
+          onRadioConfigHint={() => {}}
+          loadPrograms={loadTargetProjectDevices}
+          createAdapter={() =>
+            makeEventAdapter((listener) => {
+              emitRuntimeEvent = listener;
+            })
+          }
+        />,
+      );
+
+      await markRunnerReady('Alpha');
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare runtime' })).not.toBeDisabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+      await waitFor(() => expect(emitRuntimeEvent).toBeDefined());
+
+      act(() => {
+        emitRuntimeEvent?.({
+          type: 'radio-output',
+          packet: { data: new TextEncoder().encode('light:75'), group: 42, channel: 7 },
+        });
+      });
+
+      await waitFor(() => expect(delivered).toEqual(['light:75']));
+    } finally {
+      unregister();
+    }
   });
 
   it('filters malformed display frames and logs the fault once until a valid frame arrives', async () => {

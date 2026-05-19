@@ -158,6 +158,31 @@ test.describe('core canvas workflows', () => {
     await expect(page.locator('.device-log__line', { hasText: "b'light:101'" })).toHaveCount(0);
   });
 
+  test('surfaces runtime internal errors as device error state and clears on reset', async ({ page }) => {
+    await page.goto('/');
+    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-runtime-state="device-alpha:ready"]')).toBeVisible({ timeout: 15_000 });
+
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')))
+      .toBe(true);
+    const simulatorFrame = page.frames().find((frame) => frame.url().includes('/micropython-patched-simulator.html'));
+    expect(simulatorFrame).toBeTruthy();
+    await simulatorFrame!.evaluate(() => {
+      window.parent.postMessage(
+        { kind: 'internal_error', error: 'Synthetic runtime failure for e2e' },
+        window.location.origin,
+      );
+    });
+
+    await expect(page.locator('[data-runtime-state="device-alpha:error"]')).toBeVisible({ timeout: 5_000 });
+
+    await page.getByRole('button', { name: 'Reset selected' }).click();
+    await expect(page.locator('[data-runtime-state="device-alpha:error"]')).toHaveCount(0);
+  });
+
   test('persists MicroPython assignment across browser save/load workflow', async ({ page }) => {
     const saveName = 'MicroPython Persisted Layout';
     await page.addInitScript((layoutName) => {
