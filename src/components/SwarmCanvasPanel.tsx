@@ -115,6 +115,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const [runtimeLoadResults, setRuntimeLoadResults] = useState<DeviceProgramLoadResult[]>([]);
   const [savedProjectSummaries, setSavedProjectSummaries] = useState<ProjectSummary[]>([]);
   const [isCanvasStateMenuOpen, setIsCanvasStateMenuOpen] = useState(false);
+  const [isSplashOpen, setIsSplashOpen] = useState(true);
   const [isRefreshingSavedProjects, setIsRefreshingSavedProjects] = useState(false);
   const [canvasStateMessage, setCanvasStateMessage] = useState<string>();
   const [isBundleDropActive, setIsBundleDropActive] = useState(false);
@@ -183,6 +184,21 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }
     void refreshSavedProjects();
   }, [isCanvasStateMenuOpen]);
+
+  useEffect(() => {
+    if (!isSplashOpen) {
+      return;
+    }
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      event.preventDefault();
+      setIsSplashOpen(false);
+    }
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isSplashOpen]);
 
   useEffect(() => {
     if (!renameTarget) {
@@ -1225,14 +1241,12 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     artifactUploadState,
     runtimeErrorByDevice,
   );
+  const deviceDisplayNames = new Map(project.devices.map((device) => [device.id, device.name] as const));
 
   return (
-    <section className="swarm-panel" aria-labelledby="swarm-title">
+    <section className="swarm-panel" aria-label="Swarm canvas">
       <div className="panel-header">
-        <div>
-          <p className="eyebrow">Swarm canvas</p>
-          <h2 id="swarm-title">Spatial radio bench</h2>
-        </div>
+        <p className="eyebrow">Swarm canvas</p>
         <div className="control-stack" aria-label="Simulation controls">
           <button type="button" onClick={resetAllDevices}>
             Reset all
@@ -1295,6 +1309,33 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
             )}
           </div>
           {canvasStateMessage ? <p className="hint">{canvasStateMessage}</p> : null}
+        </div>
+      ) : null}
+      {isSplashOpen ? (
+        <div
+          className="splash-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Simulator instructions"
+          onClick={() => setIsSplashOpen(false)}
+        >
+          <div className="splash-modal__card">
+            <button
+              type="button"
+              className="splash-modal__close"
+              aria-label="Close instructions"
+              onClick={() => setIsSplashOpen(false)}
+            >
+              ×
+            </button>
+            <p className="metric-label">Quick start</p>
+            <h3>Getting started</h3>
+            <p>
+              Drag nodes to change distance, load `.hex` files onto selected devices, and inspect packet flow in the
+              radio inspector.
+            </p>
+            <p className="hint">Click anywhere, press Escape, or use the close button to continue.</p>
+          </div>
         </div>
       ) : null}
 
@@ -1582,15 +1623,18 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                 simulationState.radioEvents
                   .slice(-6)
                   .reverse()
-                  .map((event) => (
-                    <article key={event.id} className="radio-event">
-                      <p className="radio-event__payload">{decodePacketPreview(event.data)}</p>
-                      <p className="radio-event__meta">
-                        {event.senderId} to {event.recipients.length} received /{' '}
-                        {event.blockedTargets.length} blocked
-                      </p>
-                    </article>
-                  ))
+                  .map((event) => {
+                    const senderName =
+                      deviceDisplayNames.get(event.senderId) ?? defaultDeviceNameForId(event.senderId);
+                    return (
+                      <article key={event.id} className="radio-event">
+                        <p className="radio-event__payload">{decodePacketPreview(event.data)}</p>
+                        <p className="radio-event__meta">
+                          {senderName} to {event.recipients.length} received / {event.blockedTargets.length} blocked
+                        </p>
+                      </article>
+                    );
+                  })
               )}
             </div>
           </details>
@@ -1671,9 +1715,6 @@ function DeviceSelection({
         onCommitRename={onCommitRename}
         onCancelRename={onCancelRename}
       />
-      <p>
-        x {Math.round(device.position.x)} / y {Math.round(device.position.y)}
-      </p>
       <div className="selection-actions">
         <button type="button" onClick={onResetRuntime} disabled={!device.programArtifactId}>
           Reset selected
@@ -1725,10 +1766,6 @@ function DeviceSelection({
       {runtime ? (
         <>
           <dl className="radio-summary">
-            <div>
-              <dt>Range</dt>
-              <dd>{Math.round(runtime.radio.rangeRadius)}</dd>
-            </div>
             <div>
               <dt>Light</dt>
               <dd>{runtime.sensors.lightLevel}</dd>

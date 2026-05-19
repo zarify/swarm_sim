@@ -28,7 +28,7 @@ Do not move low-level edge-case assertions from Vitest into Playwright; keep Pla
 ## Authoring conventions for new tests
 
 - Prefer semantic selectors (`getByRole`, `getByLabelText`, visible text) before CSS selectors.
-- Reuse existing UI labels and accessibility names already present in `SwarmCanvasPanel` (e.g. `Spatial radio bench`, `Canvas state`, `Load code onto Alpha`).
+- Reuse existing UI labels and accessibility names already present in `SwarmCanvasPanel` (e.g. `Simulator instructions`, `Canvas state`, `Load code onto Alpha`).
 - For upload tests, use committed fixtures under `hex_files/` instead of inline synthetic data in browser tests.
 - Keep E2E assertions on stable outcomes (assignment text, node counts, menu actions) and avoid deep iframe internals in baseline smoke tests.
 - For dialog-driven flows (`prompt`, `confirm`), prefer deterministic stubs via `page.addInitScript` and assert both cancel/accept behavior through resulting UI state.

@@ -1,19 +1,33 @@
 import path from 'node:path';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 const microPythonFixture = path.resolve(process.cwd(), 'hex_files/mp_beacon.hex');
 
-test.describe('core canvas workflows', () => {
-  test('boots into spatial radio bench and shows the canvas', async ({ page }) => {
-    await page.goto('/');
+async function gotoCanvas(page: Page) {
+  await page.goto('/');
+  await dismissSplash(page);
+}
 
-    await expect(page.getByRole('heading', { name: 'Spatial radio bench' })).toBeVisible();
+async function dismissSplash(page: Page) {
+  const splash = page.getByRole('dialog', { name: 'Simulator instructions' });
+  await expect(splash).toBeVisible();
+  await splash.click();
+  await expect(splash).toHaveCount(0);
+}
+
+test.describe('core canvas workflows', () => {
+  test('shows startup instructions and boots into the canvas after dismiss', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByRole('dialog', { name: 'Simulator instructions' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: 'Simulator instructions' })).toHaveCount(0);
+
     await expect(page.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeVisible();
     await expect(page.getByText(/1 nodes \//)).toBeVisible();
   });
 
   test('adds a device and updates telemetry count', async ({ page }) => {
-    await page.goto('/');
+    await gotoCanvas(page);
 
     await page.getByRole('button', { name: 'Add device' }).click();
 
@@ -26,7 +40,7 @@ test.describe('core canvas workflows', () => {
       window.prompt = () => layoutName;
     }, saveName);
 
-    await page.goto('/');
+    await gotoCanvas(page);
 
     await page.getByRole('button', { name: 'Canvas state' }).click();
     const saveButton = page.getByRole('button', { name: 'Save to browser' });
@@ -50,7 +64,7 @@ test.describe('core canvas workflows', () => {
       window.confirm = () => responses.shift() ?? true;
     });
 
-    await page.goto('/');
+    await gotoCanvas(page);
 
     await page.getByRole('button', { name: 'Canvas state' }).click();
     const clearButton = page.getByRole('button', { name: 'Clear canvas' });
@@ -67,7 +81,7 @@ test.describe('core canvas workflows', () => {
     await page.addInitScript(() => {
       window.confirm = () => true;
     });
-    await page.goto('/');
+    await gotoCanvas(page);
 
     await page.getByRole('button', { name: 'Canvas state' }).click();
     await page.getByLabel('Upload bundle').setInputFiles({
@@ -87,7 +101,7 @@ test.describe('core canvas workflows', () => {
       }
     });
 
-    await page.goto('/');
+    await gotoCanvas(page);
 
     await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
 
@@ -107,10 +121,13 @@ test.describe('core canvas workflows', () => {
       .toEqual([]);
   });
 
-  test('delivers radio packets between two default MicroPython nodes', async ({ page }) => {
-    await page.goto('/');
+  test('delivers radio packets and shows renamed sender names in radio inspector', async ({ page }) => {
+    await gotoCanvas(page);
+    await page.getByRole('button', { name: 'Rename selected node' }).click();
+    await page.getByLabel('Edit node name').fill('Sensors');
+    await page.getByLabel('Edit node name').press('Enter');
 
-    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await page.getByLabel(/Load code onto Sensors/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
 
     await page.getByRole('button', { name: 'Add device' }).click();
@@ -124,7 +141,7 @@ test.describe('core canvas workflows', () => {
       .poll(
         async () => {
           const metaLines = await page.locator('.radio-event__meta').allTextContents();
-          return metaLines.some((line) => /to\s+1\s+received/i.test(line));
+          return metaLines.some((line) => /sensors\s+to\s+1\s+received/i.test(line));
         },
         { timeout: 15_000 },
       )
@@ -132,7 +149,7 @@ test.describe('core canvas workflows', () => {
   });
 
   test('coalesces fragmented MicroPython serial output into one runtime log line', async ({ page }) => {
-    await page.goto('/');
+    await gotoCanvas(page);
     await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
@@ -159,7 +176,7 @@ test.describe('core canvas workflows', () => {
   });
 
   test('surfaces runtime internal errors as device error state and clears on reset', async ({ page }) => {
-    await page.goto('/');
+    await gotoCanvas(page);
     await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
@@ -189,7 +206,7 @@ test.describe('core canvas workflows', () => {
       window.prompt = () => layoutName;
     }, saveName);
 
-    await page.goto('/');
+    await gotoCanvas(page);
     await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
@@ -209,7 +226,7 @@ test.describe('core canvas workflows', () => {
   });
 
   test('renames selected nodes from the side panel for both devices and sources', async ({ page }) => {
-    await page.goto('/');
+    await gotoCanvas(page);
 
     const longDeviceName = 'Device name that is intentionally too long for compact labels';
     await page.getByRole('button', { name: 'Rename selected node' }).click();
