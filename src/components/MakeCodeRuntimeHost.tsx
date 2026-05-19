@@ -42,6 +42,7 @@ export interface MakeCodeRuntimeHostProps {
   scenarioResetSignal?: number;
   autoPrepare?: boolean;
   prepareEnabled?: boolean;
+  showHostCard?: boolean;
   showSimulatorFrames?: boolean;
   headless?: boolean;
   onRadioPacket: (deviceId: DeviceId, packet: RuntimeRadioPacket) => RoutedRadioDelivery[];
@@ -74,6 +75,7 @@ export function MakeCodeRuntimeHost({
   scenarioResetSignal = 0,
   autoPrepare = false,
   prepareEnabled = true,
+  showHostCard = true,
   showSimulatorFrames = true,
   headless = false,
   onRadioPacket,
@@ -716,7 +718,7 @@ export function MakeCodeRuntimeHost({
     </div>
   );
 
-  if (headless) {
+  if (headless || !showHostCard) {
     return <div className="runtime-host-mount runtime-host-mount--hidden">{iframeGrid}</div>;
   }
 

@@ -8,6 +8,7 @@ export function SwarmRuntimeHosts({
   onLoadResultsChange,
   headless,
   resetRequest,
+  showHostCard = false,
   ...props
 }: MicroPythonRuntimeHostProps) {
   const [microPythonResults, setMicroPythonResults] = useState<DeviceProgramLoadResult[]>([]);
@@ -95,7 +96,7 @@ export function SwarmRuntimeHosts({
           autoPrepare
           prepareEnabled={allRuntimeHostsReady}
           showSimulatorFrames={false}
-          showHostCard={false}
+          showHostCard={showHostCard}
           onRuntimeHostStateChange={setMicroPythonHostState}
           onLoadResultsChange={setMicroPythonResults}
         />
@@ -110,6 +111,7 @@ export function SwarmRuntimeHosts({
           headless={headless}
           autoPrepare
           prepareEnabled={allRuntimeHostsReady}
+          showHostCard={showHostCard}
           showSimulatorFrames={false}
           onRadioPacket={props.onRadioPacket}
           onRuntimeLog={props.onRuntimeLog}

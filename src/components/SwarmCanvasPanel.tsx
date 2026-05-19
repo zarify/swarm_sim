@@ -116,6 +116,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const [savedProjectSummaries, setSavedProjectSummaries] = useState<ProjectSummary[]>([]);
   const [isCanvasStateMenuOpen, setIsCanvasStateMenuOpen] = useState(false);
   const [isSplashOpen, setIsSplashOpen] = useState(true);
+  const [isDebugModalOpen, setIsDebugModalOpen] = useState(false);
   const [isRefreshingSavedProjects, setIsRefreshingSavedProjects] = useState(false);
   const [canvasStateMessage, setCanvasStateMessage] = useState<string>();
   const [isBundleDropActive, setIsBundleDropActive] = useState(false);
@@ -199,6 +200,21 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isSplashOpen]);
+
+  useEffect(() => {
+    if (!isDebugModalOpen) {
+      return;
+    }
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      event.preventDefault();
+      setIsDebugModalOpen(false);
+    }
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isDebugModalOpen]);
 
   useEffect(() => {
     if (!renameTarget) {
@@ -1257,30 +1273,55 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
             aria-controls="canvas-state-panel"
             onClick={() => setIsCanvasStateMenuOpen((current) => !current)}
           >
-            Canvas state
+            Swarm tools
           </button>
         </div>
       </div>
       {isCanvasStateMenuOpen ? (
-        <div id="canvas-state-panel" className="canvas-state-panel" aria-label="Canvas state controls">
-          <div className="canvas-state-panel__actions">
-            <button type="button" onClick={() => void saveCurrentLayoutToBrowser()}>
-              Save to browser
-            </button>
-            <button type="button" onClick={() => void downloadCanvasBundle()}>
-              Download bundle
-            </button>
-            <label className="canvas-state-upload">
-              Upload bundle
-              <input
-                type="file"
-                accept=".swarm"
-                onChange={handleBundleFileInput}
-              />
-            </label>
-            <button type="button" onClick={clearCanvasLayout}>
-              Clear canvas
-            </button>
+        <div id="canvas-state-panel" className="canvas-state-panel" aria-label="Swarm tool controls">
+          <div className="canvas-state-panel__section">
+            <span className="metric-label">Swarm tools</span>
+            <div className="canvas-state-panel__actions">
+              <button type="button" onClick={addDevice}>
+                Add device
+              </button>
+              <button type="button" onClick={() => addSource('light')}>
+                Add light
+              </button>
+              <button type="button" onClick={() => addSource('sound')}>
+                Add sound
+              </button>
+              <label className="toggle-field canvas-state-toggle">
+                <input
+                  type="checkbox"
+                  checked={showRadioRange}
+                  onChange={(event) => setShowRadioRange(event.target.checked)}
+                />
+                Radio range overlay
+              </label>
+            </div>
+          </div>
+          <div className="canvas-state-panel__section">
+            <span className="metric-label">Canvas state</span>
+            <div className="canvas-state-panel__actions">
+              <button type="button" onClick={() => void saveCurrentLayoutToBrowser()}>
+                Save to browser
+              </button>
+              <button type="button" onClick={() => void downloadCanvasBundle()}>
+                Download bundle
+              </button>
+              <label className="canvas-state-upload">
+                Upload bundle
+                <input
+                  type="file"
+                  accept=".swarm"
+                  onChange={handleBundleFileInput}
+                />
+              </label>
+              <button type="button" onClick={clearCanvasLayout}>
+                Clear canvas
+              </button>
+            </div>
           </div>
           <div
             className={isBundleDropActive ? 'canvas-state-drop canvas-state-drop--active' : 'canvas-state-drop'}
@@ -1541,26 +1582,6 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               Drop .hex to load onto <strong>{selectedDevice?.name}</strong>
             </div>
           ) : null}
-          <div className="toolbar-card">
-            <span className="metric-label">Canvas tools</span>
-            <button type="button" onClick={addDevice}>
-              Add device
-            </button>
-            <button type="button" onClick={() => addSource('light')}>
-              Add light
-            </button>
-            <button type="button" onClick={() => addSource('sound')}>
-              Add sound
-            </button>
-            <label className="toggle-field">
-              <input
-                type="checkbox"
-                checked={showRadioRange}
-                onChange={(event) => setShowRadioRange(event.target.checked)}
-              />
-              Radio range overlay
-            </label>
-          </div>
 
           <div className="selection-card">
             <span className="metric-label">Selection</span>
@@ -1603,14 +1624,6 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
             )}
           </div>
 
-          <div className="telemetry-card" aria-live="polite">
-            <span className="metric-label">Engine telemetry</span>
-            <p>
-              {project.devices.length} nodes / {simulationState.radioLinks.filter((link) => link.canCommunicate).length}{' '}
-              active directed radio links
-            </p>
-          </div>
-
           <details className="radio-inspector-card compact-inspector" aria-label="Radio message inspector">
             <summary>
               <span className="metric-label">Radio inspector</span>
@@ -1638,22 +1651,63 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               )}
             </div>
           </details>
+          <div className="swarm-sidebar-footer">
+            <button
+              type="button"
+              className="swarm-sidebar-debug-button"
+              aria-haspopup="dialog"
+              aria-expanded={isDebugModalOpen}
+              aria-controls="debug-tools-modal"
+              onClick={() => setIsDebugModalOpen(true)}
+            >
+              Debug
+            </button>
+          </div>
         </aside>
       </div>
-      <RuntimeHost
-        project={project}
-        selectedDeviceId={selectedDevice?.id}
-        resetRequest={runtimeResetRequest}
-        headless={false}
-        deviceRuntimeStates={simulationState.devices}
-        scenarioResetSignal={scenarioResetSignal}
-        onRadioPacket={handleRuntimeRadioPacket}
-        onRuntimeLog={handleRuntimeLog}
-        onDisplayChange={handleRuntimeDisplayChange}
-        onSoundOutput={handleRuntimeSoundOutput}
-        onRadioConfigHint={handleRuntimeRadioConfigHint}
-        onLoadResultsChange={handleRuntimeLoadResults}
-      />
+      <div
+        id="debug-tools-modal"
+        className={isDebugModalOpen ? 'debug-modal' : 'debug-modal debug-modal--hidden'}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Debug tools"
+        aria-hidden={!isDebugModalOpen}
+        onClick={() => setIsDebugModalOpen(false)}
+      >
+        <div className="debug-modal__card" onClick={(event) => event.stopPropagation()}>
+          <button
+            type="button"
+            className="debug-modal__close"
+            aria-label="Close debug tools"
+            onClick={() => setIsDebugModalOpen(false)}
+          >
+            ×
+          </button>
+          <p className="metric-label">Debug tools</p>
+          <div className="telemetry-card" aria-live="polite">
+            <span className="metric-label">Engine telemetry</span>
+            <p>
+              {project.devices.length} nodes / {simulationState.radioLinks.filter((link) => link.canCommunicate).length}{' '}
+              active directed radio links
+            </p>
+          </div>
+          <RuntimeHost
+            project={project}
+            selectedDeviceId={selectedDevice?.id}
+            resetRequest={runtimeResetRequest}
+            headless={false}
+            showHostCard={isDebugModalOpen}
+            deviceRuntimeStates={simulationState.devices}
+            scenarioResetSignal={scenarioResetSignal}
+            onRadioPacket={handleRuntimeRadioPacket}
+            onRuntimeLog={handleRuntimeLog}
+            onDisplayChange={handleRuntimeDisplayChange}
+            onSoundOutput={handleRuntimeSoundOutput}
+            onRadioConfigHint={handleRuntimeRadioConfigHint}
+            onLoadResultsChange={handleRuntimeLoadResults}
+          />
+        </div>
+      </div>
     </section>
   );
 }
@@ -1717,52 +1771,12 @@ function DeviceSelection({
       />
       <div className="selection-actions">
         <button type="button" onClick={onResetRuntime} disabled={!device.programArtifactId}>
-          Reset selected
+          <span aria-hidden="true">↺</span> Reset
         </button>
         <button type="button" onClick={onDeleteNode}>
-          Delete node
+          <span aria-hidden="true">🗑</span> Delete
         </button>
       </div>
-      <label className="artifact-field artifact-field--compact">
-        Load code onto {device.name}
-        <input
-          type="file"
-          accept=".hex"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) {
-              void onArtifactUpload(device.id, file);
-            }
-            event.currentTarget.value = '';
-          }}
-        />
-      </label>
-      <p>{device.programArtifactId ? `Assigned: ${artifactName(project, device.programArtifactId)}` : 'No code assigned yet'}</p>
-      {assignedArtifact ? <p>Runtime source: {assignedArtifact.runtimeSource}</p> : null}
-      {uploadIssue ? (
-        <p className={uploadIssue.severity === 'error' ? 'hint hint--error' : 'hint'}>
-          {uploadIssue.message}
-        </p>
-      ) : null}
-      {uploadState === 'uploading' ? (
-        <p>
-          Runtime: <strong>loading</strong>
-        </p>
-      ) : null}
-      {runtimeLoadResult ? (
-        <p>
-          Runtime: <strong>{runtimeLoadResult.status}</strong>
-        </p>
-      ) : device.programArtifactId && uploadState !== 'uploading' ? (
-        <p>
-          Runtime: <strong>pending</strong>
-        </p>
-      ) : null}
-      {runtimeError ? (
-        <p className="hint hint--error">
-          Runtime: <strong>something went wrong</strong> — {runtimeError}
-        </p>
-      ) : null}
       {runtime ? (
         <>
           <dl className="radio-summary">
@@ -1798,6 +1812,48 @@ function DeviceSelection({
           )}
         </div>
       </details>
+      <div className="selection-artifact-block">
+        <label className="artifact-field artifact-field--compact">
+          Load code onto {device.name}
+          <input
+            type="file"
+            accept=".hex"
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) {
+                void onArtifactUpload(device.id, file);
+              }
+              event.currentTarget.value = '';
+            }}
+          />
+        </label>
+        <p>{device.programArtifactId ? `Assigned: ${artifactName(project, device.programArtifactId)}` : 'No code assigned yet'}</p>
+        {assignedArtifact ? <p>Runtime source: {assignedArtifact.runtimeSource}</p> : null}
+        {uploadIssue ? (
+          <p className={uploadIssue.severity === 'error' ? 'hint hint--error' : 'hint'}>
+            {uploadIssue.message}
+          </p>
+        ) : null}
+        {uploadState === 'uploading' ? (
+          <p>
+            Runtime: <strong>loading</strong>
+          </p>
+        ) : null}
+        {runtimeLoadResult ? (
+          <p>
+            Runtime: <strong>{runtimeLoadResult.status}</strong>
+          </p>
+        ) : device.programArtifactId && uploadState !== 'uploading' ? (
+          <p>
+            Runtime: <strong>pending</strong>
+          </p>
+        ) : null}
+        {runtimeError ? (
+          <p className="hint hint--error">
+            Runtime: <strong>something went wrong</strong> — {runtimeError}
+          </p>
+        ) : null}
+      </div>
     </>
   );
 }
@@ -1838,7 +1894,7 @@ function SourceSelection({
       <p className="hint">{source.type === 'light' ? 'Light source' : 'Sound source'}</p>
       <div className="selection-actions">
         <button type="button" onClick={onDeleteNode}>
-          Delete node
+          <span aria-hidden="true">🗑</span> Delete
         </button>
       </div>
       <label className="range-field">
@@ -1894,6 +1950,7 @@ function SelectionNameEditor({
         aria-label="Edit node name"
         autoFocus
         value={renameDraft}
+        onFocus={(event) => event.currentTarget.select()}
         onChange={(event) => onRenameDraftChange(event.target.value)}
         onBlur={onCancelRename}
         onKeyDown={(event) => {

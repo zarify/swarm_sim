@@ -150,6 +150,43 @@ h2 {
   line-height: 1;
 }
 
+.debug-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 10, 12, 0.84);
+}
+
+.debug-modal--hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.debug-modal__card {
+  position: relative;
+  width: min(720px, calc(100% - 32px));
+  max-height: calc(100vh - 72px);
+  overflow-y: auto;
+  border: 1px solid rgba(105, 247, 255, 0.36);
+  padding: 20px 20px 18px;
+  background: linear-gradient(135deg, rgba(11, 29, 31, 0.98), rgba(7, 18, 20, 0.96));
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+}
+
+.debug-modal__close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  min-width: 36px;
+  padding: 6px 10px;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
 .status-pill {
   border: 1px solid currentColor;
   padding: 8px 12px;
@@ -196,7 +233,7 @@ h2 {
 }
 
 .artifact-field--compact {
-  margin-top: 18px;
+  margin-top: 0;
 }
 
 .artifact-field--compact input {
@@ -317,10 +354,27 @@ h2 {
   gap: 10px;
 }
 
+.canvas-state-panel__section {
+  display: grid;
+  gap: 8px;
+}
+
 .canvas-state-panel__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.canvas-state-toggle {
+  margin-top: 0;
+  width: auto;
+  border: 1px solid rgba(105, 247, 255, 0.38);
+  padding: 8px 12px;
+  background: rgba(105, 247, 255, 0.08);
+}
+
+.canvas-state-toggle input {
+  margin: 0;
 }
 
 .canvas-state-upload {
@@ -393,12 +447,6 @@ button:disabled {
 
 .canvas-wrap {
   min-height: 420px;
-  border: 1px solid rgba(105, 247, 255, 0.24);
-  background:
-    linear-gradient(90deg, rgba(105, 247, 255, 0.07) 1px, transparent 1px),
-    linear-gradient(0deg, rgba(105, 247, 255, 0.06) 1px, transparent 1px),
-    rgba(0, 0, 0, 0.2);
-  background-size: 36px 36px;
 }
 
 .swarm-canvas {
@@ -407,6 +455,12 @@ button:disabled {
   height: min(60vw, 560px);
   min-height: 420px;
   touch-action: none;
+  border: 1px solid rgba(105, 247, 255, 0.24);
+  background:
+    linear-gradient(90deg, rgba(105, 247, 255, 0.07) 1px, transparent 1px),
+    linear-gradient(0deg, rgba(105, 247, 255, 0.06) 1px, transparent 1px),
+    rgba(0, 0, 0, 0.2);
+  background-size: 36px 36px;
 }
 
 .canvas-field {
@@ -566,10 +620,18 @@ button:disabled {
 }
 
 .swarm-sidebar {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
-  align-content: start;
   position: relative;
+}
+
+.swarm-sidebar-footer {
+  margin-top: auto;
+}
+
+.swarm-sidebar-debug-button {
+  width: 100%;
 }
 
 .swarm-sidebar--drop-enabled {
@@ -690,8 +752,30 @@ button:disabled {
 .selection-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   margin-top: 10px;
+}
+
+.selection-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  font-size: 0.7rem;
+}
+
+.selection-artifact-block {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(147, 169, 134, 0.2);
+  display: grid;
+  gap: 6px;
+}
+
+.selection-artifact-block p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
 }
 
 .radio-summary {

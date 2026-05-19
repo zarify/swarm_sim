@@ -9,6 +9,22 @@ async function gotoCanvas(page: Page) {
   await dismissSplash(page);
 }
 
+async function openSwarmTools(page: Page) {
+  if ((await page.getByRole('button', { name: 'Add device' }).count()) === 0) {
+    await page.getByRole('button', { name: 'Swarm tools' }).click();
+  }
+}
+
+async function addDeviceFromSwarmTools(page: Page) {
+  await openSwarmTools(page);
+  await page.getByRole('button', { name: 'Add device' }).click();
+}
+
+async function addLightFromSwarmTools(page: Page) {
+  await openSwarmTools(page);
+  await page.getByRole('button', { name: 'Add light' }).click();
+}
+
 async function dismissSplash(page: Page) {
   const splash = page.getByRole('dialog', { name: 'Simulator instructions' });
   await expect(splash).toBeVisible();
@@ -24,15 +40,27 @@ test.describe('core canvas workflows', () => {
     await expect(page.getByRole('dialog', { name: 'Simulator instructions' })).toHaveCount(0);
 
     await expect(page.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeVisible();
-    await expect(page.getByText(/1 nodes \//)).toBeVisible();
+    await expect(page.locator('.microbit-node')).toHaveCount(1);
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toHaveCount(0);
   });
 
   test('adds a device and updates telemetry count', async ({ page }) => {
     await gotoCanvas(page);
 
-    await page.getByRole('button', { name: 'Add device' }).click();
+    await addDeviceFromSwarmTools(page);
 
-    await expect(page.getByText(/2 nodes \//)).toBeVisible();
+    await expect(page.locator('.microbit-node')).toHaveCount(2);
+  });
+
+  test('keeps telemetry behind the debug modal until opened', async ({ page }) => {
+    await gotoCanvas(page);
+
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByText(/1 nodes \//)).toBeVisible();
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toHaveCount(0);
   });
 
   test('saves layout to browser state and can load it back', async ({ page }) => {
@@ -43,7 +71,7 @@ test.describe('core canvas workflows', () => {
 
     await gotoCanvas(page);
 
-    await page.getByRole('button', { name: 'Canvas state' }).click();
+    await page.getByRole('button', { name: 'Swarm tools' }).click();
     const saveButton = page.getByRole('button', { name: 'Save to browser' });
     await expect(saveButton).toBeVisible();
 
@@ -52,11 +80,11 @@ test.describe('core canvas workflows', () => {
     const loadLayoutButton = page.getByRole('button', { name: `Load ${saveName}` });
     await expect(loadLayoutButton).toBeVisible();
 
-    await page.getByRole('button', { name: 'Add device' }).click();
-    await expect(page.getByText(/2 nodes \//)).toBeVisible();
+    await addDeviceFromSwarmTools(page);
+    await expect(page.locator('.microbit-node')).toHaveCount(2);
 
     await loadLayoutButton.click();
-    await expect(page.getByText(/1 nodes \//)).toBeVisible();
+    await expect(page.locator('.microbit-node')).toHaveCount(1);
   });
 
   test('clear canvas respects confirmation dialog', async ({ page }) => {
@@ -67,15 +95,15 @@ test.describe('core canvas workflows', () => {
 
     await gotoCanvas(page);
 
-    await page.getByRole('button', { name: 'Canvas state' }).click();
+    await page.getByRole('button', { name: 'Swarm tools' }).click();
     const clearButton = page.getByRole('button', { name: 'Clear canvas' });
     await expect(clearButton).toBeVisible();
 
     await clearButton.click({ force: true });
-    await expect(page.getByText(/1 nodes \//)).toBeVisible();
+    await expect(page.locator('.microbit-node')).toHaveCount(1);
 
     await clearButton.click({ force: true });
-    await expect(page.getByText(/0 nodes \//)).toBeVisible();
+    await expect(page.locator('.microbit-node')).toHaveCount(0);
   });
 
   test('rejects legacy JSON files in bundle uploader', async ({ page }) => {
@@ -84,7 +112,7 @@ test.describe('core canvas workflows', () => {
     });
     await gotoCanvas(page);
 
-    await page.getByRole('button', { name: 'Canvas state' }).click();
+    await page.getByRole('button', { name: 'Swarm tools' }).click();
     await page.getByLabel('Upload bundle').setInputFiles({
       name: 'legacy.swarm',
       mimeType: 'application/octet-stream',
@@ -131,9 +159,9 @@ test.describe('core canvas workflows', () => {
     await page.getByLabel(/Load code onto Sensors/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
 
-    await page.getByRole('button', { name: 'Add device' }).click();
+    await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(microPythonFixture);
-    await expect(page.getByText(/2 nodes \//)).toBeVisible();
+    await expect(page.locator('.microbit-node')).toHaveCount(2);
 
     const radioInspector = page.locator('details[aria-label="Radio message inspector"]');
     await radioInspector.locator('summary').click();
@@ -155,7 +183,7 @@ test.describe('core canvas workflows', () => {
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
 
-    await page.getByRole('button', { name: 'Add device' }).click();
+    await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
     await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
@@ -280,7 +308,7 @@ test.describe('core canvas workflows', () => {
 
     await expect(page.locator('[data-runtime-state="device-alpha:error"]')).toBeVisible({ timeout: 5_000 });
 
-    await page.getByRole('button', { name: 'Reset selected' }).click();
+    await page.getByRole('button', { name: /^Reset$/ }).click();
     await expect(page.locator('[data-runtime-state="device-alpha:error"]')).toHaveCount(0);
   });
 
@@ -295,16 +323,16 @@ test.describe('core canvas workflows', () => {
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
 
-    await page.getByRole('button', { name: 'Canvas state' }).click();
+    await page.getByRole('button', { name: 'Swarm tools' }).click();
     await page.getByRole('button', { name: 'Save to browser' }).click({ force: true });
     const loadButton = page.getByRole('button', { name: `Load ${saveName}` });
     await expect(loadButton).toBeVisible();
 
-    await page.getByRole('button', { name: 'Add device' }).click();
-    await expect(page.getByText(/2 nodes \//)).toBeVisible();
+    await addDeviceFromSwarmTools(page);
+    await expect(page.locator('.microbit-node')).toHaveCount(2);
 
     await loadButton.click();
-    await expect(page.getByText(/1 nodes \//)).toBeVisible();
+    await expect(page.locator('.microbit-node')).toHaveCount(1);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
   });
@@ -322,7 +350,7 @@ test.describe('core canvas workflows', () => {
     await expect(sidebarName).toContainText(/…$/);
     await expect(page.locator('.node-label').first()).toContainText(/…$/);
 
-    await page.getByRole('button', { name: 'Add light' }).click();
+    await addLightFromSwarmTools(page);
     await page.locator('g.source-node--light').first().click();
     await page.getByRole('button', { name: 'Rename selected node' }).click();
     await page.getByLabel('Edit node name').fill('Ambient source');
