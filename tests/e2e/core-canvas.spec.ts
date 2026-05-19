@@ -260,6 +260,88 @@ test.describe('core canvas workflows', () => {
     expect(postResetGroups).not.toContain(0);
   });
 
+  test('keeps runtime radio delivery working after opening and closing debug tools', async ({ page }) => {
+    await gotoCanvas(page);
+    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+
+    await addDeviceFromSwarmTools(page);
+    await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    const makeCodeRunner = page.frames().find((frame) => frame.url().includes('/makecode-patched-runner.html'));
+    expect(makeCodeRunner).toBeTruthy();
+    await makeCodeRunner!.evaluate(() => {
+      const scopedWindow = window as unknown as {
+        __swarmInboundRadioGroups?: number[];
+      };
+      scopedWindow.__swarmInboundRadioGroups = [];
+      window.addEventListener('message', (event) => {
+        if (
+          event.origin === window.location.origin &&
+          event.data?.type === 'swarm-radio-input' &&
+          typeof event.data?.packet?.group === 'number'
+        ) {
+          scopedWindow.__swarmInboundRadioGroups?.push(event.data.packet.group);
+        }
+      });
+    });
+
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')))
+      .toBe(true);
+    const microPythonSimulator = page.frames().find((frame) =>
+      frame.url().includes('/micropython-patched-simulator.html'),
+    );
+    expect(microPythonSimulator).toBeTruthy();
+    const emitMicroPythonRadioOutput = async () => {
+      await microPythonSimulator!.evaluate(() => {
+        const payload = Array.from(new TextEncoder().encode('light:77'));
+        window.parent.postMessage(
+          { kind: 'radio_output', data: [0x01, 0x00, 0x01, ...payload] },
+          window.location.origin,
+        );
+      });
+    };
+
+    await emitMicroPythonRadioOutput();
+    await expect
+      .poll(
+        () =>
+          makeCodeRunner!.evaluate(
+            () =>
+              (window as unknown as { __swarmInboundRadioGroups?: number[] }).__swarmInboundRadioGroups ??
+              [],
+          ),
+        { timeout: 15_000 },
+      )
+      .toContain(42);
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toHaveCount(0);
+
+    await makeCodeRunner!.evaluate(() => {
+      (window as unknown as { __swarmInboundRadioGroups?: number[] }).__swarmInboundRadioGroups = [];
+    });
+    await emitMicroPythonRadioOutput();
+
+    await expect
+      .poll(
+        () =>
+          makeCodeRunner!.evaluate(
+            () =>
+              (window as unknown as { __swarmInboundRadioGroups?: number[] }).__swarmInboundRadioGroups ??
+              [],
+          ),
+        { timeout: 15_000 },
+      )
+      .toContain(42);
+  });
+
   test('coalesces fragmented MicroPython serial output into one runtime log line', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);

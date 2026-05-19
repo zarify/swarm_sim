@@ -62,6 +62,39 @@ describe('MakeCodeRuntimeHost', () => {
     expect(flashed).toHaveLength(1);
   });
 
+  it('keeps the same simulator iframe when toggling host card visibility', () => {
+    const project = makeProject();
+    const { rerender } = render(
+      <MakeCodeRuntimeHost
+        project={project}
+        showHostCard={false}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+      />,
+    );
+    const initialFrame = screen.getByTitle('MakeCode simulator for Alpha');
+
+    rerender(
+      <MakeCodeRuntimeHost
+        project={project}
+        showHostCard
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+      />,
+    );
+    expect(screen.getByTitle('MakeCode simulator for Alpha')).toBe(initialFrame);
+
+    rerender(
+      <MakeCodeRuntimeHost
+        project={project}
+        showHostCard={false}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+      />,
+    );
+    expect(screen.getByTitle('MakeCode simulator for Alpha')).toBe(initialFrame);
+  });
+
   it('forwards MakeCode adapter display, radio, and serial events through host callbacks', async () => {
     const displayChanges: string[] = [];
     const logs: string[] = [];

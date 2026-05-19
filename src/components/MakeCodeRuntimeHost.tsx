@@ -702,29 +702,22 @@ export function MakeCodeRuntimeHost({
     void loadRuntimes(devices);
   }, [autoPrepare, prepareEnabled, devices, allFramesReady, isLoading]);
 
-  const iframeGrid = (
-    <div className="runtime-frame-grid runtime-frame-grid--hidden" data-frame-version={frameVersion}>
-      {devices.map((device) => (
-        <article key={device.id} className="runtime-frame-card runtime-frame-card--hidden">
-          <iframe
-            ref={frameRefs.get(device.id)}
-            title={`MakeCode simulator for ${device.name}`}
-            src={MAKECODE_SIMULATOR_RUNNER_URL}
-            sandbox="allow-scripts allow-same-origin"
-            scrolling="no"
-          />
-        </article>
-      ))}
-    </div>
-  );
-
-  if (headless || !showHostCard) {
-    return <div className="runtime-host-mount runtime-host-mount--hidden">{iframeGrid}</div>;
-  }
+  const hostCardVisible = !headless && showHostCard;
+  const frameGridClassName =
+    hostCardVisible && showSimulatorFrames
+      ? 'runtime-frame-grid'
+      : 'runtime-frame-grid runtime-frame-grid--hidden';
+  const frameCardClassName =
+    hostCardVisible && showSimulatorFrames
+      ? 'runtime-frame-card'
+      : 'runtime-frame-card runtime-frame-card--hidden';
 
   return (
-    <div className="runtime-host-card" aria-label="MakeCode runtime host">
-      <div>
+    <div
+      className={hostCardVisible ? 'runtime-host-card' : 'runtime-host-mount runtime-host-mount--hidden'}
+      aria-label={hostCardVisible ? 'MakeCode runtime host' : undefined}
+    >
+      <div hidden={!hostCardVisible}>
         <span className="metric-label">MakeCode runtime host</span>
         <strong>
           {devices.length === 0 ? 'No MakeCode runtime' : `${readyFrames}/${devices.length} simulator(s) ready`}
@@ -733,7 +726,7 @@ export function MakeCodeRuntimeHost({
           Patched MakeCode simulator runners execute programs and receive environment-driven inputs.
         </p>
       </div>
-      <div className="runtime-host-actions">
+      <div className="runtime-host-actions" hidden={!hostCardVisible}>
         {autoPrepare ? (
           <button type="button" onClick={() => loadRuntimes(devices)} disabled={isLoading || !allFramesReady}>
             {isLoading ? 'Loading runtimes...' : devices.length <= 1 ? 'Reload runtime' : 'Reload all'}
@@ -769,15 +762,9 @@ export function MakeCodeRuntimeHost({
           Reset all runtimes
         </button>
       </div>
-      <div
-        className={showSimulatorFrames ? 'runtime-frame-grid' : 'runtime-frame-grid runtime-frame-grid--hidden'}
-        data-frame-version={frameVersion}
-      >
+      <div className={frameGridClassName} data-frame-version={frameVersion}>
         {devices.map((device) => (
-          <article
-            key={device.id}
-            className={showSimulatorFrames ? 'runtime-frame-card' : 'runtime-frame-card runtime-frame-card--hidden'}
-          >
+          <article key={device.id} className={frameCardClassName}>
             <div className="runtime-frame-card__header">
               <strong>{device.name}</strong>
               <span>
@@ -794,7 +781,7 @@ export function MakeCodeRuntimeHost({
           </article>
         ))}
       </div>
-      {showSimulatorFrames ? (
+      {hostCardVisible && showSimulatorFrames ? (
         <div className="runtime-frame-grid">
           {devices.map((device) => {
             const prepared = preparedDeviceIds.has(device.id);
@@ -856,7 +843,7 @@ export function MakeCodeRuntimeHost({
           })}
         </div>
       ) : null}
-      {loadResults.length > 0 ? (
+      {hostCardVisible && loadResults.length > 0 ? (
         <div className="runtime-load-list" aria-label="MakeCode runtime load results">
           {loadResults.map((result) => (
             <p key={result.deviceId}>

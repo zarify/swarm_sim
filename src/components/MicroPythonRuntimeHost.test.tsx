@@ -44,6 +44,39 @@ describe('MicroPythonRuntimeHost', () => {
     expect(screen.getByTitle('MicroPython simulator for Alpha')).toBeInTheDocument();
   });
 
+  it('keeps the same simulator iframe when toggling host card visibility', () => {
+    const project = makeProject();
+    const { rerender } = render(
+      <MicroPythonRuntimeHost
+        project={project}
+        showHostCard={false}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+      />,
+    );
+    const initialFrame = screen.getByTitle('MicroPython simulator for Alpha');
+
+    rerender(
+      <MicroPythonRuntimeHost
+        project={project}
+        showHostCard
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+      />,
+    );
+    expect(screen.getByTitle('MicroPython simulator for Alpha')).toBe(initialFrame);
+
+    rerender(
+      <MicroPythonRuntimeHost
+        project={project}
+        showHostCard={false}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+      />,
+    );
+    expect(screen.getByTitle('MicroPython simulator for Alpha')).toBe(initialFrame);
+  });
+
   it('loads MicroPython programs through iframe-backed adapters', async () => {
     const flashed: RuntimeProgram[] = [];
 

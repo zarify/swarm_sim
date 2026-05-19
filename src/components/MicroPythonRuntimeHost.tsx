@@ -620,29 +620,22 @@ export function MicroPythonRuntimeHost({
     void loadRuntimes(devices);
   }, [autoPrepare, prepareEnabled, devices, allFramesReady, isLoading]);
 
-  const iframeGrid = (
-    <div className="runtime-frame-grid runtime-frame-grid--hidden" data-frame-version={frameVersion}>
-      {devices.map((device) => (
-        <article key={device.id} className="runtime-frame-card runtime-frame-card--hidden">
-          <iframe
-            ref={frameRefs.get(device.id)}
-            title={`MicroPython simulator for ${device.name}`}
-            src={MICRO_PYTHON_SIMULATOR_URL}
-            sandbox="allow-scripts allow-same-origin"
-            scrolling="no"
-          />
-        </article>
-      ))}
-    </div>
-  );
-
-  if (headless || !showHostCard) {
-    return <div className="runtime-host-mount runtime-host-mount--hidden">{iframeGrid}</div>;
-  }
+  const hostCardVisible = !headless && showHostCard;
+  const frameGridClassName =
+    hostCardVisible && showSimulatorFrames
+      ? 'runtime-frame-grid'
+      : 'runtime-frame-grid runtime-frame-grid--hidden';
+  const frameCardClassName =
+    hostCardVisible && showSimulatorFrames
+      ? 'runtime-frame-card'
+      : 'runtime-frame-card runtime-frame-card--hidden';
 
   return (
-    <div className="runtime-host-card" aria-label="MicroPython runtime host">
-      <div>
+    <div
+      className={hostCardVisible ? 'runtime-host-card' : 'runtime-host-mount runtime-host-mount--hidden'}
+      aria-label={hostCardVisible ? 'MicroPython runtime host' : undefined}
+    >
+      <div hidden={!hostCardVisible}>
         <span className="metric-label">MicroPython runtime host</span>
         <strong>
           {devices.length === 0
@@ -655,7 +648,7 @@ export function MicroPythonRuntimeHost({
             : 'Prepared code auto-starts after the runtime is loaded.'}
         </p>
       </div>
-      <div className="runtime-host-actions">
+      <div className="runtime-host-actions" hidden={!hostCardVisible}>
         {autoPrepare ? (
           <button
             type="button"
@@ -699,12 +692,9 @@ export function MicroPythonRuntimeHost({
           Reset all runtimes
         </button>
       </div>
-      <div className={showSimulatorFrames ? 'runtime-frame-grid' : 'runtime-frame-grid runtime-frame-grid--hidden'}>
+      <div className={frameGridClassName} data-frame-version={frameVersion}>
         {devices.map((device) => (
-          <article
-            key={device.id}
-            className={showSimulatorFrames ? 'runtime-frame-card' : 'runtime-frame-card runtime-frame-card--hidden'}
-          >
+          <article key={device.id} className={frameCardClassName}>
             <div className="runtime-frame-card__header">
               <strong>{device.name}</strong>
               <span>{preparedDeviceIds.has(device.id) ? 'prepared' : readyDeviceIds.has(device.id) ? 'ready' : 'loading'}</span>
@@ -719,7 +709,7 @@ export function MicroPythonRuntimeHost({
           </article>
         ))}
       </div>
-      {loadResults.length > 0 ? (
+      {hostCardVisible && loadResults.length > 0 ? (
         <div className="runtime-load-list" aria-label="Runtime load results">
           {loadResults.map((result) => (
             <p key={result.deviceId}>
