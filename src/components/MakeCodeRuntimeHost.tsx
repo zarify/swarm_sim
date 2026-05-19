@@ -27,6 +27,9 @@ type RuntimeLoadPrograms = (
   project: SwarmProject,
   options: LoadProjectRuntimeProgramsOptions,
 ) => Promise<DeviceProgramLoadResult[]>;
+type RuntimeRadioConfigHint = Partial<
+  Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>
+>;
 
 const MAKECODE_SIMULATOR_RUNNER_URL = '/makecode-patched-runner.html';
 const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
@@ -51,7 +54,7 @@ export interface MakeCodeRuntimeHostProps {
   onSoundOutput?: (deviceId: DeviceId, level: number) => void;
   onRadioConfigHint?: (
     deviceId: DeviceId,
-    config: Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>>,
+    config: RuntimeRadioConfigHint,
   ) => void;
   onLoadResultsChange?: (results: DeviceProgramLoadResult[]) => void;
   onRuntimeHostStateChange?: (state: RuntimeHostState) => void;
@@ -102,6 +105,7 @@ export function MakeCodeRuntimeHost({
   const invalidDisplayFrameLogged = useRef(new Set<DeviceId>());
   const recentRadioPackets = useRef(new Map<DeviceId, string>());
   const recentSerialOutputs = useRef(new Map<DeviceId, string>());
+  const sourceRadioConfigHints = useRef(new Map<DeviceId, RuntimeRadioConfigHint>());
   const lastResetRequestNonce = useRef(0);
   const callbacks = useRef({
     onRadioPacket,
@@ -196,6 +200,7 @@ export function MakeCodeRuntimeHost({
           deviceId,
           adapter,
         );
+        sourceRadioConfigHints.current.delete(deviceId);
         lastSensorValues.current.delete(deviceId);
         lastButtonValues.current.delete(deviceId);
         invalidDisplayFrameLogged.current.delete(deviceId);
@@ -371,6 +376,7 @@ export function MakeCodeRuntimeHost({
         adapterArtifactIds.current,
         device.id,
       );
+      sourceRadioConfigHints.current.delete(device.id);
       lastSensorValues.current.delete(device.id);
       lastButtonValues.current.delete(device.id);
       invalidDisplayFrameLogged.current.delete(device.id);
@@ -411,18 +417,17 @@ export function MakeCodeRuntimeHost({
             readyDeviceIds.has(prepared.device.id),
           );
           const radioConfigHint = extractMakeCodeRadioConfig(prepared.program);
-          if (
-            radioConfigHint.group !== undefined ||
-            radioConfigHint.channel !== undefined ||
-            radioConfigHint.signalStrength !== undefined
-          ) {
+          if (hasRuntimeRadioConfigHint(radioConfigHint)) {
             debugMakeCodeRadio('source-hint', {
               deviceId: prepared.device.id,
               group: radioConfigHint.group,
               channel: radioConfigHint.channel,
               signalStrength: radioConfigHint.signalStrength,
             });
+            sourceRadioConfigHints.current.set(prepared.device.id, radioConfigHint);
             callbacks.current.onRadioConfigHint?.(prepared.device.id, radioConfigHint);
+          } else {
+            sourceRadioConfigHints.current.delete(prepared.device.id);
           }
           adapters.current.set(prepared.device.id, adapter);
           requestAdapters.push({ deviceId: prepared.device.id, adapter });
@@ -512,6 +517,10 @@ export function MakeCodeRuntimeHost({
         invalidDisplayFrameLogged.current.delete(deviceId);
         recentRadioPackets.current.delete(deviceId);
         recentSerialOutputs.current.delete(deviceId);
+        const sourceRadioConfigHint = sourceRadioConfigHints.current.get(deviceId);
+        if (sourceRadioConfigHint && hasRuntimeRadioConfigHint(sourceRadioConfigHint)) {
+          callbacks.current.onRadioConfigHint?.(deviceId, sourceRadioConfigHint);
+        }
         if (runtime) {
           await syncRuntimeInputs(deviceId, adapter, runtime, true);
         }
@@ -885,7 +894,7 @@ function createMakeCodeRuntimeAdapter(
 
 function extractMakeCodeRadioConfig(
   program: RuntimeProgram,
-): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>> {
+): RuntimeRadioConfigHint {
   if (program.source !== 'makecode-pxt') {
     return {};
   }
@@ -904,12 +913,20 @@ function extractMakeCodeRadioConfig(
 
 function runtimeRadioConfigFromPacket(
   packet: RuntimeRadioPacket,
-): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>> {
+): RuntimeRadioConfigHint {
   return {
     ...(packet.group === undefined ? {} : { group: packet.group }),
     ...(packet.channel === undefined ? {} : { channel: packet.channel }),
     ...(packet.signalStrength === undefined ? {} : { signalStrength: packet.signalStrength }),
   };
+}
+
+function hasRuntimeRadioConfigHint(config: RuntimeRadioConfigHint): boolean {
+  return (
+    config.group !== undefined ||
+    config.channel !== undefined ||
+    config.signalStrength !== undefined
+  );
 }
 
 function isDuplicateRecentRadioPacket(

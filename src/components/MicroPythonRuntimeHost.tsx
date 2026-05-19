@@ -33,6 +33,9 @@ type RuntimeLoadPrograms = (
   project: SwarmProject,
   options: LoadProjectRuntimeProgramsOptions,
 ) => Promise<DeviceProgramLoadResult[]>;
+type RuntimeRadioConfigHint = Partial<
+  Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>
+>;
 
 export interface RoutedRadioDelivery {
   recipientId: DeviceId;
@@ -60,7 +63,7 @@ export interface MicroPythonRuntimeHostProps {
   onSoundOutput?: (deviceId: DeviceId, level: number) => void;
   onRadioConfigHint?: (
     deviceId: DeviceId,
-    config: Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>>,
+    config: RuntimeRadioConfigHint,
   ) => void;
   onLoadResultsChange?: (results: DeviceProgramLoadResult[]) => void;
   onRuntimeHostStateChange?: (state: RuntimeHostState) => void;
@@ -105,6 +108,7 @@ export function MicroPythonRuntimeHost({
   const lastButtonValues = useRef(new Map<DeviceId, string>());
   const recentRadioPackets = useRef(new Map<DeviceId, string>());
   const recentSerialOutputs = useRef(new Map<DeviceId, string>());
+  const sourceRadioConfigHints = useRef(new Map<DeviceId, RuntimeRadioConfigHint>());
   const scenarioResetRef = useRef(scenarioResetSignal);
   const loadRequestId = useRef(0);
   const callbacks = useRef({
@@ -182,6 +186,7 @@ export function MicroPythonRuntimeHost({
           deviceId,
           adapter,
         );
+        sourceRadioConfigHints.current.delete(deviceId);
         lastSensorValues.current.delete(deviceId);
         lastButtonValues.current.delete(deviceId);
         recentRadioPackets.current.delete(deviceId);
@@ -367,6 +372,7 @@ export function MicroPythonRuntimeHost({
         adapterArtifactIds.current,
         device.id,
       );
+      sourceRadioConfigHints.current.delete(device.id);
       lastSensorValues.current.delete(device.id);
       lastButtonValues.current.delete(device.id);
       recentRadioPackets.current.delete(device.id);
@@ -403,12 +409,11 @@ export function MicroPythonRuntimeHost({
               frameReady: readyDeviceIds.has(prepared.device.id),
             });
             const radioConfigHint = extractMicroPythonRadioConfig(prepared.program);
-            if (
-              radioConfigHint.group !== undefined ||
-              radioConfigHint.channel !== undefined ||
-              radioConfigHint.signalStrength !== undefined
-            ) {
+            if (hasRuntimeRadioConfigHint(radioConfigHint)) {
+              sourceRadioConfigHints.current.set(prepared.device.id, radioConfigHint);
               callbacks.current.onRadioConfigHint?.(prepared.device.id, radioConfigHint);
+            } else {
+              sourceRadioConfigHints.current.delete(prepared.device.id);
             }
             adapters.current.set(prepared.device.id, adapter);
             requestAdapters.push({ deviceId: prepared.device.id, adapter });
@@ -500,6 +505,10 @@ export function MicroPythonRuntimeHost({
         recentRadioPackets.current.delete(deviceId);
         recentSerialOutputs.current.delete(deviceId);
         await adapter.reset();
+        const sourceRadioConfigHint = sourceRadioConfigHints.current.get(deviceId);
+        if (sourceRadioConfigHint && hasRuntimeRadioConfigHint(sourceRadioConfigHint)) {
+          callbacks.current.onRadioConfigHint?.(deviceId, sourceRadioConfigHint);
+        }
       }),
     ).catch((error: unknown) => {
       callbacks.current.onRuntimeLog(
@@ -850,7 +859,7 @@ function debugMicroPythonRuntime(event: string, details: Record<string, unknown>
 
 function extractMicroPythonRadioConfig(
   program: RuntimeProgram,
-): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>> {
+): RuntimeRadioConfigHint {
   if (program.source !== 'micropython') {
     return {};
   }
@@ -885,12 +894,20 @@ function extractMicroPythonRadioConfig(
 
 function runtimeRadioConfigFromPacket(
   packet: RuntimeRadioPacket,
-): Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>> {
+): RuntimeRadioConfigHint {
   return {
     ...(packet.group === undefined ? {} : { group: packet.group }),
     ...(packet.channel === undefined ? {} : { channel: packet.channel }),
     ...(packet.signalStrength === undefined ? {} : { signalStrength: packet.signalStrength }),
   };
+}
+
+function hasRuntimeRadioConfigHint(config: RuntimeRadioConfigHint): boolean {
+  return (
+    config.group !== undefined ||
+    config.channel !== undefined ||
+    config.signalStrength !== undefined
+  );
 }
 
 function isDuplicateRecentRadioPacket(

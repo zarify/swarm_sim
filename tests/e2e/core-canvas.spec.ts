@@ -2,6 +2,7 @@ import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
 const microPythonFixture = path.resolve(process.cwd(), 'hex_files/mp_beacon.hex');
+const makeCodeBeaconFixture = path.resolve(process.cwd(), 'hex_files/mc_beacon.hex');
 
 async function gotoCanvas(page: Page) {
   await page.goto('/');
@@ -146,6 +147,89 @@ test.describe('core canvas workflows', () => {
         { timeout: 15_000 },
       )
       .toBe(true);
+  });
+
+  test('keeps MakeCode inbound radio group from source hints after Reset all', async ({ page }) => {
+    await gotoCanvas(page);
+    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Add device' }).click();
+    await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    const makeCodeRunner = page.frames().find((frame) => frame.url().includes('/makecode-patched-runner.html'));
+    expect(makeCodeRunner).toBeTruthy();
+    await makeCodeRunner!.evaluate(() => {
+      const scopedWindow = window as unknown as {
+        __swarmInboundRadioGroups?: number[];
+      };
+      scopedWindow.__swarmInboundRadioGroups = [];
+      window.addEventListener('message', (event) => {
+        if (
+          event.origin === window.location.origin &&
+          event.data?.type === 'swarm-radio-input' &&
+          typeof event.data?.packet?.group === 'number'
+        ) {
+          scopedWindow.__swarmInboundRadioGroups?.push(event.data.packet.group);
+        }
+      });
+    });
+
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')))
+      .toBe(true);
+    const microPythonSimulator = page.frames().find((frame) =>
+      frame.url().includes('/micropython-patched-simulator.html'),
+    );
+    expect(microPythonSimulator).toBeTruthy();
+    await microPythonSimulator!.evaluate(() => {
+      const payload = Array.from(new TextEncoder().encode('light:77'));
+      window.parent.postMessage(
+        { kind: 'radio_output', data: [0x01, 0x00, 0x01, ...payload] },
+        window.location.origin,
+      );
+    });
+
+    await expect
+      .poll(
+        () =>
+          makeCodeRunner!.evaluate(
+            () =>
+              (window as unknown as { __swarmInboundRadioGroups?: number[] }).__swarmInboundRadioGroups ??
+              [],
+          ),
+        { timeout: 15_000 },
+      )
+      .toContain(42);
+
+    await makeCodeRunner!.evaluate(() => {
+      (window as unknown as { __swarmInboundRadioGroups?: number[] }).__swarmInboundRadioGroups = [];
+    });
+
+    await page.getByRole('button', { name: 'Reset all', exact: true }).click();
+    await microPythonSimulator!.evaluate(() => {
+      const payload = Array.from(new TextEncoder().encode('light:77'));
+      window.parent.postMessage(
+        { kind: 'radio_output', data: [0x01, 0x00, 0x01, ...payload] },
+        window.location.origin,
+      );
+    });
+
+    await expect
+      .poll(
+        () => makeCodeRunner!.evaluate(() => (window as unknown as { __swarmInboundRadioGroups?: number[] }).__swarmInboundRadioGroups ?? []),
+        { timeout: 15_000 },
+      )
+      .toContain(42);
+
+    const postResetGroups = await makeCodeRunner!.evaluate(
+      () => (window as unknown as { __swarmInboundRadioGroups?: number[] }).__swarmInboundRadioGroups ?? [],
+    );
+    expect(postResetGroups[0]).toBe(42);
+    expect(postResetGroups).not.toContain(0);
   });
 
   test('coalesces fragmented MicroPython serial output into one runtime log line', async ({ page }) => {

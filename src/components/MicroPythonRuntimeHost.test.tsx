@@ -605,6 +605,49 @@ describe('MicroPythonRuntimeHost', () => {
     await waitFor(() => expect(hints).toContain('device-alpha:42:9:6'));
   });
 
+  it('replays MicroPython source radio config hints after scenario reset', async () => {
+    const hints: string[] = [];
+    const resetDevices: string[] = [];
+    const disposed: string[] = [];
+    const project = makeProject();
+    const { rerender } = render(
+      <MicroPythonRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        scenarioResetSignal={0}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        onRadioConfigHint={(deviceId, config) => {
+          hints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
+        }}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={(prepared) => makeResettableAdapter(resetDevices, disposed, prepared.device.id)}
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(hints.filter((hint) => hint === 'device-alpha:42:9:6')).toHaveLength(1));
+
+    rerender(
+      <MicroPythonRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        scenarioResetSignal={1}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        onRadioConfigHint={(deviceId, config) => {
+          hints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
+        }}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={(prepared) => makeResettableAdapter(resetDevices, disposed, prepared.device.id)}
+      />,
+    );
+
+    await waitFor(() => expect(resetDevices).toEqual(['device-alpha']));
+    await waitFor(() => expect(hints.filter((hint) => hint === 'device-alpha:42:9:6')).toHaveLength(2));
+    expect(disposed).toEqual([]);
+  });
+
   it('auto-starts MicroPython programs in non-headless mode without request_flash', async () => {
     const project = makeProject();
     const frameLoadStatuses: string[][] = [];

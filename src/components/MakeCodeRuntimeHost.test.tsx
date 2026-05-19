@@ -552,6 +552,87 @@ describe('MakeCodeRuntimeHost', () => {
     await waitFor(() => expect(hints).toContain('device-alpha:42:23:6'));
   });
 
+  it('replays MakeCode source radio config hints after scenario reset', async () => {
+    const hints: string[] = [];
+    const resets: string[] = [];
+    const loadPrograms = async (_project: SwarmProject, options: LoadProjectRuntimeProgramsOptions) => {
+      await options.createAdapter?.({
+        device: makeProject().devices[0]!,
+        artifact: makeProject().artifacts[0]!,
+        runtimeSource: 'makecode-pxt',
+        program: {
+          source: 'makecode-pxt',
+          sourceFiles: {
+            'main.ts': 'radio.sendString("ping")',
+            'custom.ts': 'radio.setGroup(42)\nradio.setFrequencyBand(23)\nradio.setTransmitPower(6)',
+          },
+        },
+      });
+      return [
+        {
+          deviceId: 'device-alpha',
+          artifactId: 'artifact-mc',
+          status: 'loaded' as const,
+          runtimeSource: 'makecode-pxt' as const,
+        },
+      ];
+    };
+
+    const { rerender } = render(
+      <MakeCodeRuntimeHost
+        project={makeProject()}
+        scenarioResetSignal={0}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        createAdapter={() =>
+          makeEventAdapter(
+            () => {},
+            undefined,
+            undefined,
+            () => {
+              resets.push('reset');
+            },
+          )
+        }
+        onRadioConfigHint={(deviceId, config) => {
+          hints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
+        }}
+        loadPrograms={loadPrograms}
+      />,
+    );
+
+    await markRunnerReady('Alpha');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare runtime' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(hints.filter((hint) => hint === 'device-alpha:42:23:6')).toHaveLength(1));
+
+    rerender(
+      <MakeCodeRuntimeHost
+        project={makeProject()}
+        scenarioResetSignal={1}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        createAdapter={() =>
+          makeEventAdapter(
+            () => {},
+            undefined,
+            undefined,
+            () => {
+              resets.push('reset');
+            },
+          )
+        }
+        onRadioConfigHint={(deviceId, config) => {
+          hints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
+        }}
+        loadPrograms={loadPrograms}
+      />,
+    );
+
+    await waitFor(() => expect(resets).toEqual(['reset']));
+    await waitFor(() => expect(hints.filter((hint) => hint === 'device-alpha:42:23:6')).toHaveLength(2));
+  });
+
   it('preserves existing runner readiness when adding a second MakeCode device', async () => {
     const loadCalls: DeviceId[][] = [];
     const makeAutoLoadPrograms =
