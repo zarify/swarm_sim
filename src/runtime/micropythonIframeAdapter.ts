@@ -1,4 +1,5 @@
 import { evaluateArtifactRuntimeReadiness } from './artifactReadiness';
+import { normalizeRuntimeDisplayPixels } from './displayPixels';
 import type {
   MicrobitRuntimeAdapter,
   MicroPythonRuntimeProgram,
@@ -46,6 +47,9 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   private readonly handleMessage = (event: MessageEvent) => this.receiveMessage(event);
   private lastProgram?: MicroPythonRuntimeProgram;
   private pendingSerialOutput = '';
+  private pendingSerialFragments = '';
+  private pendingSerialFlushTimer?: number;
+  private recentDisplayFingerprint?: string;
   private ready = false;
   private resolveReady?: () => void;
   private readonly readyPromise = new Promise<void>((resolve) => {
@@ -101,7 +105,14 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   }
 
   async sendRadio(packet: RuntimeRadioPacket): Promise<void> {
-    this.post({ kind: 'radio_input', data: packet.data });
+    const decoded = decodeMicroPythonRadioString(packet.data);
+    const data = decoded === undefined ? packet.data : new TextEncoder().encode(decoded);
+    const rssi = toSimulatorRadioRssi(packet.signalStrength);
+    this.post({
+      kind: 'radio_input',
+      data,
+      ...(rssi === undefined ? {} : { rssi }),
+    });
   }
 
   onEvent(listener: (event: RuntimeAdapterEvent) => void): RuntimeAdapterUnsubscribe {
@@ -113,6 +124,7 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
 
   dispose(): void {
     this.eventTarget?.removeEventListener('message', this.handleMessage);
+    this.flushPendingSerialFragments(true);
     this.listeners.clear();
   }
 
@@ -144,9 +156,11 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
 
     switch (data.kind) {
       case 'ready':
+        this.flushPendingSerialFragments(true);
         this.markReady();
         break;
       case 'request_flash':
+        this.flushPendingSerialFragments(true);
         if (this.lastProgram) {
           try {
             this.postFlash(this.lastProgram);
@@ -155,7 +169,12 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
           }
         }
         break;
+      case 'state_change':
+        this.flushPendingSerialFragments(true);
+        this.handleStateChange(data.change);
+        break;
       case 'radio_output':
+        this.flushPendingSerialFragments(true);
         try {
           this.emit({ type: 'radio-output', packet: { data: normalizeBytes(data.data) } });
         } catch (error) {
@@ -166,9 +185,11 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
         this.handleSerialOutput(typeof data.data === 'string' ? data.data : '');
         break;
       case 'internal_error':
+        this.flushPendingSerialFragments(true);
         this.emit({ type: 'internal-error', error: normalizeError(data.error) });
         break;
       default:
+        this.flushPendingSerialFragments(true);
         break;
     }
 
@@ -178,8 +199,100 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     const parsed = parseDisplayBridgeSerialOutput(this.pendingSerialOutput + data);
     this.pendingSerialOutput = parsed.pending;
     for (const event of parsed.events) {
+      if (event.type === 'serial-output') {
+        this.emitSerialOutput(event.data);
+        continue;
+      }
+      if (event.type === 'display-change') {
+        this.emitDisplayChange(event.pixels);
+        continue;
+      }
+      this.flushPendingSerialFragments(true);
       this.emit(event);
     }
+  }
+
+  private emitSerialOutput(data: string): void {
+    if (data === '') {
+      return;
+    }
+
+    if (this.pendingSerialFragments !== '' || isLikelyFragmentedSerialChunk(data)) {
+      this.pendingSerialFragments += data;
+      this.flushPendingSerialLines();
+      this.schedulePendingSerialFlush();
+      return;
+    }
+
+    this.emit({ type: 'serial-output', data: normalizeSerialOutput(data) });
+  }
+
+  private flushPendingSerialLines(): void {
+    const marker = this.pendingSerialFragments.search(/\r\n|\r|\n/);
+    if (marker < 0) {
+      return;
+    }
+
+    const terminatorLength =
+      this.pendingSerialFragments[marker] === '\r' && this.pendingSerialFragments[marker + 1] === '\n' ? 2 : 1;
+    const completed = this.pendingSerialFragments.slice(0, marker);
+    this.pendingSerialFragments = this.pendingSerialFragments.slice(marker + terminatorLength);
+    this.emit({ type: 'serial-output', data: normalizeSerialOutput(completed) });
+    this.flushPendingSerialLines();
+  }
+
+  private schedulePendingSerialFlush(): void {
+    if (this.pendingSerialFragments === '') {
+      if (this.pendingSerialFlushTimer !== undefined) {
+        globalThis.clearTimeout(this.pendingSerialFlushTimer);
+        this.pendingSerialFlushTimer = undefined;
+      }
+      return;
+    }
+
+    if (this.pendingSerialFlushTimer !== undefined) {
+      globalThis.clearTimeout(this.pendingSerialFlushTimer);
+    }
+    this.pendingSerialFlushTimer = globalThis.setTimeout(() => {
+      this.pendingSerialFlushTimer = undefined;
+      this.flushPendingSerialFragments(true);
+    }, 35);
+  }
+
+  private flushPendingSerialFragments(force: boolean): void {
+    if (this.pendingSerialFlushTimer !== undefined) {
+      globalThis.clearTimeout(this.pendingSerialFlushTimer);
+      this.pendingSerialFlushTimer = undefined;
+    }
+    if (!force || this.pendingSerialFragments === '') {
+      return;
+    }
+    this.emit({ type: 'serial-output', data: normalizeSerialOutput(this.pendingSerialFragments) });
+    this.pendingSerialFragments = '';
+  }
+
+  private handleStateChange(change: unknown): void {
+    const displayPixels = readDisplayPixelsFromStateChange(change);
+    if (!displayPixels) {
+      return;
+    }
+    this.emitDisplayChange(displayPixels);
+  }
+
+  private emitDisplayChange(pixels: number[]): void {
+    const fingerprint = pixels.join('');
+    if (this.recentDisplayFingerprint === fingerprint) {
+      return;
+    }
+
+    this.recentDisplayFingerprint = fingerprint;
+    queueMicrotask(() => {
+      if (this.recentDisplayFingerprint === fingerprint) {
+        this.recentDisplayFingerprint = undefined;
+      }
+    });
+    this.flushPendingSerialFragments(true);
+    this.emit({ type: 'display-change', pixels });
   }
 
   private emit(event: RuntimeAdapterEvent): void {
@@ -651,8 +764,57 @@ function normalizeError(value: unknown): Error {
   if (value instanceof Error) {
     return value;
   }
-
   return new Error(typeof value === 'string' ? value : 'MicroPython simulator internal error');
+}
+
+function isLikelyFragmentedSerialChunk(value: string): boolean {
+  return value.length <= 1 || value === '\r' || value === '\n';
+}
+
+function normalizeSerialOutput(value: string): string {
+  const singleLine = value.replace(/\r?\n$/, '');
+  const normalizedBytes = normalizePythonBytesLiteral(singleLine);
+  return normalizedBytes;
+}
+
+function normalizePythonBytesLiteral(value: string): string {
+  const singleQuoted = /^b'([\x20-\x7e]*)'$/.exec(value);
+  const doubleQuoted = /^b"([\x20-\x7e]*)"$/.exec(value);
+  const payload = singleQuoted?.[1] ?? doubleQuoted?.[1];
+  if (payload === undefined) {
+    return value;
+  }
+
+  const prefixedEscaped = /^\\x01\\x00\\x01(.+)$/.exec(payload)?.[1];
+  if (prefixedEscaped && /^[A-Za-z][A-Za-z0-9_-]*:[\x20-\x7e]+$/.test(prefixedEscaped)) {
+    return prefixedEscaped;
+  }
+  if (payload.includes('\\')) {
+    return value;
+  }
+  if (!/^[A-Za-z][A-Za-z0-9_-]*:[\x20-\x7e]+$/.test(payload)) {
+    return value;
+  }
+  return payload;
+}
+
+function toSimulatorRadioRssi(value: number | undefined): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.min(255, Math.round(Math.abs(value))));
+}
+
+function readDisplayPixelsFromStateChange(change: unknown): number[] | undefined {
+  if (!isRecord(change)) {
+    return undefined;
+  }
+  const raw = change.displayPixels;
+  if (!Array.isArray(raw)) {
+    return undefined;
+  }
+  const normalized = normalizeRuntimeDisplayPixels(raw.map((entry) => Number(entry)));
+  return normalized ?? undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

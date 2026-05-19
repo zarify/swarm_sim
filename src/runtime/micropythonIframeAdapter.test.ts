@@ -131,7 +131,7 @@ display.show(Image.ARROW_N)`),
     await adapter.setButton('B', false);
     await adapter.setSensor('lightLevel', 200);
     await adapter.setSensor('soundLevel', 64);
-    await adapter.sendRadio({ data: radioData });
+    await adapter.sendRadio({ data: radioData, signalStrength: -63 });
     await adapter.reset();
     await adapter.stop();
 
@@ -140,7 +140,10 @@ display.show(Image.ARROW_N)`),
       { message: { kind: 'set_value', id: 'buttonB', value: 0 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'lightLevel', value: 200 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'soundLevel', value: 64 }, targetOrigin: 'https://python-simulator.usermbit.org' },
-      { message: { kind: 'radio_input', data: radioData }, targetOrigin: 'https://python-simulator.usermbit.org' },
+      {
+        message: { kind: 'radio_input', data: new TextEncoder().encode('ping'), rssi: 63 },
+        targetOrigin: 'https://python-simulator.usermbit.org',
+      },
       { message: { kind: 'reset' }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'stop' }, targetOrigin: 'https://python-simulator.usermbit.org' },
     ]);
@@ -187,7 +190,7 @@ display.show(Image.ARROW_N)`),
     eventTarget.dispatchMessage({ kind: 'serial_output', data: 'hello\n\x1eSWARM_DISPLAY:0123456789012345678901234\nworld' });
 
     expect(events).toEqual([
-      { type: 'serial-output', data: 'hello\n' },
+      { type: 'serial-output', data: 'hello' },
       { type: 'display-change', pixels: digits('0123456789012345678901234') },
       { type: 'serial-output', data: 'world' },
     ]);
@@ -209,7 +212,7 @@ display.show(Image.ARROW_N)`),
     eventTarget.dispatchMessage({ kind: 'serial_output', data: 'PLAY:9999900000999990000099999\nafter' });
 
     expect(events).toEqual([
-      { type: 'serial-output', data: 'before\n' },
+      { type: 'serial-output', data: 'before' },
       { type: 'display-change', pixels: digits('9999900000999990000099999') },
       { type: 'serial-output', data: 'after' },
     ]);
@@ -231,10 +234,108 @@ display.show(Image.ARROW_N)`),
     eventTarget.dispatchMessage({ kind: 'serial_output', data: '55\nafter' });
 
     expect(events).toEqual([
-      { type: 'serial-output', data: 'before\n' },
+      { type: 'serial-output', data: 'before' },
       { type: 'sound-output', level: 255 },
       { type: 'serial-output', data: 'after' },
     ]);
+  });
+
+  it('coalesces fragmented serial chunks into one line and normalizes Python bytes literals', () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: 'b' });
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: "'light:101'" });
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: '\n' });
+
+    expect(events).toEqual([{ type: 'serial-output', data: 'light:101' }]);
+  });
+
+  it('normalizes escaped MicroPython wire-prefix bytes literals in serial logs', () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: 'b' });
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: "'\\x01\\x00\\x01light:73'" });
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: '\n' });
+
+    expect(events).toEqual([{ type: 'serial-output', data: 'light:73' }]);
+  });
+
+  it('preserves non-telemetry bytes-literal text in serial logs', () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: 'b' });
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: "'hello'" });
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: '\n' });
+
+    expect(events).toEqual([{ type: 'serial-output', data: "b'hello'" }]);
+  });
+
+  it('converts simulator state_change display payloads into display-change events', () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    eventTarget.dispatchMessage({
+      kind: 'state_change',
+      change: { displayPixels: digits('9000909090009000909090009') },
+    });
+
+    expect(events).toEqual([
+      { type: 'display-change', pixels: digits('9000909090009000909090009') },
+    ]);
+  });
+
+  it('deduplicates immediate identical display frames received from state_change and serial bridge markers', () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    const frame = '9000909090009000909090009';
+    eventTarget.dispatchMessage({ kind: 'state_change', change: { displayPixels: digits(frame) } });
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: `\x1eSWARM_DISPLAY:${frame}\n` });
+
+    expect(events).toEqual([{ type: 'display-change', pixels: digits(frame) }]);
   });
 
   it('re-flashes the latest program when the iframe requests flash', async () => {

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { vi } from 'vitest';
 import { createBlankProject, type SwarmProject } from '../domain/project';
 import type { LoadProjectRuntimeProgramsOptions } from '../runtime/programLoader';
 import type { MicrobitRuntimeAdapter, RuntimeAdapterEvent, RuntimeProgram } from '../runtime/runtimeAdapter';
@@ -28,7 +29,21 @@ describe('MicroPythonRuntimeHost', () => {
     expect(screen.queryByTitle('MicroPython simulator for Gamma')).not.toBeInTheDocument();
   });
 
-  it('loads prepared MicroPython programs through iframe-backed adapters', async () => {
+  it('can keep MicroPython host controls hidden while keeping runtime iframes mounted', () => {
+    render(
+      <MicroPythonRuntimeHost
+        project={makeProject()}
+        showHostCard={false}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+      />,
+    );
+
+    expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
+    expect(screen.getByTitle('MicroPython simulator for Alpha')).toBeInTheDocument();
+  });
+
+  it('loads MicroPython programs through iframe-backed adapters', async () => {
     const flashed: RuntimeProgram[] = [];
 
     render(
@@ -66,7 +81,7 @@ describe('MicroPythonRuntimeHost', () => {
     dispatchReadyFor('MicroPython simulator for Alpha');
 
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
-    await waitFor(() => expect(screen.getByText(/prepared/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('loaded', { selector: 'strong[data-state]' })).toBeInTheDocument());
     expect(flashed).toHaveLength(1);
   });
 
@@ -88,6 +103,47 @@ describe('MicroPythonRuntimeHost', () => {
     expect(screen.getByText('1/1 simulator(s) ready')).toBeInTheDocument();
   });
 
+  it('requires simulator-origin ready handshakes before enabling runtime preparation', () => {
+    render(
+      <MicroPythonRuntimeHost
+        project={makeProject()}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+      />,
+    );
+
+    const frame = screen.getByTitle('MicroPython simulator for Alpha') as HTMLIFrameElement;
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        origin: 'https://evil.example',
+        source: frame.contentWindow,
+        data: { kind: 'ready' },
+      }),
+    );
+
+    expect(screen.getByRole('button', { name: 'Prepare runtime' })).toBeDisabled();
+    expect(screen.getByText('0/1 simulator(s) ready')).toBeInTheDocument();
+
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    expect(screen.getByRole('button', { name: 'Prepare runtime' })).toBeEnabled();
+  });
+
+  it('keeps same-origin sandbox flags on MicroPython simulator iframes for local WASM loading', () => {
+    render(
+      <MicroPythonRuntimeHost
+        project={makeProject()}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+      />,
+    );
+
+    expect(screen.getByTitle('MicroPython simulator for Alpha')).toHaveAttribute(
+      'sandbox',
+      'allow-scripts allow-same-origin',
+    );
+  });
+
   it('keeps simulator frames mounted while focusing the selected device', () => {
     render(
       <MicroPythonRuntimeHost
@@ -100,6 +156,28 @@ describe('MicroPythonRuntimeHost', () => {
 
     expect(screen.getByTitle('MicroPython simulator for Alpha')).toBeInTheDocument();
     expect(screen.getByTitle('MicroPython simulator for Beta')).toBeInTheDocument();
+  });
+
+  it('preserves ready state for existing simulators when adding another MicroPython device', () => {
+    const { rerender } = render(
+      <MicroPythonRuntimeHost
+        project={makeProject()}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    expect(screen.getByText('1/1 simulator(s) ready')).toBeInTheDocument();
+
+    rerender(
+      <MicroPythonRuntimeHost
+        project={makeTwoMicroPythonDeviceProject()}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+      />,
+    );
+
+    expect(screen.getByText('1/2 simulator(s) ready')).toBeInTheDocument();
   });
 
   it('preserves an existing device runtime when another selected device is prepared', async () => {
@@ -252,6 +330,9 @@ describe('MicroPythonRuntimeHost', () => {
       <MicroPythonRuntimeHost
         project={project}
         selectedDeviceId="device-alpha"
+        showHostCard={false}
+        autoPrepare
+        prepareEnabled
         onRadioPacket={() => []}
         onRuntimeLog={() => {}}
         onDisplayChange={(deviceId, pixels) => displayChanges.push(`${deviceId}:${pixels.join('')}`)}
@@ -261,8 +342,8 @@ describe('MicroPythonRuntimeHost', () => {
         })}
       />,
     );
+    expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
     dispatchReadyFor('MicroPython simulator for Alpha');
-    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
     await waitFor(() => expect(emitRuntimeEvent).toBeDefined());
 
     emitRuntimeEvent?.({
@@ -394,6 +475,35 @@ describe('MicroPythonRuntimeHost', () => {
     expect(logs).toEqual(['device-alpha:light:66']);
   });
 
+  it('drops blank serial payloads so bridge-only whitespace does not create empty runtime log lines', async () => {
+    const logs: string[] = [];
+    let emitRuntimeEvent: ((event: RuntimeAdapterEvent) => void) | undefined;
+    const project = makeProject();
+    render(
+      <MicroPythonRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        onRadioPacket={() => []}
+        onRuntimeLog={(deviceId, _type, message) => logs.push(`${deviceId}:${message}`)}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={() =>
+          makeEventAdapter((listener) => {
+            emitRuntimeEvent = listener;
+          })
+        }
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(emitRuntimeEvent).toBeDefined());
+
+    emitRuntimeEvent?.({ type: 'serial-output', data: '\n' });
+    emitRuntimeEvent?.({ type: 'serial-output', data: 'sound:13' });
+    emitRuntimeEvent?.({ type: 'serial-output', data: '   ' });
+
+    expect(logs).toEqual(['device-alpha:sound:13']);
+  });
+
   it('filters malformed display frames with the same host guardrails used by MakeCode', async () => {
     const displayChanges: string[] = [];
     const logs: string[] = [];
@@ -451,6 +561,118 @@ describe('MicroPythonRuntimeHost', () => {
     await waitFor(() => expect(hints).toContain('device-alpha:42:9:6'));
   });
 
+  it('auto-starts MicroPython programs in non-headless mode without request_flash', async () => {
+    const project = makeProject();
+    const frameLoadStatuses: string[][] = [];
+    render(
+      <MicroPythonRuntimeHost
+        project={project}
+        autoPrepare
+        prepareEnabled
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        onLoadResultsChange={(results) => frameLoadStatuses.push(results.map((result) => result.status))}
+        loadPrograms={async (_project, options) => {
+          const device = project.devices[0]!;
+          const artifact = project.artifacts[0]!;
+          const program: RuntimeProgram = {
+            source: 'micropython',
+            filesystem: { 'main.py': new TextEncoder().encode('radio.send("ping")') },
+          };
+          const adapter = await options.createAdapter?.({
+            device,
+            artifact,
+            runtimeSource: 'micropython',
+            program,
+          });
+          await adapter?.flash(program);
+          return [
+            {
+              deviceId: device.id,
+              artifactId: artifact.id,
+              status: 'loaded',
+              runtimeSource: 'micropython',
+              adapterName: adapter?.name,
+            },
+          ];
+        }}
+      />,
+    );
+    const frame = screen.getByTitle('MicroPython simulator for Alpha') as HTMLIFrameElement;
+    const postMessageSpy = vi.spyOn(frame.contentWindow!, 'postMessage');
+    dispatchReadyFor('MicroPython simulator for Alpha');
+
+    await waitFor(() => expect(frameLoadStatuses.at(-1)).toEqual(['loaded']));
+    expect(postMessageSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'flash' }),
+      new URL(MICRO_PYTHON_SIMULATOR_URL).origin,
+    );
+  });
+
+  it('keeps MicroPython programs deferred in headless mode until request_flash', async () => {
+    const project = makeProject();
+    const frameLoadStatuses: string[][] = [];
+    render(
+      <MicroPythonRuntimeHost
+        project={project}
+        autoPrepare
+        prepareEnabled
+        headless
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        onLoadResultsChange={(results) => frameLoadStatuses.push(results.map((result) => result.status))}
+        loadPrograms={async (_project, options) => {
+          const device = project.devices[0]!;
+          const artifact = project.artifacts[0]!;
+          const program: RuntimeProgram = {
+            source: 'micropython',
+            filesystem: { 'main.py': new TextEncoder().encode('radio.send("ping")') },
+          };
+          const adapter = await options.createAdapter?.({
+            device,
+            artifact,
+            runtimeSource: 'micropython',
+            program,
+          });
+          await adapter?.flash(program);
+          return [
+            {
+              deviceId: device.id,
+              artifactId: artifact.id,
+              status: 'loaded',
+              runtimeSource: 'micropython',
+              adapterName: adapter?.name,
+            },
+          ];
+        }}
+      />,
+    );
+    const frame = screen.getByTitle('MicroPython simulator for Alpha') as HTMLIFrameElement;
+    const postMessageSpy = vi.spyOn(frame.contentWindow!, 'postMessage');
+    dispatchReadyFor('MicroPython simulator for Alpha');
+
+    await waitFor(() => expect(frameLoadStatuses.at(-1)).toEqual(['prepared']));
+    expect(postMessageSpy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'flash' }),
+      new URL(MICRO_PYTHON_SIMULATOR_URL).origin,
+    );
+
+    fireEvent(
+      window,
+      new MessageEvent('message', {
+        origin: new URL(MICRO_PYTHON_SIMULATOR_URL).origin,
+        source: frame.contentWindow,
+        data: { kind: 'request_flash' },
+      }),
+    );
+    await waitFor(() =>
+      expect(postMessageSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'flash' }),
+        new URL(MICRO_PYTHON_SIMULATOR_URL).origin,
+      ),
+    );
+  });
+
   it('disposes adapter listeners when MicroPython devices are removed from the runtime set', async () => {
     const disposed: string[] = [];
     const unsubscribed: string[] = [];
@@ -481,7 +703,7 @@ describe('MicroPythonRuntimeHost', () => {
     );
     dispatchReadyFor('MicroPython simulator for Alpha');
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
-    await waitFor(() => expect(screen.getByText(/prepared/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('loaded', { selector: 'strong[data-state]' })).toBeInTheDocument());
 
     rerender(
       <MicroPythonRuntimeHost
@@ -530,7 +752,7 @@ describe('MicroPythonRuntimeHost', () => {
     );
     dispatchReadyFor('MicroPython simulator for Alpha');
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
-    await waitFor(() => expect(screen.getByText(/prepared/)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('loaded', { selector: 'strong[data-state]' })).toBeInTheDocument());
 
     rerender(
       <MicroPythonRuntimeHost
@@ -545,7 +767,7 @@ describe('MicroPythonRuntimeHost', () => {
     await waitFor(() => {
       expect(unsubscribed).toEqual(['device-alpha']);
       expect(disposed).toEqual(['device-alpha']);
-      expect(screen.queryByText(/prepared/)).not.toBeInTheDocument();
+      expect(screen.queryByText('loaded', { selector: 'strong[data-state]' })).not.toBeInTheDocument();
       expect(resultChanges.at(-1)).toEqual([]);
     });
   });
@@ -603,7 +825,7 @@ describe('MicroPythonRuntimeHost', () => {
 
     await waitFor(() => {
       expect(createdAdapters).toEqual([]);
-      expect(screen.queryByText(/prepared/)).not.toBeInTheDocument();
+      expect(screen.queryByText('loaded', { selector: 'strong[data-state]' })).not.toBeInTheDocument();
       expect(resultChanges.at(-1)).toEqual([]);
     });
   });
@@ -614,7 +836,7 @@ function dispatchReadyFor(title: string) {
   fireEvent(
     window,
     new MessageEvent('message', {
-      origin: 'https://python-simulator.usermbit.org',
+      origin: new URL(MICRO_PYTHON_SIMULATOR_URL).origin,
       source: frame.contentWindow,
       data: { kind: 'ready' },
     }),

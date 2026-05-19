@@ -95,6 +95,7 @@ export function SwarmRuntimeHosts({
           autoPrepare
           prepareEnabled={allRuntimeHostsReady}
           showSimulatorFrames={false}
+          showHostCard={false}
           onRuntimeHostStateChange={setMicroPythonHostState}
           onLoadResultsChange={setMicroPythonResults}
         />

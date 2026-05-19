@@ -48,7 +48,7 @@ The shared adapter contract in `src/runtime/runtimeAdapter.ts` now targets the o
 
 The next runtime spike should prove:
 
-1. MicroPython: verify selected-device upload and the embedded iframe Play flow with the real `mp_beacon.hex` in a browser, confirm bidirectional radio delivery between simulated devices, and find a stable display-state signal.
+1. MicroPython: verify selected-device upload and auto-start runtime flow with the real `mp_beacon.hex` in a browser, confirm bidirectional radio delivery between simulated devices, and find a stable display-state signal.
 2. MakeCode: compile/run the recovered PXT project through `pxtsim` and validate display/radio hooks.
 
 ## Design direction

@@ -308,10 +308,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       return;
     }
     setIsRefreshingSavedProjects(true);
+    setCanvasStateMessage(undefined);
     try {
       const summaries = await browserProjectStore.current.list();
       setSavedProjectSummaries(summaries);
-      setCanvasStateMessage(undefined);
     } catch (error) {
       setCanvasStateMessage(
         error instanceof Error ? error.message : 'Unable to list saved layouts',
@@ -1526,7 +1526,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         project={project}
         selectedDeviceId={selectedDevice?.id}
         resetRequest={runtimeResetRequest}
-        headless
+        headless={false}
         deviceRuntimeStates={simulationState.devices}
         scenarioResetSignal={scenarioResetSignal}
         onRadioPacket={handleRuntimeRadioPacket}
@@ -1579,6 +1579,7 @@ function DeviceSelection({
   if (!device) {
     return <p className="hint">Device missing from project.</p>;
   }
+  const runtimeLogNames = new Map(project.devices.map((candidate) => [candidate.id, candidate.name] as const));
   const assignedArtifact = device.programArtifactId
     ? project.artifacts.find((artifact) => artifact.id === device.programArtifactId)
     : undefined;
@@ -1673,7 +1674,7 @@ function DeviceSelection({
               .map((log) => (
                 <p key={log.id} className="device-log__line">
                   <span className="device-log__type">{formatDeviceLogType(log.type)}</span>
-                  <span>{log.message}</span>
+                  <span>{formatRuntimeLogMessage(log.message, runtimeLogNames)}</span>
                 </p>
               ))
           )}
@@ -2047,6 +2048,15 @@ function formatDeviceLogType(type: SimulationState['deviceLogs'][number]['type']
     default:
       return type;
   }
+}
+
+function formatRuntimeLogMessage(message: string, deviceNames: Map<DeviceId, string>): string {
+  const resolveName = (deviceId: string) => deviceNames.get(deviceId)?.trim() || deviceId;
+  return message
+    .replace(/Received radio packet from ([a-zA-Z0-9_-]+)/g, (_match, deviceId: string) =>
+      `Received radio packet from ${resolveName(deviceId)}`)
+    .replace(/Blocked radio packet from ([a-zA-Z0-9_-]+):/g, (_match, deviceId: string) =>
+      `Blocked radio packet from ${resolveName(deviceId)}:`);
 }
 
 function makeArtifactId(deviceId: DeviceId, filename: string, timestamp: string): string {

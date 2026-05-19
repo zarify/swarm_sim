@@ -80,12 +80,58 @@ test.describe('core canvas workflows', () => {
   });
 
   test('uploads MicroPython fixture for selected device', async ({ page }) => {
+    const runtimeErrors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') {
+        runtimeErrors.push(message.text());
+      }
+    });
+
     await page.goto('/');
 
     await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
 
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[aria-label="MicroPython runtime host"]')).toHaveCount(0);
+    await expect
+      .poll(
+        () =>
+          runtimeErrors.filter((error) =>
+            /Failed to instantiate WASM|failed to match magic number|Context must be pre-created from a user event|NetworkError when attempting to fetch resource|Cross-Origin Request Blocked|Access-Control-Allow-Origin/i.test(
+              error,
+            ),
+          ),
+        { timeout: 3_000 },
+      )
+      .toEqual([]);
+  });
+
+  test('coalesces fragmented MicroPython serial output into one runtime log line', async ({ page }) => {
+    await page.goto('/');
+    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-runtime-state="device-alpha:ready"]')).toBeVisible({ timeout: 15_000 });
+
+    const eventLog = page.getByLabel('Event log for Alpha');
+    await eventLog.locator('summary').click();
+
+    await expect.poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html'))).toBe(true);
+    const simulatorFrame = page.frames().find((frame) => frame.url().includes('/micropython-patched-simulator.html'));
+    expect(simulatorFrame).toBeTruthy();
+    await page.evaluate(() => {
+      const frame = document.querySelector('iframe[title="MicroPython simulator for Alpha"]') as HTMLIFrameElement | null;
+      frame?.contentWindow?.postMessage({ kind: 'stop' }, window.location.origin);
+    });
+    await simulatorFrame!.evaluate(() => {
+      window.parent.postMessage({ kind: 'serial_output', data: 'b' }, window.location.origin);
+      window.parent.postMessage({ kind: 'serial_output', data: "'light:101'" }, window.location.origin);
+      window.parent.postMessage({ kind: 'serial_output', data: '\n' }, window.location.origin);
+    });
+
+    await expect(page.locator('.device-log__line', { hasText: 'light:101' })).toHaveCount(1);
+    await expect(page.locator('.device-log__line', { hasText: "b'light:101'" })).toHaveCount(0);
   });
 
   test('persists MicroPython assignment across browser save/load workflow', async ({ page }) => {
