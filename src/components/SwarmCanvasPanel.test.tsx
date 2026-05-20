@@ -280,6 +280,11 @@ describe('SwarmCanvasPanel', () => {
       );
     });
     expect(screen.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeInTheDocument();
+
+    const deviceLog = screen.getByLabelText('Event log for Alpha');
+    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
+    const diagnostic = await screen.findByText('Ignored invalid runtime radio signal strength: -52');
+    expect(diagnostic.closest('.device-log__line')?.querySelector('.device-log__type')).toHaveTextContent('err');
   });
 
   it('updates sender range from runtime tx power packets so radio radius reflects power', async () => {
@@ -412,7 +417,7 @@ describe('SwarmCanvasPanel', () => {
 
   it('keeps sender runtime group when translating MicroPython text packets for MakeCode recipients', async () => {
     const deliveredPackets: RoutedRadioDelivery[][] = [];
-    render(
+    const { container } = render(
       <SwarmCanvasPanel
         RuntimeHost={(props) => (
           <MicroPythonToMakeCodeDeliveryProbeHost
@@ -443,6 +448,18 @@ describe('SwarmCanvasPanel', () => {
     expect(describeMakeCodeValuePacket(firstDelivery?.packet.data ?? new Uint8Array())).toBe(
       'value:light:77',
     );
+
+    const alphaNode = container.querySelector('[data-runtime-activity="tx:device-alpha"]');
+    expect(alphaNode).toBeInTheDocument();
+    const canvas = container.querySelector('.swarm-canvas') as SVGElement;
+    Object.defineProperty(canvas, 'setPointerCapture', { value: vi.fn(), configurable: true });
+    fireEvent.pointerDown(alphaNode as Element);
+    const senderDeviceLog = screen.getByLabelText('Event log for Alpha');
+    fireEvent.click(senderDeviceLog.querySelector('summary') as HTMLElement);
+    await waitFor(() => expect(screen.getByText('Sent radio packet to 1 recipient(s)')).toBeInTheDocument());
+    expect(
+      screen.queryByText(/Translated MicroPython radio payload for MakeCode recipient:/i),
+    ).not.toBeInTheDocument();
   }, 30000);
 
   it('shows a per-device error runtime state when runtime internal errors are reported', async () => {

@@ -704,7 +704,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           current.simulationState.options.maxSignalStrength,
           senderGroup,
         );
-        const diagnostics = [...normalized.diagnostics];
+        const runtimeErrorDiagnostics = [...normalized.diagnostics];
+        const debugDiagnostics = [...normalized.diagnostics];
         let simulationState = current.simulationState;
         if (
           normalized.packet.signalStrength !== undefined &&
@@ -726,7 +727,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
             recipientRuntimeSource,
           );
           if (translatedPacket.diagnostic) {
-            diagnostics.push(translatedPacket.diagnostic);
+            debugDiagnostics.push(translatedPacket.diagnostic);
           }
           return {
             recipientId: receivedPacket.deviceId,
@@ -738,7 +739,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
             },
           };
         });
-        for (const diagnostic of diagnostics) {
+        for (const diagnostic of runtimeErrorDiagnostics) {
           simulationState = appendDeviceRuntimeLog(
             simulationState,
             deviceId,
@@ -751,7 +752,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           senderRadio: senderRuntime?.radio,
           rawPacket: summarizeRadioPacket(packet),
           normalizedPacket: summarizeRadioPacket(normalized.packet),
-          diagnostics,
+          diagnostics: debugDiagnostics,
           recipients: deliveries.map((delivery) => delivery.recipientId),
           deliveries: deliveries.map((delivery) => ({
             recipientId: delivery.recipientId,
