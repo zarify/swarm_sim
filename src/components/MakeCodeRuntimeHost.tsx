@@ -17,6 +17,7 @@ import {
 import type {
   MicrobitRuntimeAdapter,
   RuntimeAdapterEvent,
+  RuntimeDataLogEvent,
   RuntimeProgram,
   RuntimeRadioPacket,
 } from '../runtime/runtimeAdapter';
@@ -57,6 +58,7 @@ export interface MakeCodeRuntimeHostProps {
     deviceId: DeviceId,
     config: RuntimeRadioConfigHint,
   ) => void;
+  onRuntimeDataLog?: (deviceId: DeviceId, event: RuntimeDataLogEvent) => void;
   onLoadResultsChange?: (results: DeviceProgramLoadResult[]) => void;
   onRuntimeHostStateChange?: (state: RuntimeHostState) => void;
   loadPrograms?: RuntimeLoadPrograms;
@@ -83,6 +85,7 @@ export function MakeCodeRuntimeHost({
   onDisplayChange,
   onSoundOutput,
   onRadioConfigHint,
+  onRuntimeDataLog,
   onLoadResultsChange,
   onRuntimeHostStateChange,
   loadPrograms = loadProjectRuntimePrograms,
@@ -115,6 +118,7 @@ export function MakeCodeRuntimeHost({
     onDisplayChange,
     onSoundOutput,
     onRadioConfigHint,
+    onRuntimeDataLog,
   });
 
   useEffect(() => {
@@ -128,8 +132,9 @@ export function MakeCodeRuntimeHost({
       onDisplayChange,
       onSoundOutput,
       onRadioConfigHint,
+      onRuntimeDataLog,
     };
-  }, [onRadioPacket, onRuntimeLog, onDisplayChange, onSoundOutput, onRadioConfigHint]);
+  }, [onRadioPacket, onRuntimeLog, onDisplayChange, onSoundOutput, onRadioConfigHint, onRuntimeDataLog]);
 
   useEffect(
     () =>
@@ -663,6 +668,10 @@ export function MakeCodeRuntimeHost({
         break;
       case 'sound-output':
         callbacks.current.onSoundOutput?.(deviceId, event.level);
+        break;
+      case 'data-log-output':
+      case 'data-log-delete':
+        callbacks.current.onRuntimeDataLog?.(deviceId, event);
         break;
     }
   }

@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { unzipSync } from 'fflate';
 import { useEffect, useRef } from 'react';
 import { vi } from 'vitest';
 import type { MicroPythonRuntimeHostProps, RoutedRadioDelivery } from './MicroPythonRuntimeHost';
@@ -28,6 +29,11 @@ describe('SwarmCanvasPanel', () => {
     const { container } = render(<SwarmCanvasPanel />);
 
     expect(screen.queryByRole('heading', { name: 'Spatial radio bench' })).not.toBeInTheDocument();
+    expect(screen.getByText('v0.1.0')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open project repository on GitHub' })).toHaveAttribute(
+      'href',
+      'https://github.com/zarify/swarm_sim',
+    );
     expect(screen.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeInTheDocument();
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(1);
     expect(screen.queryByRole('dialog', { name: 'Debug tools' })).not.toBeInTheDocument();
@@ -511,6 +517,66 @@ describe('SwarmCanvasPanel', () => {
     await waitFor(() => expect(container.querySelectorAll('.microbit-node')).toHaveLength(1));
   });
 
+  it('deletes individual saved layouts from the canvas-state menu', async () => {
+    render(<SwarmCanvasPanel />);
+
+    const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Layout one');
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Swarm tools' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save to browser' }));
+
+    await waitFor(() => expect(promptSpy).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load Layout one' })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Layout one' }));
+
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Load Layout one' })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText('No saved layouts yet.')).toBeInTheDocument();
+  });
+
+  it('downloads runtime log files as a zip archive with device-name-prefixed MY_DATA files', async () => {
+    const createObjectURLSpy = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockImplementation(() => 'blob:runtime-logs');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+    render(<SwarmCanvasPanel RuntimeHost={(props) => <RuntimeDataLogEmitterHost {...props} />} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename selected node' }));
+    const renameInput = screen.getByLabelText('Edit node name');
+    fireEvent.change(renameInput, { target: { value: 'Sensors Hub' } });
+    fireEvent.keyDown(renameInput, { key: 'Enter' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Debug' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Swarm tools' }));
+    const downloadLogsButton = screen.getByRole('button', { name: 'Download log files' });
+    await waitFor(() => expect(downloadLogsButton).toBeEnabled());
+    fireEvent.click(downloadLogsButton);
+
+    const archiveBlob = await waitFor(() => {
+      const object = createObjectURLSpy.mock.calls.at(-1)?.[0];
+      expect(object).toBeInstanceOf(Blob);
+      const blob = object as Blob;
+      expect(blob.type).toBe('application/zip');
+      return blob;
+    });
+    const archiveBuffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.onerror = () => reject(reader.error ?? new Error('Unable to read archive blob'));
+      reader.readAsArrayBuffer(archiveBlob);
+    });
+    const archiveBytes = new Uint8Array(archiveBuffer);
+    const archive = unzipSync(archiveBytes);
+    const fileNames = Object.keys(archive);
+    expect(fileNames.some((name) => name === 'sensors-hub-MY_DATA.html')).toBe(true);
+    expect(screen.getByText('Downloaded log files for 1 device')).toBeInTheDocument();
+  });
+
   it('prompts before clearing the canvas and only clears after confirmation', async () => {
     const { container } = render(<SwarmCanvasPanel />);
     fireEvent.click(screen.getByRole('button', { name: 'Swarm tools' }));
@@ -588,6 +654,25 @@ function ActivityEmitterHost({
     }, 0);
     return () => globalThis.clearTimeout(timerId);
   }, [onRadioPacket, onSoundOutput]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
+function RuntimeDataLogEmitterHost({ onRuntimeDataLog }: MicroPythonRuntimeHostProps) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    if (emitted.current || !onRuntimeDataLog) {
+      return;
+    }
+    emitted.current = true;
+    onRuntimeDataLog('device-alpha', {
+      type: 'data-log-output',
+      entry: {
+        headings: ['time', 'temp'],
+        data: ['1', '22'],
+      },
+    });
+  }, [onRuntimeDataLog]);
 
   return <div aria-label="MicroPython runtime host" />;
 }

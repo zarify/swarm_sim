@@ -87,6 +87,67 @@ test.describe('core canvas workflows', () => {
     await expect(page.locator('.microbit-node')).toHaveCount(1);
   });
 
+  test('deletes an individual saved layout from browser state', async ({ page }) => {
+    const saveName = 'E2E Layout Delete';
+    await page.addInitScript((layoutName) => {
+      window.prompt = () => layoutName;
+      window.confirm = () => true;
+    }, saveName);
+
+    await gotoCanvas(page);
+
+    await openSwarmTools(page);
+    await page.getByRole('button', { name: 'Save to browser' }).click({ force: true });
+
+    const loadLayoutButton = page.getByRole('button', { name: `Load ${saveName}` });
+    const deleteLayoutButton = page.getByRole('button', { name: `Delete ${saveName}` });
+    await expect(loadLayoutButton).toBeVisible();
+    await expect(deleteLayoutButton).toBeVisible();
+
+    await deleteLayoutButton.click({ force: true });
+    await expect(loadLayoutButton).toHaveCount(0);
+    await expect(page.getByText('No saved layouts yet.')).toBeVisible();
+  });
+
+  test('enables log archive download when runtime logs are present', async ({ page }) => {
+    await gotoCanvas(page);
+    await openSwarmTools(page);
+    const downloadLogsButton = page.getByRole('button', { name: 'Download log files' });
+    await expect(downloadLogsButton).toBeDisabled();
+
+    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')))
+      .toBe(true);
+    const simulatorFrame = page.frames().find((frame) => frame.url().includes('/micropython-patched-simulator.html'));
+    expect(simulatorFrame).toBeTruthy();
+
+    await simulatorFrame!.evaluate(() => {
+      window.parent.postMessage(
+        {
+          kind: 'log_output',
+          headings: ['time', 'temp'],
+          data: ['1', '22'],
+        },
+        window.location.origin,
+      );
+    });
+
+    await expect(downloadLogsButton).toBeEnabled({ timeout: 5_000 });
+    const downloadPromise = page.waitForEvent('download');
+    await downloadLogsButton.click({ force: true });
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toMatch(/-device-logs\.zip$/);
+  });
+
   test('clear canvas respects confirmation dialog', async ({ page }) => {
     await page.addInitScript(() => {
       const responses = [false, true];

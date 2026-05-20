@@ -6,6 +6,7 @@ import type {
   MicrobitRuntimeAdapter,
   RuntimeAdapterEvent,
   RuntimeAdapterUnsubscribe,
+  RuntimeDataLogEntry,
   RuntimeProgram,
   RuntimeRadioPacket,
 } from './runtimeAdapter';
@@ -254,6 +255,21 @@ export class MakeCodeIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
         this.emit({ type: 'internal-error', error: new Error(messageText) });
         break;
       }
+      case 'data-log-output': {
+        try {
+          const entry = normalizeDataLogPayload(payload);
+          if (entry.headings || entry.data) {
+            this.emit({ type: 'data-log-output', entry });
+          }
+        } catch (error) {
+          this.emit({ type: 'internal-error', error: normalizeError(error) });
+        }
+        break;
+      }
+      case 'data-log-delete': {
+        this.emit({ type: 'data-log-delete' });
+        break;
+      }
       default:
         break;
     }
@@ -319,6 +335,33 @@ function normalizeRadioConfigPayload(payload: Record<string, unknown>): {
     ...(channel === undefined ? {} : { channel }),
     ...(signalStrength === undefined ? {} : { signalStrength }),
   };
+}
+
+function normalizeDataLogPayload(payload: Record<string, unknown>): RuntimeDataLogEntry {
+  const headings = normalizeDataLogValues(payload.headings);
+  const data = normalizeDataLogValues(payload.data);
+  return {
+    ...(headings === undefined ? {} : { headings }),
+    ...(data === undefined ? {} : { data }),
+  };
+}
+
+function normalizeDataLogValues(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.map((entry) => {
+    if (typeof entry === 'string') {
+      return entry;
+    }
+    if (typeof entry === 'number' || typeof entry === 'boolean') {
+      return String(entry);
+    }
+    if (entry === null || entry === undefined) {
+      return '';
+    }
+    throw new Error('MakeCode runtime data-log payload contained non-scalar values');
+  });
 }
 
 function toOptionalInteger(value: unknown): number | undefined {

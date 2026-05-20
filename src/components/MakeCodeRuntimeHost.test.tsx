@@ -102,6 +102,7 @@ describe('MakeCodeRuntimeHost', () => {
     const sounds: string[] = [];
     const buttonInputs: string[] = [];
     const radioHints: string[] = [];
+    const dataLogs: string[] = [];
     let emitRuntimeEvent: ((event: RuntimeAdapterEvent) => void) | undefined;
 
     render(
@@ -116,6 +117,17 @@ describe('MakeCodeRuntimeHost', () => {
         onSoundOutput={(deviceId, level) => sounds.push(`${deviceId}:${level}`)}
         onRadioConfigHint={(deviceId, config) => {
           radioHints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
+        }}
+        onRuntimeDataLog={(deviceId, event) => {
+          if (event.type === 'data-log-delete') {
+            dataLogs.push(`${deviceId}:delete`);
+            return;
+          }
+          dataLogs.push(
+            `${deviceId}:${
+              event.entry.headings?.join('|') ?? 'none'
+            }:${event.entry.data?.join('|') ?? 'none'}`,
+          );
         }}
         loadPrograms={async (_project, options) => {
           const adapter = await options.createAdapter?.({
@@ -177,6 +189,11 @@ describe('MakeCodeRuntimeHost', () => {
         type: 'sound-output',
         level: 7,
       });
+      emitRuntimeEvent?.({
+        type: 'data-log-output',
+        entry: { headings: ['time', 'light'], data: ['1', '42'] },
+      });
+      emitRuntimeEvent?.({ type: 'data-log-delete' });
     });
     fireEvent.click(screen.getByRole('button', { name: 'Press A for Alpha' }));
     fireEvent.click(screen.getByRole('button', { name: 'Press B for Alpha' }));
@@ -187,6 +204,7 @@ describe('MakeCodeRuntimeHost', () => {
     expect(logs).toContain('device-alpha:mc-receive');
     expect(sounds).toEqual(['device-alpha:7']);
     expect(radioHints).toEqual(['device-alpha:17:9:6', 'device-alpha:42:7:5']);
+    expect(dataLogs).toEqual(['device-alpha:time|light:1|42', 'device-alpha:delete']);
     await waitFor(() =>
       expect(document.querySelector('[data-runtime-led="device-alpha:0"]')).toHaveClass('virtual-led-pixel--lit'),
     );

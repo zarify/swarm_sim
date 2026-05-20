@@ -393,6 +393,7 @@ describe('MicroPythonRuntimeHost', () => {
     const packets: string[] = [];
     const sounds: string[] = [];
     const hints: string[] = [];
+    const dataLogs: string[] = [];
     const forwardedPackets: string[] = [];
     let emitRuntimeEvent: ((event: RuntimeAdapterEvent) => void) | undefined;
     const project = makeProject();
@@ -413,6 +414,17 @@ describe('MicroPythonRuntimeHost', () => {
         onSoundOutput={(deviceId, level) => sounds.push(`${deviceId}:${level}`)}
         onRadioConfigHint={(deviceId, config) => {
           hints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
+        }}
+        onRuntimeDataLog={(deviceId, event) => {
+          if (event.type === 'data-log-delete') {
+            dataLogs.push(`${deviceId}:delete`);
+            return;
+          }
+          dataLogs.push(
+            `${deviceId}:${
+              event.entry.headings?.join('|') ?? 'none'
+            }:${event.entry.data?.join('|') ?? 'none'}`,
+          );
         }}
         loadPrograms={loadTargetProjectDevices}
         createAdapter={() =>
@@ -441,12 +453,18 @@ describe('MicroPythonRuntimeHost', () => {
     });
     emitRuntimeEvent?.({ type: 'serial-output', data: 'mp-receive' });
     emitRuntimeEvent?.({ type: 'sound-output', level: 7 });
+    emitRuntimeEvent?.({
+      type: 'data-log-output',
+      entry: { headings: ['time', 'temp'], data: ['1', '22'] },
+    });
+    emitRuntimeEvent?.({ type: 'data-log-delete' });
 
     await waitFor(() => expect(forwardedPackets).toEqual(['pong']));
     expect(packets).toEqual(['device-alpha:ping']);
     expect(logs).toContain('device-alpha:mp-receive');
     expect(sounds).toEqual(['device-alpha:7']);
     expect(hints).toEqual(['device-alpha:42:9:6', 'device-alpha:17:9:6', 'device-alpha:42:7:5']);
+    expect(dataLogs).toEqual(['device-alpha:time|temp:1|22', 'device-alpha:delete']);
   });
 
   it('deduplicates immediate identical radio packets from the same runtime device', async () => {

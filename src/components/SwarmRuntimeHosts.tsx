@@ -118,6 +118,7 @@ export function SwarmRuntimeHosts({
           onDisplayChange={props.onDisplayChange}
           onSoundOutput={props.onSoundOutput}
           onRadioConfigHint={props.onRadioConfigHint}
+          onRuntimeDataLog={props.onRuntimeDataLog}
           onRuntimeHostStateChange={setMakeCodeHostState}
           onLoadResultsChange={setMakeCodeResults}
         />

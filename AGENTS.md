@@ -25,6 +25,14 @@ Do not move low-level edge-case assertions from Vitest into Playwright; keep Pla
 - E2E suite: `npm run test:e2e`
 - E2E headed debugging: `npm run test:e2e:headed`
 
+## Versioning expectations
+
+- Follow semantic versioning for this project, including pre-1.0:
+  - bug fix -> patch
+  - backward-compatible feature -> minor
+  - breaking change -> major
+- If a change includes bug fixes or new features, update the project version in `package.json` as part of that change.
+
 ## Authoring conventions for new tests
 
 - Prefer semantic selectors (`getByRole`, `getByLabelText`, visible text) before CSS selectors.

@@ -36,13 +36,23 @@ export interface RuntimeRadioConfig {
   signalStrength?: number;
 }
 
+export interface RuntimeDataLogEntry {
+  headings?: string[];
+  data?: string[];
+}
+
+export type RuntimeDataLogEvent =
+  | { type: 'data-log-output'; entry: RuntimeDataLogEntry }
+  | { type: 'data-log-delete' };
+
 export type RuntimeAdapterEvent =
   | { type: 'display-change'; pixels: number[] }
   | { type: 'radio-output'; packet: RuntimeRadioPacket }
   | { type: 'radio-config-change'; config: RuntimeRadioConfig }
   | { type: 'sound-output'; level: number }
   | { type: 'serial-output'; data: string }
-  | { type: 'internal-error'; error: Error };
+  | { type: 'internal-error'; error: Error }
+  | RuntimeDataLogEvent;
 
 export type RuntimeAdapterUnsubscribe = () => void;
 

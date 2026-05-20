@@ -16,6 +16,7 @@ import type { RuntimeHostState, RuntimeResetRequest } from './runtimeHostControl
 import type {
   MicrobitRuntimeAdapter,
   RuntimeAdapterEvent,
+  RuntimeDataLogEvent,
   RuntimeProgram,
   RuntimeRadioPacket,
 } from '../runtime/runtimeAdapter';
@@ -65,6 +66,7 @@ export interface MicroPythonRuntimeHostProps {
     deviceId: DeviceId,
     config: RuntimeRadioConfigHint,
   ) => void;
+  onRuntimeDataLog?: (deviceId: DeviceId, event: RuntimeDataLogEvent) => void;
   onLoadResultsChange?: (results: DeviceProgramLoadResult[]) => void;
   onRuntimeHostStateChange?: (state: RuntimeHostState) => void;
   loadPrograms?: RuntimeLoadPrograms;
@@ -91,6 +93,7 @@ export function MicroPythonRuntimeHost({
   onDisplayChange,
   onSoundOutput,
   onRadioConfigHint,
+  onRuntimeDataLog,
   onLoadResultsChange,
   onRuntimeHostStateChange,
   loadPrograms = loadProjectRuntimePrograms,
@@ -117,6 +120,7 @@ export function MicroPythonRuntimeHost({
     onDisplayChange,
     onSoundOutput,
     onRadioConfigHint,
+    onRuntimeDataLog,
   });
   const [readyDeviceIds, setReadyDeviceIds] = useState<Set<DeviceId>>(() => new Set());
   const invalidDisplayFrameLogged = useRef(new Set<DeviceId>());
@@ -134,8 +138,9 @@ export function MicroPythonRuntimeHost({
       onDisplayChange,
       onSoundOutput,
       onRadioConfigHint,
+      onRuntimeDataLog,
     };
-  }, [onRadioPacket, onRuntimeLog, onDisplayChange, onSoundOutput, onRadioConfigHint]);
+  }, [onRadioPacket, onRuntimeLog, onDisplayChange, onSoundOutput, onRadioConfigHint, onRuntimeDataLog]);
 
   useEffect(
     () =>
@@ -582,6 +587,10 @@ export function MicroPythonRuntimeHost({
         break;
       case 'sound-output':
         callbacks.current.onSoundOutput?.(deviceId, event.level);
+        break;
+      case 'data-log-output':
+      case 'data-log-delete':
+        callbacks.current.onRuntimeDataLog?.(deviceId, event);
         break;
     }
   }

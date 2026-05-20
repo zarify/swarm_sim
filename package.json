@@ -15,6 +15,7 @@
     "test:e2e:install": "playwright install"
   },
   "dependencies": {
+    "fflate": "^0.8.3",
     "react": "^19.2.3",
     "react-dom": "^19.2.3"
   },

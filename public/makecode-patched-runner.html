@@ -40,6 +40,7 @@
           outboundRadioSequence: 0,
           recentOutboundRadioFingerprint: null,
           recentSerialFingerprint: null,
+          dataLogHeadings: null,
           resolveSimulatorReady: null,
           rejectSimulatorReady: null,
         };
@@ -133,6 +134,7 @@
             state.outboundRadioSequence = 0;
             state.recentOutboundRadioFingerprint = null;
             state.recentSerialFingerprint = null;
+            state.dataLogHeadings = null;
 
             if (window.pxt?.runner?.stop) {
               window.pxt.runner.stop();
@@ -254,6 +256,9 @@
           }
 
           if (isSerialLikeType(data.type)) {
+            if (emitRuntimeDataLogPayload(data.data ?? data)) {
+              return;
+            }
             emitSerialPayload(data.data ?? data);
             return;
           }
@@ -271,6 +276,9 @@
               return;
             }
             if (isSerialChannel(data.channel)) {
+              if (emitRuntimeDataLogPayload(data.data ?? data)) {
+                return;
+              }
               emitSerialPayload(data.data ?? data);
             }
           }
@@ -474,6 +482,132 @@
             eventType: 'serial',
             payload: { data },
           });
+        }
+
+        function emitRuntimeDataLogPayload(rawValue) {
+          const normalized = normalizeRuntimeDataLogPayload(rawValue, state.dataLogHeadings);
+          if (!normalized) {
+            return false;
+          }
+          if (normalized.kind === 'delete') {
+            state.dataLogHeadings = null;
+            postToHost({
+              type: 'swarm-runtime-event',
+              eventType: 'data-log-delete',
+              payload: {},
+            });
+            return true;
+          }
+          if (Array.isArray(normalized.entry.headings)) {
+            state.dataLogHeadings = [...normalized.entry.headings];
+          }
+          postToHost({
+            type: 'swarm-runtime-event',
+            eventType: 'data-log-output',
+            payload: normalized.entry,
+          });
+          return true;
+        }
+
+        function normalizeRuntimeDataLogPayload(rawValue, activeHeadings) {
+          if (!isRecord(rawValue)) {
+            return null;
+          }
+          const explicitEntry = normalizeDataLogEntryRecord(rawValue);
+          if (explicitEntry) {
+            return { kind: 'output', entry: explicitEntry };
+          }
+          const csvType = typeof rawValue.csvType === 'string' ? rawValue.csvType : '';
+          if (csvType === '') {
+            return null;
+          }
+          if (csvType === 'clear') {
+            return { kind: 'delete' };
+          }
+          const text = normalizeSerialData(rawValue.data ?? rawValue.text ?? rawValue.value);
+          const parsed = parseCsvRecord(text);
+          if (csvType === 'headers') {
+            if (parsed.length === 0) {
+              return null;
+            }
+            return {
+              kind: 'output',
+              entry: { headings: parsed },
+            };
+          }
+          if (csvType === 'row') {
+            if (parsed.length === 0) {
+              return null;
+            }
+            return {
+              kind: 'output',
+              entry: {
+                ...(Array.isArray(activeHeadings) ? { headings: [...activeHeadings] } : {}),
+                data: parsed,
+              },
+            };
+          }
+          return null;
+        }
+
+        function normalizeDataLogEntryRecord(value) {
+          const headings = normalizeDataLogValues(value.headings);
+          const data = normalizeDataLogValues(value.data);
+          if (!headings && !data) {
+            return null;
+          }
+          return {
+            ...(headings ? { headings } : {}),
+            ...(data ? { data } : {}),
+          };
+        }
+
+        function normalizeDataLogValues(value) {
+          if (!Array.isArray(value)) {
+            return null;
+          }
+          return value.map((entry) => {
+            if (typeof entry === 'string') {
+              return entry;
+            }
+            if (typeof entry === 'number' || typeof entry === 'boolean') {
+              return String(entry);
+            }
+            if (entry === null || entry === undefined) {
+              return '';
+            }
+            return '';
+          });
+        }
+
+        function parseCsvRecord(value) {
+          const line = value.replace(/\r?\n$/, '');
+          if (line === '') {
+            return [];
+          }
+          const cells = [];
+          let current = '';
+          let inQuotes = false;
+          for (let index = 0; index < line.length; index += 1) {
+            const character = line[index];
+            if (character === '"') {
+              if (inQuotes && line[index + 1] === '"') {
+                current += '"';
+                index += 1;
+                continue;
+              }
+              inQuotes = !inQuotes;
+              continue;
+            }
+            if (character === ',' && !inQuotes) {
+              cells.push(current);
+              current = '';
+              continue;
+            }
+            current += character;
+          }
+          cells.push(current);
+          return cells;
         }
 
         function emitRuntimeRadioPayload(payload) {

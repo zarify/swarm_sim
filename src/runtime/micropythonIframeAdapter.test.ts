@@ -164,6 +164,8 @@ display.show(Image.ARROW_N)`),
 
     eventTarget.dispatchMessage({ kind: 'radio_output', data: [1, 0, 1, 112, 105, 110, 103] });
     eventTarget.dispatchMessage({ kind: 'serial_output', data: 'mp-receive' });
+    eventTarget.dispatchMessage({ kind: 'log_output', headings: ['time', 'temp'], data: ['1', '22'] });
+    eventTarget.dispatchMessage({ kind: 'log_delete' });
     eventTarget.dispatchMessage({ kind: 'internal_error', error: 'boom' });
 
     expect(events[0]).toMatchObject({ type: 'radio-output' });
@@ -172,7 +174,12 @@ display.show(Image.ARROW_N)`),
     }
     expect(decodeMicroPythonRadioString(events[0].packet.data)).toBe('ping');
     expect(events[1]).toEqual({ type: 'serial-output', data: 'mp-receive' });
-    expect(events[2]).toMatchObject({ type: 'internal-error', error: new Error('boom') });
+    expect(events[2]).toEqual({
+      type: 'data-log-output',
+      entry: { headings: ['time', 'temp'], data: ['1', '22'] },
+    });
+    expect(events[3]).toEqual({ type: 'data-log-delete' });
+    expect(events[4]).toMatchObject({ type: 'internal-error', error: new Error('boom') });
   });
 
   it('converts display bridge serial markers into display events without leaking them to user serial logs', () => {

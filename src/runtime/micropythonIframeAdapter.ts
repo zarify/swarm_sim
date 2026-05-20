@@ -5,6 +5,7 @@ import type {
   MicroPythonRuntimeProgram,
   RuntimeAdapterEvent,
   RuntimeAdapterUnsubscribe,
+  RuntimeDataLogEntry,
   RuntimeProgram,
   RuntimeRadioPacket,
 } from './runtimeAdapter';
@@ -183,6 +184,21 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
         break;
       case 'serial_output':
         this.handleSerialOutput(typeof data.data === 'string' ? data.data : '');
+        break;
+      case 'log_output':
+        try {
+          this.flushPendingSerialFragments(true);
+          const entry = normalizeDataLogEntry(data);
+          if (entry.headings || entry.data) {
+            this.emit({ type: 'data-log-output', entry });
+          }
+        } catch (error) {
+          this.emit({ type: 'internal-error', error: normalizeError(error) });
+        }
+        break;
+      case 'log_delete':
+        this.flushPendingSerialFragments(true);
+        this.emit({ type: 'data-log-delete' });
         break;
       case 'internal_error':
         this.flushPendingSerialFragments(true);
@@ -741,6 +757,33 @@ function normalizeBytes(value: unknown): Uint8Array {
   }
 
   throw new Error('MicroPython simulator radio_output did not contain byte data');
+}
+
+function normalizeDataLogEntry(payload: Record<string, unknown>): RuntimeDataLogEntry {
+  const headings = normalizeDataLogValues(payload.headings);
+  const data = normalizeDataLogValues(payload.data);
+  return {
+    ...(headings === undefined ? {} : { headings }),
+    ...(data === undefined ? {} : { data }),
+  };
+}
+
+function normalizeDataLogValues(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.map((entry) => {
+    if (typeof entry === 'string') {
+      return entry;
+    }
+    if (typeof entry === 'number' || typeof entry === 'boolean') {
+      return String(entry);
+    }
+    if (entry === null || entry === undefined) {
+      return '';
+    }
+    throw new Error('MicroPython simulator log_output contained non-scalar values');
+  });
 }
 
 function parseTrustedOrigin(value: string): string {

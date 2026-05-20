@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactElement } from 'react';
 import { flushSync } from 'react-dom';
+import { zipSync } from 'fflate';
 import {
   createBlankProject,
   defaultDeviceNameForId,
@@ -29,7 +30,7 @@ import {
   type SimulationState,
 } from '../simulation/simulationEngine';
 import type { DeviceProgramLoadResult } from '../runtime/programLoader';
-import type { RuntimeRadioPacket } from '../runtime/runtimeAdapter';
+import type { RuntimeDataLogEntry, RuntimeDataLogEvent, RuntimeRadioPacket } from '../runtime/runtimeAdapter';
 import type { RuntimeSource } from '../runtime/types';
 import type { MicroPythonRuntimeHostProps, RoutedRadioDelivery } from './MicroPythonRuntimeHost';
 import type { RuntimeResetRequest } from './runtimeHostControls';
@@ -79,6 +80,15 @@ interface DeviceRuntimeActivity {
   sound: boolean;
 }
 
+interface RuntimeDeviceDataLog {
+  entries: RuntimeDataLogEntry[];
+}
+
+interface RuntimeDataLogArchiveFile {
+  filename: string;
+  content: string;
+}
+
 type ArtifactUploadState = 'uploading' | 'ready' | 'failed';
 type RuntimeNodeState = 'pending' | 'ready' | 'failed' | 'error';
 type RuntimeRadioConfigHint = Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>>;
@@ -99,8 +109,11 @@ const RADIO_GROUP_MAX = 255;
 const RADIO_CHANNEL_MIN = 0;
 const RADIO_CHANNEL_MAX = 83;
 const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
+const APP_VERSION_LABEL = `v${__APP_VERSION__}`;
+const APP_REPOSITORY_URL = __APP_REPO_URL__;
 const MAX_CANVAS_NODE_NAME = 11;
 const MAX_SIDEBAR_NODE_NAME = 28;
+const textEncoder = new TextEncoder();
 export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanvasPanelProps = {}) {
   const [model, setModel] = useState<CanvasModel>(() => {
     const project = createDemoProject();
@@ -122,6 +135,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const [isBundleDropActive, setIsBundleDropActive] = useState(false);
   const [displaySnapshots, setDisplaySnapshots] = useState<Record<DeviceId, number[]>>({});
   const [runtimeActivity, setRuntimeActivity] = useState<Record<DeviceId, DeviceRuntimeActivity>>({});
+  const [runtimeDataLogs, setRuntimeDataLogs] = useState<Record<DeviceId, RuntimeDeviceDataLog>>({});
   const [scenarioResetSignal, setScenarioResetSignal] = useState(0);
   const [runtimeResetRequest, setRuntimeResetRequest] = useState<RuntimeResetRequest>();
   const [artifactUploadIssues, setArtifactUploadIssues] = useState<Record<DeviceId, ArtifactUploadIssue>>({});
@@ -341,6 +355,12 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       ) as Record<DeviceId, ArtifactUploadState>;
       return Object.keys(next).length === Object.keys(current).length ? current : next;
     });
+    setRuntimeDataLogs((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([deviceId]) => activeDeviceIds.has(deviceId)),
+      ) as Record<DeviceId, RuntimeDeviceDataLog>;
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
   }, [project.devices]);
 
   async function refreshSavedProjects() {
@@ -527,6 +547,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         const { [deletingId]: _removed, ...rest } = current;
         return rest;
       });
+      setRuntimeDataLogs((current) => {
+        const { [deletingId]: _removed, ...rest } = current;
+        return rest;
+      });
       setRuntimeErrorByDevice((current) => {
         const { [deletingId]: _removed, ...rest } = current;
         return rest;
@@ -644,6 +668,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         };
       });
       setDisplaySnapshots((current) => removeDisplaySnapshot(current, deviceId));
+      setRuntimeDataLogs((current) => {
+        if (!(deviceId in current)) {
+          return current;
+        }
+        const { [deviceId]: _removed, ...rest } = current;
+        return rest;
+      });
       setArtifactUploadIssues((current) => {
         if (issue) {
           return {
@@ -913,6 +944,30 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     pulseRuntimeActivity(deviceId, 'sound');
   }
 
+  function handleRuntimeDataLog(deviceId: DeviceId, event: RuntimeDataLogEvent) {
+    if (event.type === 'data-log-delete') {
+      setRuntimeDataLogs((current) => {
+        if (!(deviceId in current)) {
+          return current;
+        }
+        const { [deviceId]: _removed, ...rest } = current;
+        return rest;
+      });
+      return;
+    }
+
+    const normalized = normalizeRuntimeDataLogEntry(event.entry);
+    if (!normalized) {
+      return;
+    }
+    setRuntimeDataLogs((current) => ({
+      ...current,
+      [deviceId]: {
+        entries: [...(current[deviceId]?.entries ?? []), normalized],
+      },
+    }));
+  }
+
   function pulseRuntimeActivity(deviceId: DeviceId, activity: keyof DeviceRuntimeActivity) {
     const timerKey = `${deviceId}:${activity}`;
     const existingTimer = runtimeActivityTimers.current.get(timerKey);
@@ -1089,6 +1144,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     setDisplaySnapshots({});
     setRuntimeActivity({});
     setRuntimeLoadResults([]);
+    setRuntimeDataLogs({});
     setArtifactUploadIssues({});
     setArtifactUploadState({});
     uploadTokens.current.clear();
@@ -1156,6 +1212,29 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }
   }
 
+  async function deleteSavedLayout(projectId: string, projectName: string) {
+    if (!browserProjectStore.current) {
+      setCanvasStateMessage('Browser storage is not available');
+      return;
+    }
+    if (
+      typeof window !== 'undefined' &&
+      typeof window.confirm === 'function' &&
+      !window.confirm(`Delete saved layout "${projectName}"?`)
+    ) {
+      return;
+    }
+    try {
+      await browserProjectStore.current.remove(projectId);
+      setCanvasStateMessage(`Deleted "${projectName}"`);
+      await refreshSavedProjects();
+    } catch (error) {
+      setCanvasStateMessage(
+        error instanceof Error ? error.message : 'Unable to delete saved layout',
+      );
+    }
+  }
+
   async function downloadCanvasBundle() {
     try {
       const bundleBytes = await encodeProjectBundle(project);
@@ -1173,6 +1252,34 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     } catch (error) {
       setCanvasStateMessage(
         error instanceof Error ? error.message : 'Unable to download canvas bundle',
+      );
+    }
+  }
+
+  async function downloadRuntimeDataLogs() {
+    const files = runtimeDataLogFiles;
+    if (files.length === 0) {
+      setCanvasStateMessage('No device log files available');
+      return;
+    }
+    try {
+      const zipEntries = Object.fromEntries(
+        files.map((file) => [file.filename, textEncoder.encode(file.content)] as const),
+      );
+      const zipBytes = zipSync(zipEntries, { level: 0 });
+      const blob = new Blob([zipBytes], { type: 'application/zip' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${slugForFilename(project.name)}-device-logs.zip`;
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setCanvasStateMessage(`Downloaded log files for ${files.length} device${files.length === 1 ? '' : 's'}`);
+    } catch (error) {
+      setCanvasStateMessage(
+        error instanceof Error ? error.message : 'Unable to download device log files',
       );
     }
   }
@@ -1259,11 +1366,28 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     runtimeErrorByDevice,
   );
   const deviceDisplayNames = new Map(project.devices.map((device) => [device.id, device.name] as const));
+  const runtimeDataLogFiles = buildRuntimeDataLogArchiveFiles(project, runtimeDataLogs);
+  const hasRuntimeDataLogFiles = runtimeDataLogFiles.length > 0;
 
   return (
     <section className="swarm-panel" aria-label="Swarm canvas">
       <div className="panel-header">
-        <p className="eyebrow">Swarm canvas</p>
+        <div className="panel-header__meta">
+          <p className="eyebrow">Swarm canvas</p>
+          <span className="panel-version" aria-label={`Version ${APP_VERSION_LABEL}`}>
+            {APP_VERSION_LABEL}
+          </span>
+          <a
+            className="panel-repo-link"
+            href={APP_REPOSITORY_URL}
+            target="_blank"
+            rel="noreferrer noopener"
+            aria-label="Open project repository on GitHub"
+            title="Open project repository on GitHub"
+          >
+            ↗
+          </a>
+        </div>
         <div className="control-stack" aria-label="Simulation controls">
           <button type="button" onClick={resetAllDevices}>
             Reset all
@@ -1311,6 +1435,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               <button type="button" onClick={() => void downloadCanvasBundle()}>
                 Download bundle
               </button>
+              <button
+                type="button"
+                onClick={() => void downloadRuntimeDataLogs()}
+                disabled={!hasRuntimeDataLogFiles}
+              >
+                Download log files
+              </button>
               <label className="canvas-state-upload">
                 Upload bundle
                 <input
@@ -1339,14 +1470,22 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               <p className="hint">No saved layouts yet.</p>
             ) : (
               savedProjectSummaries.slice(0, 8).map((summary) => (
-                <button
-                  key={summary.id}
-                  type="button"
-                  onClick={() => void loadSavedLayout(summary.id)}
-                  className="canvas-state-saved__item"
-                >
-                  Load {summary.name}
-                </button>
+                <div key={summary.id} className="canvas-state-saved__row">
+                  <button
+                    type="button"
+                    onClick={() => void loadSavedLayout(summary.id)}
+                    className="canvas-state-saved__item"
+                  >
+                    Load {summary.name}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void deleteSavedLayout(summary.id, summary.name)}
+                    className="canvas-state-saved__delete"
+                  >
+                    Delete {summary.name}
+                  </button>
+                </div>
               ))
             )}
           </div>
@@ -1513,9 +1652,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                     className="button-dot button-dot--interactive"
                     data-device-button={`${device.deviceId}:A`}
                     data-testid={`device-button-${device.deviceId}-A`}
-                    cx="-27"
+                    cx="-29"
                     cy="-2"
-                    r="6"
+                    r="7"
                     onPointerDown={(event) => {
                       event.stopPropagation();
                       pulseDeviceButton(device.deviceId, 'A');
@@ -1525,9 +1664,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                     className="button-dot button-dot--interactive"
                     data-device-button={`${device.deviceId}:B`}
                     data-testid={`device-button-${device.deviceId}-B`}
-                    cx="27"
+                    cx="29"
                     cy="-2"
-                    r="6"
+                    r="7"
                     onPointerDown={(event) => {
                       event.stopPropagation();
                       pulseDeviceButton(device.deviceId, 'B');
@@ -1551,8 +1690,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                         data-led-pixel={`${device.deviceId}:${pixelIndex}`}
                         className={lit ? 'led-pixel led-pixel--lit' : 'led-pixel'}
                         style={lit ? { opacity: 0.35 + (brightness / 9) * 0.65 } : undefined}
-                        x={-16 + column * 8}
-                        y={-16 + row * 8}
+                        x={-18 + column * 8}
+                        y={-18 + row * 8}
                         width="4.8"
                         height="4.8"
                         rx="1.2"
@@ -1705,6 +1844,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
             onDisplayChange={handleRuntimeDisplayChange}
             onSoundOutput={handleRuntimeSoundOutput}
             onRadioConfigHint={handleRuntimeRadioConfigHint}
+            onRuntimeDataLog={handleRuntimeDataLog}
             onLoadResultsChange={handleRuntimeLoadResults}
           />
         </div>
@@ -2053,6 +2193,132 @@ function slugForFilename(name: string): string {
     .replace(/^-|-$/g, '')
     .slice(0, 48);
   return slug || 'swarm-layout';
+}
+
+function normalizeRuntimeDataLogEntry(entry: RuntimeDataLogEntry): RuntimeDataLogEntry | undefined {
+  const headings = normalizeRuntimeDataLogValues(entry.headings);
+  const data = normalizeRuntimeDataLogValues(entry.data);
+  if (!headings && !data) {
+    return undefined;
+  }
+  return {
+    ...(headings ? { headings } : {}),
+    ...(data ? { data } : {}),
+  };
+}
+
+function normalizeRuntimeDataLogValues(values: RuntimeDataLogEntry['headings']): string[] | undefined {
+  if (!Array.isArray(values) || values.length === 0) {
+    return undefined;
+  }
+  return values.map((value) => value ?? '');
+}
+
+function buildRuntimeDataLogArchiveFiles(
+  project: SwarmProject,
+  runtimeDataLogs: Record<DeviceId, RuntimeDeviceDataLog>,
+): RuntimeDataLogArchiveFile[] {
+  const usedBaseNames = new Map<string, number>();
+  return project.devices.flatMap((device) => {
+    const log = runtimeDataLogs[device.id];
+    if (!log || log.entries.length === 0) {
+      return [];
+    }
+    const baseName = slugForFilename(device.name);
+    const occurrence = (usedBaseNames.get(baseName) ?? 0) + 1;
+    usedBaseNames.set(baseName, occurrence);
+    const uniqueBaseName = occurrence === 1 ? baseName : `${baseName}-${occurrence}`;
+    return [
+      {
+        filename: `${uniqueBaseName}-MY_DATA.html`,
+        content: renderRuntimeDataLogHtml(device.name, log.entries),
+      },
+    ];
+  });
+}
+
+function renderRuntimeDataLogHtml(deviceName: string, entries: RuntimeDataLogEntry[]): string {
+  type DataLogSection = { headings: string[]; rows: string[][] };
+  const sections: DataLogSection[] = [];
+  let activeHeadings: string[] | undefined;
+
+  for (const rawEntry of entries) {
+    const entry = normalizeRuntimeDataLogEntry(rawEntry);
+    if (!entry) {
+      continue;
+    }
+    if (entry.headings) {
+      activeHeadings = entry.headings;
+      const currentSection = sections.at(-1);
+      if (!currentSection || !areLogHeadingsEqual(currentSection.headings, activeHeadings)) {
+        sections.push({ headings: [...activeHeadings], rows: [] });
+      }
+    }
+    if (entry.data) {
+      const rowHeadings =
+        activeHeadings && activeHeadings.length > 0
+          ? activeHeadings
+          : entry.data.map((_, index) => `Column ${index + 1}`);
+      let section = sections.at(-1);
+      if (!section || !areLogHeadingsEqual(section.headings, rowHeadings)) {
+        section = { headings: [...rowHeadings], rows: [] };
+        sections.push(section);
+      }
+      section.rows.push(rowHeadings.map((_, index) => entry.data?.[index] ?? ''));
+    }
+  }
+
+  const body =
+    sections.length === 0
+      ? '<p>No data log rows captured.</p>'
+      : sections
+          .map(
+            (section, index) =>
+              `<section><h2>Log ${index + 1}</h2><table><thead><tr>${section.headings
+                .map((heading) => `<th>${escapeHtml(heading)}</th>`)
+                .join('')}</tr></thead><tbody>${section.rows
+                .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`)
+                .join('')}</tbody></table></section>`,
+          )
+          .join('');
+
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>MY_DATA - ${escapeHtml(deviceName)}</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 16px; }
+      table { border-collapse: collapse; width: 100%; margin: 8px 0 20px; }
+      th, td { border: 1px solid #c9cdd1; padding: 6px 8px; text-align: left; font-size: 14px; }
+      th { background: #f6f8fa; }
+      h1 { margin: 0 0 8px; }
+      h2 { margin: 18px 0 6px; font-size: 16px; }
+      .hint { color: #57606a; font-size: 13px; margin: 0 0 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>MY_DATA</h1>
+    <p class="hint">Device: ${escapeHtml(deviceName)}</p>
+    ${body}
+  </body>
+</html>`;
+}
+
+function areLogHeadingsEqual(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  return left.every((value, index) => value === right[index]);
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 function isProjectPopulated(project: SwarmProject): boolean {

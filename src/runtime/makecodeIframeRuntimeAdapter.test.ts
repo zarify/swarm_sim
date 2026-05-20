@@ -100,6 +100,16 @@ describe('MakeCode iframe runtime adapter', () => {
       eventType: 'sound',
       payload: { level: 7 },
     });
+    eventTarget.dispatchMessage({
+      type: 'swarm-runtime-event',
+      eventType: 'data-log-output',
+      payload: { headings: ['time', 'temp'], data: ['1', '24'] },
+    });
+    eventTarget.dispatchMessage({
+      type: 'swarm-runtime-event',
+      eventType: 'data-log-delete',
+      payload: {},
+    });
 
     expect(events[0]).toEqual({ type: 'serial-output', data: 'mc-receive' });
     expect(events[1]).toMatchObject({
@@ -116,6 +126,11 @@ describe('MakeCode iframe runtime adapter', () => {
     });
     expect(events[3]).toMatchObject({ type: 'display-change' });
     expect(events[4]).toEqual({ type: 'sound-output', level: 7 });
+    expect(events[5]).toEqual({
+      type: 'data-log-output',
+      entry: { headings: ['time', 'temp'], data: ['1', '24'] },
+    });
+    expect(events[6]).toEqual({ type: 'data-log-delete' });
   });
 
   it('emits one internal-error for repeated invalid display payloads until a valid frame arrives', () => {
