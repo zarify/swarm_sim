@@ -29,6 +29,7 @@ export const MICRO_PYTHON_SIMULATOR_URL =
   ).toString();
 const MICRO_PYTHON_SIMULATOR_ORIGIN = new URL(MICRO_PYTHON_SIMULATOR_URL).origin;
 const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
+const MICRO_PYTHON_DISPLAY_COALESCE_WINDOW_MS = 24;
 
 type RuntimeLoadPrograms = (
   project: SwarmProject,
@@ -756,6 +757,7 @@ function createMicroPythonIframeAdapter(
     messageSource: frameWindow,
     initialReady: ready,
     deferFlashUntilRequest: options?.deferFlashUntilRequest ?? false,
+    displayCoalesceWindowMs: MICRO_PYTHON_DISPLAY_COALESCE_WINDOW_MS,
     name: `MicroPython iframe for ${prepared.device.name}`,
   });
 }

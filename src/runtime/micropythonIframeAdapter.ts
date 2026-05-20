@@ -31,6 +31,7 @@ export interface MicroPythonIframeRuntimeAdapterOptions {
   initialReady?: boolean;
   deferFlashUntilRequest?: boolean;
   readyTimeoutMs?: number;
+  displayCoalesceWindowMs?: number;
   name?: string;
 }
 
@@ -44,12 +45,16 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   private readonly messageSource?: MessageEventSource | null;
   private readonly readyTimeoutMs: number;
   private readonly deferFlashUntilRequest: boolean;
+  private readonly displayCoalesceWindowMs: number;
   private readonly listeners = new Set<(event: RuntimeAdapterEvent) => void>();
   private readonly handleMessage = (event: MessageEvent) => this.receiveMessage(event);
   private lastProgram?: MicroPythonRuntimeProgram;
   private pendingSerialOutput = '';
   private pendingSerialFragments = '';
   private pendingSerialFlushTimer?: number;
+  private pendingDisplayPixels?: number[];
+  private pendingDisplayFingerprint?: string;
+  private pendingDisplayFlushTimer?: number;
   private recentDisplayFingerprint?: string;
   private ready = false;
   private resolveReady?: () => void;
@@ -65,6 +70,7 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     this.messageSource = this.eventTarget ? requireMessageSource(options.messageSource) : options.messageSource;
     this.readyTimeoutMs = options.readyTimeoutMs ?? 5000;
     this.deferFlashUntilRequest = options.deferFlashUntilRequest ?? false;
+    this.displayCoalesceWindowMs = normalizeDisplayCoalesceWindowMs(options.displayCoalesceWindowMs);
     if (!this.eventTarget || options.initialReady) {
       this.markReady();
     }
@@ -125,8 +131,9 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
 
   dispose(): void {
     this.eventTarget?.removeEventListener('message', this.handleMessage);
-    this.flushPendingSerialFragments(true);
     this.listeners.clear();
+    this.flushPendingDisplayChange();
+    this.flushPendingSerialFragments(true);
   }
 
   private postFlash(program: MicroPythonRuntimeProgram): void {
@@ -296,6 +303,47 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   }
 
   private emitDisplayChange(pixels: number[]): void {
+    if (this.displayCoalesceWindowMs > 0) {
+      this.queuePendingDisplayChange(pixels);
+      return;
+    }
+
+    this.emitDisplayChangeNow(pixels);
+  }
+
+  private queuePendingDisplayChange(pixels: number[]): void {
+    const fingerprint = pixels.join('');
+    if (this.pendingDisplayFingerprint === fingerprint || this.recentDisplayFingerprint === fingerprint) {
+      return;
+    }
+
+    this.pendingDisplayPixels = pixels;
+    this.pendingDisplayFingerprint = fingerprint;
+    if (this.pendingDisplayFlushTimer !== undefined) {
+      return;
+    }
+    this.pendingDisplayFlushTimer = globalThis.setTimeout(() => {
+      this.pendingDisplayFlushTimer = undefined;
+      this.flushPendingDisplayChange();
+    }, this.displayCoalesceWindowMs);
+  }
+
+  private flushPendingDisplayChange(): void {
+    if (this.pendingDisplayFlushTimer !== undefined) {
+      globalThis.clearTimeout(this.pendingDisplayFlushTimer);
+      this.pendingDisplayFlushTimer = undefined;
+    }
+    if (!this.pendingDisplayPixels) {
+      this.pendingDisplayFingerprint = undefined;
+      return;
+    }
+    const pixels = this.pendingDisplayPixels;
+    this.pendingDisplayPixels = undefined;
+    this.pendingDisplayFingerprint = undefined;
+    this.emitDisplayChangeNow(pixels);
+  }
+
+  private emitDisplayChangeNow(pixels: number[]): void {
     const fingerprint = pixels.join('');
     if (this.recentDisplayFingerprint === fingerprint) {
       return;
@@ -610,6 +658,13 @@ function clampSoundLevel(value: number): number {
     return 0;
   }
   return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function normalizeDisplayCoalesceWindowMs(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(value ?? 0));
 }
 
 const microPythonDisplayBridgeSource = String.raw`

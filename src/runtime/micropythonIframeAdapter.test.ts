@@ -4,6 +4,7 @@ import {
   encodeMicroPythonRadioString,
   MicroPythonIframeRuntimeAdapter,
 } from './micropythonIframeAdapter';
+import { vi } from 'vitest';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -343,6 +344,61 @@ display.show(Image.ARROW_N)`),
     eventTarget.dispatchMessage({ kind: 'serial_output', data: `\x1eSWARM_DISPLAY:${frame}\n` });
 
     expect(events).toEqual([{ type: 'display-change', pixels: digits(frame) }]);
+  });
+
+  it('coalesces rapid display updates into the latest frame when configured', async () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+      displayCoalesceWindowMs: 20,
+    });
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    eventTarget.dispatchMessage({ kind: 'state_change', change: { displayPixels: digits('0000000000000000000000000') } });
+    eventTarget.dispatchMessage({ kind: 'state_change', change: { displayPixels: digits('9000000000000000000000000') } });
+    eventTarget.dispatchMessage({ kind: 'state_change', change: { displayPixels: digits('9999900000000000000000000') } });
+
+    expect(events).toEqual([]);
+    await new Promise((resolve) => globalThis.setTimeout(resolve, 30));
+
+    expect(events).toEqual([{ type: 'display-change', pixels: digits('9999900000000000000000000') }]);
+  });
+
+  it('flushes coalesced display updates during continuous frame bursts', () => {
+    vi.useFakeTimers();
+    try {
+      const targetWindow = makeTargetWindow();
+      const eventTarget = makeMessageEventTarget();
+      const adapter = new MicroPythonIframeRuntimeAdapter({
+        targetWindow,
+        targetOrigin: 'https://python-simulator.usermbit.org',
+        eventTarget,
+        messageSource: trustedMessageSource,
+        displayCoalesceWindowMs: 20,
+      });
+      const events: RuntimeAdapterEvent[] = [];
+      adapter.onEvent((event) => events.push(event));
+
+      eventTarget.dispatchMessage({ kind: 'state_change', change: { displayPixels: digits('9000000000000000000000000') } });
+      vi.advanceTimersByTime(10);
+      eventTarget.dispatchMessage({ kind: 'state_change', change: { displayPixels: digits('9900000000000000000000000') } });
+      vi.advanceTimersByTime(10);
+      expect(events).toEqual([{ type: 'display-change', pixels: digits('9900000000000000000000000') }]);
+
+      eventTarget.dispatchMessage({ kind: 'state_change', change: { displayPixels: digits('9990000000000000000000000') } });
+      vi.advanceTimersByTime(20);
+      expect(events).toEqual([
+        { type: 'display-change', pixels: digits('9900000000000000000000000') },
+        { type: 'display-change', pixels: digits('9990000000000000000000000') },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('re-flashes the latest program when the iframe requests flash', async () => {
