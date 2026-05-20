@@ -645,8 +645,8 @@ button:disabled {
 }
 
 .led-pixel--lit {
-  fill: var(--phosphor);
-  filter: drop-shadow(0 0 4px rgba(183, 255, 74, 0.8));
+  fill: var(--danger);
+  filter: drop-shadow(0 0 4px rgba(255, 93, 77, 0.8));
 }
 
 @keyframes runtime-activity-pulse {

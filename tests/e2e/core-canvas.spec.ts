@@ -115,7 +115,7 @@ test.describe('core canvas workflows', () => {
     const downloadLogsButton = page.getByRole('button', { name: 'Download log files' });
     await expect(downloadLogsButton).toBeDisabled();
 
-    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
@@ -193,7 +193,7 @@ test.describe('core canvas workflows', () => {
 
     await gotoCanvas(page);
 
-    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
 
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
@@ -240,7 +240,7 @@ test.describe('core canvas workflows', () => {
 
   test('keeps MakeCode inbound radio group from source hints after Reset all', async ({ page }) => {
     await gotoCanvas(page);
-    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
 
@@ -323,7 +323,7 @@ test.describe('core canvas workflows', () => {
 
   test('keeps runtime radio delivery working after opening and closing debug tools', async ({ page }) => {
     await gotoCanvas(page);
-    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
 
@@ -405,19 +405,19 @@ test.describe('core canvas workflows', () => {
 
   test('coalesces fragmented MicroPython serial output into one runtime log line', async ({ page }) => {
     await gotoCanvas(page);
-    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('[data-runtime-state="device-alpha:ready"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
 
-    const eventLog = page.getByLabel('Event log for Alpha');
+    const eventLog = page.getByLabel('Event log for Node 1');
     await eventLog.locator('summary').click();
 
     await expect.poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html'))).toBe(true);
     const simulatorFrame = page.frames().find((frame) => frame.url().includes('/micropython-patched-simulator.html'));
     expect(simulatorFrame).toBeTruthy();
     await page.evaluate(() => {
-      const frame = document.querySelector('iframe[title="MicroPython simulator for Alpha"]') as HTMLIFrameElement | null;
+      const frame = document.querySelector('iframe[title="MicroPython simulator for Node 1"]') as HTMLIFrameElement | null;
       frame?.contentWindow?.postMessage({ kind: 'stop' }, window.location.origin);
     });
     await simulatorFrame!.evaluate(() => {
@@ -432,10 +432,10 @@ test.describe('core canvas workflows', () => {
 
   test('surfaces runtime internal errors as device error state and clears on reset', async ({ page }) => {
     await gotoCanvas(page);
-    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
-    await expect(page.locator('[data-runtime-state="device-alpha:ready"]')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
 
     await expect
       .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')))
@@ -449,10 +449,10 @@ test.describe('core canvas workflows', () => {
       );
     });
 
-    await expect(page.locator('[data-runtime-state="device-alpha:error"]')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('[data-runtime-state="device-1:error"]')).toBeVisible({ timeout: 5_000 });
 
     await page.getByRole('button', { name: /^Reset$/ }).click();
-    await expect(page.locator('[data-runtime-state="device-alpha:error"]')).toHaveCount(0);
+    await expect(page.locator('[data-runtime-state="device-1:error"]')).toHaveCount(0);
   });
 
   test('persists MicroPython assignment across browser save/load workflow', async ({ page }) => {
@@ -462,7 +462,7 @@ test.describe('core canvas workflows', () => {
     }, saveName);
 
     await gotoCanvas(page);
-    await page.getByLabel(/Load code onto Alpha/).setInputFiles(microPythonFixture);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
 

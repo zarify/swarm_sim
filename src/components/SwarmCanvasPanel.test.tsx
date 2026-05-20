@@ -29,7 +29,7 @@ describe('SwarmCanvasPanel', () => {
     const { container } = render(<SwarmCanvasPanel />);
 
     expect(screen.queryByRole('heading', { name: 'Spatial radio bench' })).not.toBeInTheDocument();
-    expect(screen.getByText('v0.1.0')).toBeInTheDocument();
+    expect(screen.getByText('v0.1.1')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open project repository on GitHub' })).toHaveAttribute(
       'href',
       'https://github.com/zarify/swarm_sim',
@@ -113,7 +113,7 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.change(renameInput, { target: { value: 'Cancelled name' } });
     fireEvent.blur(renameInput);
 
-    expect(screen.getAllByText('Alpha').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Node 1').length).toBeGreaterThan(0);
     expect(screen.queryByText('Cancelled name')).not.toBeInTheDocument();
   });
 
@@ -124,7 +124,7 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.queryByText('Runtime group')).not.toBeInTheDocument();
     expect(screen.queryByText('Runtime channel')).not.toBeInTheDocument();
     expect(screen.queryByText('Not exposed')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Event log for Alpha')).not.toHaveAttribute('open');
+    expect(screen.getByLabelText('Event log for Node 1')).not.toHaveAttribute('open');
     expect(screen.getByLabelText('Radio message inspector')).not.toHaveAttribute('open');
   });
 
@@ -132,7 +132,7 @@ describe('SwarmCanvasPanel', () => {
     render(<SwarmCanvasPanel />);
 
     const file = new File([makeHexWithAscii('MicroPython')], 'mp.hex', { type: 'text/plain' });
-    fireEvent.change(screen.getByLabelText(/Load code onto Alpha/), {
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [file] },
     });
 
@@ -147,7 +147,7 @@ describe('SwarmCanvasPanel', () => {
     render(<SwarmCanvasPanel />);
 
     const file = makeUploadFile('mc_beacon.hex', makeCodeBeaconHex);
-    fireEvent.change(screen.getByLabelText(/Load code onto Alpha/), {
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [file] },
     });
 
@@ -155,7 +155,7 @@ describe('SwarmCanvasPanel', () => {
       timeout: 12000,
     });
     expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('MakeCode simulator for Alpha')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('MakeCode simulator for Node 1')).not.toBeInTheDocument();
     expect(screen.queryByText(/Unable to identify this HEX/)).not.toBeInTheDocument();
   }, 30000);
 
@@ -163,7 +163,7 @@ describe('SwarmCanvasPanel', () => {
     render(<SwarmCanvasPanel />);
 
     const file = makeUploadFile('unknown.hex', makeHexWithAscii('hello'));
-    fireEvent.change(screen.getByLabelText(/Load code onto Alpha/), {
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [file] },
     });
 
@@ -177,7 +177,7 @@ describe('SwarmCanvasPanel', () => {
   it('keeps the latest selected-device upload when an older read finishes later', async () => {
     render(<SwarmCanvasPanel />);
     const slowUpload = makeDeferredUpload('slow.hex');
-    const input = screen.getByLabelText(/Load code onto Alpha/);
+    const input = screen.getByLabelText(/Load code onto Node 1/);
 
     fireEvent.change(input, { target: { files: [slowUpload.file] } });
     fireEvent.change(input, {
@@ -207,7 +207,7 @@ describe('SwarmCanvasPanel', () => {
 
   it('prompts before overwriting existing code on a device', async () => {
     render(<SwarmCanvasPanel />);
-    const input = screen.getByLabelText(/Load code onto Alpha/);
+    const input = screen.getByLabelText(/Load code onto Node 1/);
     fireEvent.change(input, { target: { files: [makeUploadFile('first.hex', makeHexWithAscii('MicroPython'))] } });
     await waitFor(() => expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument());
 
@@ -238,7 +238,7 @@ describe('SwarmCanvasPanel', () => {
   it('keeps both runtime simulators mounted when MicroPython and MakeCode devices are assigned together', async () => {
     render(<SwarmCanvasPanel />);
 
-    fireEvent.change(screen.getByLabelText(/Load code onto Alpha/), {
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [makeUploadFile('mp.hex', makeHexWithAscii('MicroPython'))] },
     });
     await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
@@ -251,7 +251,7 @@ describe('SwarmCanvasPanel', () => {
       timeout: 12000,
     });
 
-    expect(screen.getByTitle('MicroPython simulator for Alpha')).toBeInTheDocument();
+    expect(screen.getByTitle('MicroPython simulator for Node 1')).toBeInTheDocument();
     expect(screen.getByTitle('MakeCode simulator for Node 2')).toBeInTheDocument();
   }, 30000);
 
@@ -260,9 +260,9 @@ describe('SwarmCanvasPanel', () => {
     const { container } = render(<SwarmCanvasPanel RuntimeHost={(props) => <DisplayEmitterHost {...props} pixels={pixels} />} />);
 
     await waitFor(() => {
-      expect(container.querySelector('[data-led-pixel="device-alpha:0"]')).toHaveClass('led-pixel--lit');
-      expect(container.querySelector('[data-led-pixel="device-alpha:1"]')).not.toHaveClass('led-pixel--lit');
-      expect(container.querySelector('[data-led-pixel="device-alpha:6"]')).toHaveClass('led-pixel--lit');
+      expect(container.querySelector('[data-led-pixel="device-1:0"]')).toHaveClass('led-pixel--lit');
+      expect(container.querySelector('[data-led-pixel="device-1:1"]')).not.toHaveClass('led-pixel--lit');
+      expect(container.querySelector('[data-led-pixel="device-1:6"]')).toHaveClass('led-pixel--lit');
     });
   });
 
@@ -270,8 +270,8 @@ describe('SwarmCanvasPanel', () => {
     const { container } = render(<SwarmCanvasPanel RuntimeHost={(props) => <ActivityEmitterHost {...props} />} />);
 
     await waitFor(() => {
-      expect(container.querySelector('[data-runtime-activity="tx:device-alpha"]')).toHaveClass('runtime-activity--active');
-      expect(container.querySelector('[data-runtime-activity="sound:device-alpha"]')).toHaveClass('runtime-activity--active');
+      expect(container.querySelector('[data-runtime-activity="tx:device-1"]')).toHaveClass('runtime-activity--active');
+      expect(container.querySelector('[data-runtime-activity="sound:device-1"]')).toHaveClass('runtime-activity--active');
     });
   });
 
@@ -281,13 +281,13 @@ describe('SwarmCanvasPanel', () => {
     );
 
     await waitFor(() => {
-      expect(container.querySelector('[data-runtime-activity="tx:device-alpha"]')).toHaveClass(
+      expect(container.querySelector('[data-runtime-activity="tx:device-1"]')).toHaveClass(
         'runtime-activity--active',
       );
     });
     expect(screen.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeInTheDocument();
 
-    const deviceLog = screen.getByLabelText('Event log for Alpha');
+    const deviceLog = screen.getByLabelText('Event log for Node 1');
     fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
     const diagnostic = await screen.findByText('Ignored invalid runtime radio signal strength: -52');
     expect(diagnostic.closest('.device-log__line')?.querySelector('.device-log__type')).toHaveTextContent('err');
@@ -312,7 +312,7 @@ describe('SwarmCanvasPanel', () => {
   it('shows serial output in runtime logs and renders compact radio packet previews', async () => {
     render(<SwarmCanvasPanel RuntimeHost={(props) => <SerialAndRadioEmitterHost {...props} />} />);
 
-    const deviceLog = screen.getByLabelText('Event log for Alpha');
+    const deviceLog = screen.getByLabelText('Event log for Node 1');
     const radioInspector = screen.getByLabelText('Radio message inspector');
     fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
     fireEvent.click(radioInspector.querySelector('summary') as HTMLElement);
@@ -329,8 +329,8 @@ describe('SwarmCanvasPanel', () => {
     const deviceLog = screen.getByLabelText('Event log for Node 2');
     fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
 
-    await waitFor(() => expect(screen.getByText('Received radio packet from Alpha')).toBeInTheDocument());
-    expect(screen.queryByText('Blocked radio packet from Alpha: group-mismatch')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Received radio packet from Node 1')).toBeInTheDocument());
+    expect(screen.queryByText('Blocked radio packet from Node 1: group-mismatch')).not.toBeInTheDocument();
   });
 
   it('renders renamed sender display names in runtime radio log lines', async () => {
@@ -387,7 +387,7 @@ describe('SwarmCanvasPanel', () => {
     const renamedDeviceLog = screen.getByLabelText('Event log for Alpha');
     fireEvent.click(renamedDeviceLog.querySelector('summary') as HTMLElement);
 
-    await waitFor(() => expect(screen.getByText('Received radio packet from Alpha')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Received radio packet from Node 1')).toBeInTheDocument());
   });
 
   it('deduplicates immediate identical runtime radio packets before routing', async () => {
@@ -400,9 +400,9 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
 
     await waitFor(() =>
-      expect(screen.getByText('Received radio packet from Alpha')).toBeInTheDocument(),
+      expect(screen.getByText('Received radio packet from Node 1')).toBeInTheDocument(),
     );
-    expect(screen.getAllByText('Received radio packet from Alpha')).toHaveLength(1);
+    expect(screen.getAllByText('Received radio packet from Node 1')).toHaveLength(1);
   });
 
   it('translates mixed-runtime radio packets between MakeCode and MicroPython devices', async () => {
@@ -434,7 +434,7 @@ describe('SwarmCanvasPanel', () => {
       />,
     );
 
-    fireEvent.change(screen.getByLabelText(/Load code onto Alpha/), {
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [makeUploadFile('mp.hex', makeHexWithAscii('MicroPython'))] },
     });
     await waitFor(() => expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument());
@@ -455,12 +455,12 @@ describe('SwarmCanvasPanel', () => {
       'value:light:77',
     );
 
-    const alphaNode = container.querySelector('[data-runtime-activity="tx:device-alpha"]');
+    const alphaNode = container.querySelector('[data-runtime-activity="tx:device-1"]');
     expect(alphaNode).toBeInTheDocument();
     const canvas = container.querySelector('.swarm-canvas') as SVGElement;
     Object.defineProperty(canvas, 'setPointerCapture', { value: vi.fn(), configurable: true });
     fireEvent.pointerDown(alphaNode as Element);
-    const senderDeviceLog = screen.getByLabelText('Event log for Alpha');
+    const senderDeviceLog = screen.getByLabelText('Event log for Node 1');
     fireEvent.click(senderDeviceLog.querySelector('summary') as HTMLElement);
     await waitFor(() => expect(screen.getByText('Sent radio packet to 1 recipient(s)')).toBeInTheDocument());
     expect(
@@ -473,19 +473,19 @@ describe('SwarmCanvasPanel', () => {
       <SwarmCanvasPanel RuntimeHost={(props) => <RuntimeErrorEmitterHost {...props} />} />,
     );
 
-    fireEvent.change(screen.getByLabelText(/Load code onto Alpha/), {
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [makeUploadFile('mp.hex', makeHexWithAscii('MicroPython'))] },
     });
     await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
 
     await waitFor(() =>
-      expect(container.querySelector('[data-runtime-state="device-alpha:error"]')).toBeInTheDocument(),
+      expect(container.querySelector('[data-runtime-state="device-1:error"]')).toBeInTheDocument(),
     );
     expect(screen.getByText(/something went wrong/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Reset$/ }));
     await waitFor(() =>
-      expect(container.querySelector('[data-runtime-state="device-alpha:error"]')).not.toBeInTheDocument(),
+      expect(container.querySelector('[data-runtime-state="device-1:error"]')).not.toBeInTheDocument(),
     );
   });
 
@@ -493,7 +493,7 @@ describe('SwarmCanvasPanel', () => {
     const buttonStates: string[] = [];
     render(<SwarmCanvasPanel RuntimeHost={(props) => <ButtonProbeHost {...props} buttonStates={buttonStates} />} />);
 
-    fireEvent.pointerDown(screen.getByTestId('device-button-device-alpha-A'));
+    fireEvent.pointerDown(screen.getByTestId('device-button-device-1-A'));
 
     await waitFor(() => expect(buttonStates).toContain('true:false'));
     await waitFor(() => expect(buttonStates).toContain('false:false'));
@@ -632,7 +632,7 @@ function DisplayEmitterHost({
       return;
     }
     emitted.current = true;
-    onDisplayChange?.('device-alpha', pixels);
+    onDisplayChange?.('device-1', pixels);
   }, [onDisplayChange, pixels]);
 
   return <div aria-label="MicroPython runtime host" />;
@@ -649,8 +649,8 @@ function ActivityEmitterHost({
     }
     emitted.current = true;
     const timerId = globalThis.setTimeout(() => {
-      onRadioPacket('device-alpha', { data: new Uint8Array([0x01]) });
-      onSoundOutput?.('device-alpha', 9);
+      onRadioPacket('device-1', { data: new Uint8Array([0x01]) });
+      onSoundOutput?.('device-1', 9);
     }, 0);
     return () => globalThis.clearTimeout(timerId);
   }, [onRadioPacket, onSoundOutput]);
@@ -665,7 +665,7 @@ function RuntimeDataLogEmitterHost({ onRuntimeDataLog }: MicroPythonRuntimeHostP
       return;
     }
     emitted.current = true;
-    onRuntimeDataLog('device-alpha', {
+    onRuntimeDataLog('device-1', {
       type: 'data-log-output',
       entry: {
         headings: ['time', 'temp'],
@@ -685,7 +685,7 @@ function InvalidSignalStrengthHost({ onRadioPacket }: MicroPythonRuntimeHostProp
     }
     emitted.current = true;
     const timerId = globalThis.setTimeout(() => {
-      onRadioPacket('device-alpha', {
+      onRadioPacket('device-1', {
         data: new Uint8Array([0x01]),
         signalStrength: -52,
       });
@@ -704,7 +704,7 @@ function SignalStrengthRangeHost({ onRadioPacket }: MicroPythonRuntimeHostProps)
     }
     emitted.current = true;
     const timerId = globalThis.setTimeout(() => {
-      onRadioPacket('device-alpha', {
+      onRadioPacket('device-1', {
         data: new Uint8Array([0x01]),
         signalStrength: 7,
       });
@@ -723,7 +723,7 @@ function SignalStrengthHintHost({ onRadioConfigHint }: MicroPythonRuntimeHostPro
     }
     emitted.current = true;
     const timerId = globalThis.setTimeout(() => {
-      onRadioConfigHint?.('device-alpha', { signalStrength: 7 });
+      onRadioConfigHint?.('device-1', { signalStrength: 7 });
     }, 0);
     return () => globalThis.clearTimeout(timerId);
   }, [onRadioConfigHint]);
@@ -737,7 +737,7 @@ function ButtonProbeHost({
 }: MicroPythonRuntimeHostProps & { buttonStates: string[] }) {
   const last = useRef<string | undefined>(undefined);
   useEffect(() => {
-    const runtime = deviceRuntimeStates?.['device-alpha'];
+    const runtime = deviceRuntimeStates?.['device-1'];
     if (!runtime) {
       return;
     }
@@ -760,8 +760,8 @@ function SerialAndRadioEmitterHost({ onRadioPacket, onRuntimeLog }: MicroPythonR
     }
     emitted.current = true;
     const timerId = globalThis.setTimeout(() => {
-      onRuntimeLog('device-alpha', 'serial-output', 'sound:13');
-      onRadioPacket('device-alpha', { data: makeMakeCodeValuePacket('sound', 13) });
+      onRuntimeLog('device-1', 'serial-output', 'sound:13');
+      onRadioPacket('device-1', { data: makeMakeCodeValuePacket('sound', 13) });
     }, 0);
     return () => globalThis.clearTimeout(timerId);
   }, [onRadioPacket, onRuntimeLog]);
@@ -777,9 +777,9 @@ function RadioConfigThenPacketHost({ project, onRadioConfigHint, onRadioPacket }
     }
     emitted.current = true;
     const timerId = globalThis.setTimeout(() => {
-      onRadioConfigHint?.('device-alpha', { group: 42 });
+      onRadioConfigHint?.('device-1', { group: 42 });
       onRadioConfigHint?.('device-2', { group: 42 });
-      onRadioPacket('device-alpha', { data: new Uint8Array([0x01]), signalStrength: 7 });
+      onRadioPacket('device-1', { data: new Uint8Array([0x01]), signalStrength: 7 });
     }, 0);
     return () => globalThis.clearTimeout(timerId);
   }, [project, onRadioConfigHint, onRadioPacket]);
@@ -795,11 +795,11 @@ function DuplicateRadioPacketHost({ project, onRadioConfigHint, onRadioPacket }:
     }
     emitted.current = true;
     const timerId = globalThis.setTimeout(() => {
-      onRadioConfigHint?.('device-alpha', { group: 42 });
+      onRadioConfigHint?.('device-1', { group: 42 });
       onRadioConfigHint?.('device-2', { group: 42 });
       const packet = { data: new Uint8Array([0x01]), signalStrength: 7 };
-      onRadioPacket('device-alpha', packet);
-      onRadioPacket('device-alpha', packet);
+      onRadioPacket('device-1', packet);
+      onRadioPacket('device-1', packet);
     }, 0);
     return () => globalThis.clearTimeout(timerId);
   }, [project, onRadioConfigHint, onRadioPacket]);
@@ -810,13 +810,13 @@ function DuplicateRadioPacketHost({ project, onRadioConfigHint, onRadioPacket }:
 function RuntimeErrorEmitterHost({ project, onRuntimeLog }: MicroPythonRuntimeHostProps) {
   const emitted = useRef(false);
   useEffect(() => {
-    const alpha = project.devices.find((device) => device.id === 'device-alpha');
+    const alpha = project.devices.find((device) => device.id === 'device-1');
     if (emitted.current || !alpha?.programArtifactId) {
       return;
     }
     emitted.current = true;
     const timerId = globalThis.setTimeout(() => {
-      onRuntimeLog('device-alpha', 'internal-error', 'Simulated runtime crash');
+      onRuntimeLog('device-1', 'internal-error', 'Simulated runtime crash');
     }, 0);
     return () => globalThis.clearTimeout(timerId);
   }, [project, onRuntimeLog]);
@@ -832,7 +832,7 @@ function MicroPythonToMakeCodeDeliveryProbeHost({
 }: MicroPythonRuntimeHostProps & { onDeliveries: (deliveries: RoutedRadioDelivery[]) => void }) {
   const emitted = useRef(false);
   useEffect(() => {
-    const alpha = project.devices.find((device) => device.id === 'device-alpha');
+    const alpha = project.devices.find((device) => device.id === 'device-1');
     const node2 = project.devices.find((device) => device.id === 'device-2');
     if (emitted.current || !alpha?.programArtifactId || !node2?.programArtifactId) {
       return;
@@ -840,10 +840,10 @@ function MicroPythonToMakeCodeDeliveryProbeHost({
 
     emitted.current = true;
     const timerId = globalThis.setTimeout(() => {
-      onRadioConfigHint?.('device-alpha', { group: 42 });
+      onRadioConfigHint?.('device-1', { group: 42 });
       onRadioConfigHint?.('device-2', { group: 42 });
       onDeliveries(
-        onRadioPacket('device-alpha', {
+        onRadioPacket('device-1', {
           data: new TextEncoder().encode('light:77'),
         }),
       );

@@ -122,7 +122,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       simulationState: resetSimulation(project, defaultRadioOptions),
     };
   });
-  const [selected, setSelected] = useState<Selection>({ type: 'device', id: 'device-alpha' });
+  const [selected, setSelected] = useState<Selection>({ type: 'device', id: 'device-1' });
   const [showRadioRange, setShowRadioRange] = useState(true);
   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
   const [runtimeLoadResults, setRuntimeLoadResults] = useState<DeviceProgramLoadResult[]>([]);
@@ -2132,8 +2132,8 @@ function createDemoProject(): SwarmProject {
     artifacts: [],
     devices: [
       {
-        id: 'device-alpha',
-        name: 'Alpha',
+        id: 'device-1',
+        name: 'Node 1',
         position: { x: 430, y: 260 },
       },
     ],
