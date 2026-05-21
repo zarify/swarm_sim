@@ -103,6 +103,7 @@ const runtimeActivityPulseMs = 480;
 const runtimeSoundLogCooldownMs = 900;
 const displayMinFrameMs = 420;
 const buttonPulseMs = 110;
+const AB_BUTTONS = ['A', 'B'] as const;
 const MICROBIT_SENSOR_LEVEL_MIN = MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel.min;
 const MICROBIT_SENSOR_LEVEL_MAX = MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel.max;
 const RADIO_GROUP_MIN = 0;
@@ -1045,30 +1046,58 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     runtimeActivityTimers.current.set(timerKey, timeoutId);
   }
 
-  function pulseDeviceButton(deviceId: DeviceId, button: 'A' | 'B') {
+  function setPulsedButtons(deviceId: DeviceId, buttons: readonly ('A' | 'B')[], pressed: boolean) {
     setModel((current) => {
-      const simulationState = setDeviceButton(current.simulationState, deviceId, button, true);
+      let simulationState = current.simulationState;
+      for (const button of buttons) {
+        simulationState = setDeviceButton(simulationState, deviceId, button, pressed);
+      }
       const next = { ...current, simulationState };
       modelRef.current = next;
       return next;
     });
+  }
+
+  function clearButtonPulseTimer(timerKey: string): boolean {
+    const existingTimer = buttonPulseTimers.current.get(timerKey);
+    if (existingTimer === undefined) {
+      return false;
+    }
+    globalThis.clearTimeout(existingTimer);
+    buttonPulseTimers.current.delete(timerKey);
+    return true;
+  }
+
+  function pulseDeviceButton(deviceId: DeviceId, button: 'A' | 'B') {
+    setPulsedButtons(deviceId, [button], true);
 
     const timerKey = `${deviceId}:${button}`;
-    const existingTimer = buttonPulseTimers.current.get(timerKey);
-    if (existingTimer !== undefined) {
-      globalThis.clearTimeout(existingTimer);
+    const hadABPulse = clearButtonPulseTimer(`${deviceId}:AB`);
+    if (hadABPulse) {
+      const otherButton = button === 'A' ? 'B' : 'A';
+      setPulsedButtons(deviceId, [otherButton], false);
     }
+    clearButtonPulseTimer(timerKey);
 
     const timeoutId = globalThis.setTimeout(() => {
       buttonPulseTimers.current.delete(timerKey);
-      setModel((current) => {
-        const simulationState = setDeviceButton(current.simulationState, deviceId, button, false);
-        const next = { ...current, simulationState };
-        modelRef.current = next;
-        return next;
-      });
+      setPulsedButtons(deviceId, [button], false);
     }, buttonPulseMs);
 
+    buttonPulseTimers.current.set(timerKey, timeoutId);
+  }
+
+  function pulseDeviceButtonAB(deviceId: DeviceId) {
+    const timerKey = `${deviceId}:AB`;
+    clearButtonPulseTimer(`${deviceId}:A`);
+    clearButtonPulseTimer(`${deviceId}:B`);
+    clearButtonPulseTimer(timerKey);
+    setPulsedButtons(deviceId, AB_BUTTONS, true);
+
+    const timeoutId = globalThis.setTimeout(() => {
+      buttonPulseTimers.current.delete(timerKey);
+      setPulsedButtons(deviceId, AB_BUTTONS, false);
+    }, buttonPulseMs);
     buttonPulseTimers.current.set(timerKey, timeoutId);
   }
 
@@ -1697,6 +1726,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                     </g>
                   ) : null}
                   <rect className="microbit-body" x="-42" y="-30" width="84" height="60" rx="14" />
+                  <g className="button-combo-link" data-device-button-combo-link={device.deviceId}>
+                    <path d="M-29 -2 V8 H29 V18" />
+                    <path d="M29 -2 V18" />
+                  </g>
                   <circle
                     className="button-dot button-dot--interactive"
                     data-device-button={`${device.deviceId}:A`}
@@ -1721,6 +1754,21 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                       pulseDeviceButton(device.deviceId, 'B');
                     }}
                   />
+                  <circle
+                    className="button-dot button-dot--interactive button-dot--combo"
+                    data-device-button={`${device.deviceId}:AB`}
+                    data-testid={`device-button-${device.deviceId}-AB`}
+                    cx="29"
+                    cy="18"
+                    r="5.8"
+                    onPointerDown={(event) => {
+                      event.stopPropagation();
+                      pulseDeviceButtonAB(device.deviceId);
+                    }}
+                  />
+                  <text className="button-dot-label" x="29" y="18" textAnchor="middle">
+                    AB
+                  </text>
                   {runtimeState ? (
                     <g
                       className={`runtime-state runtime-state--${runtimeState}`}

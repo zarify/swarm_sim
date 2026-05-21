@@ -520,6 +520,21 @@ test.describe('core canvas workflows', () => {
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
   });
 
+  test('supports permanent A+B canvas button control with linked indicator lines', async ({ page }) => {
+    await gotoCanvas(page);
+
+    const abButton = page.locator('[data-testid="device-button-device-1-AB"]');
+    await expect(abButton).toBeVisible();
+    await expect(page.locator('[data-device-button-combo-link="device-1"]')).toBeVisible();
+
+    const eventLog = page.getByLabel('Event log for Node 1');
+    await eventLog.locator('summary').click();
+    await abButton.click();
+
+    await expect(page.locator('.device-log__line', { hasText: 'Button A pressed' })).toHaveCount(1);
+    await expect(page.locator('.device-log__line', { hasText: 'Button B pressed' })).toHaveCount(1);
+  });
+
   test('renames selected nodes from the side panel for both devices and sources', async ({ page }) => {
     await gotoCanvas(page);
 

@@ -508,14 +508,27 @@ describe('SwarmCanvasPanel', () => {
     );
   });
 
-  it('pulses canvas device buttons into runtime state so hosts can consume button input', async () => {
+  it('pulses canvas A, B, and A+B controls into runtime state so hosts can consume button input', async () => {
     const buttonStates: string[] = [];
-    render(<SwarmCanvasPanel RuntimeHost={(props) => <ButtonProbeHost {...props} buttonStates={buttonStates} />} />);
+    const { container } = render(
+      <SwarmCanvasPanel RuntimeHost={(props) => <ButtonProbeHost {...props} buttonStates={buttonStates} />} />,
+    );
 
     fireEvent.pointerDown(screen.getByTestId('device-button-device-1-A'));
 
     await waitFor(() => expect(buttonStates).toContain('true:false'));
     await waitFor(() => expect(buttonStates).toContain('false:false'));
+
+    fireEvent.pointerDown(screen.getByTestId('device-button-device-1-B'));
+
+    await waitFor(() => expect(buttonStates).toContain('false:true'));
+    await waitFor(() => expect(buttonStates).toContain('false:false'));
+
+    fireEvent.pointerDown(screen.getByTestId('device-button-device-1-AB'));
+
+    await waitFor(() => expect(buttonStates).toContain('true:true'));
+    await waitFor(() => expect(buttonStates).toContain('false:false'));
+    expect(container.querySelector('[data-device-button-combo-link="device-1"]')).toBeInTheDocument();
   });
 
   it('saves a layout to browser storage and can load it back from the canvas-state menu', async () => {

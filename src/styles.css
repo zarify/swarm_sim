@@ -637,6 +637,31 @@ button:disabled {
   cursor: pointer;
 }
 
+.button-dot--combo {
+  fill: rgba(105, 247, 255, 0.84);
+}
+
+.button-dot-label {
+  fill: #061012;
+  font-size: 0.34rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  dominant-baseline: middle;
+}
+
+.button-combo-link {
+  pointer-events: none;
+}
+
+.button-combo-link path {
+  fill: none;
+  stroke: rgba(105, 247, 255, 0.36);
+  stroke-width: 1.15;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .runtime-state {
   pointer-events: none;
 }
