@@ -45,6 +45,8 @@ export interface MakeCodeIframeRuntimeAdapterOptions {
   name?: string;
 }
 
+const ENABLE_SOUND_DEBUG_LOGS = import.meta.env.DEV;
+
 export class MakeCodeIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   readonly source = 'makecode-pxt';
   readonly name: string;
@@ -251,6 +253,10 @@ export class MakeCodeIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
       }
       case 'sound': {
         const level = Number(payload.level);
+        debugMakeCodeRuntimeSound('adapter-runtime-sound', {
+          level: Number.isFinite(level) ? level : 0,
+          rawLevel: payload.level,
+        });
         this.emit({ type: 'sound-output', level: Number.isFinite(level) ? level : 0 });
         break;
       }
@@ -433,4 +439,11 @@ function normalizeError(value: unknown): Error {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function debugMakeCodeRuntimeSound(event: string, details: Record<string, unknown>): void {
+  if (!ENABLE_SOUND_DEBUG_LOGS) {
+    return;
+  }
+  console.debug('[swarm-sound-debug]', `makecode-adapter:${event}`, details);
 }

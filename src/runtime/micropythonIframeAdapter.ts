@@ -35,6 +35,8 @@ export interface MicroPythonIframeRuntimeAdapterOptions {
   name?: string;
 }
 
+const ENABLE_SOUND_DEBUG_LOGS = import.meta.env.DEV;
+
 export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   readonly source = 'micropython';
   readonly name: string;
@@ -229,6 +231,9 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
       if (event.type === 'display-change') {
         this.emitDisplayChange(event.pixels);
         continue;
+      }
+      if (event.type === 'sound-output') {
+        debugMicroPythonRuntimeSound('bridge-sound-marker', { level: event.level });
       }
       this.flushPendingSerialFragments(true);
       this.emit(event);
@@ -871,6 +876,13 @@ function normalizeDataLogValues(value: unknown): string[] | undefined {
     }
     throw new Error('MicroPython simulator log_output contained non-scalar values');
   });
+}
+
+function debugMicroPythonRuntimeSound(event: string, details: Record<string, unknown>): void {
+  if (!ENABLE_SOUND_DEBUG_LOGS) {
+    return;
+  }
+  console.debug('[swarm-sound-debug]', `micropython-adapter:${event}`, details);
 }
 
 function parseTrustedOrigin(value: string): string {

@@ -587,6 +587,10 @@ export function MicroPythonRuntimeHost({
         }
         break;
       case 'sound-output':
+        debugMicroPythonRuntime('runtime-sound-output', {
+          deviceId,
+          level: event.level,
+        });
         callbacks.current.onSoundOutput?.(deviceId, event.level);
         break;
       case 'data-log-output':

@@ -31,6 +31,7 @@
         const simulators = document.getElementById('simulators');
         const encoder = new TextEncoder();
         const TRACE_RADIO = window.location.hostname === 'localhost';
+        const TRACE_SOUND = window.location.hostname === 'localhost';
         const state = {
           runnerReady: false,
           activeSimulatorWindow: null,
@@ -256,14 +257,25 @@
               const soundLevel = Number(data.soundLevel);
               const soundActive = Number.isFinite(soundLevel) && soundLevel > 0;
               const now = Date.now();
+              const elapsedMs = now - state.lastSoundEventMs;
+              traceSound('simulator-sound-state', {
+                soundLevel: Number.isFinite(soundLevel) ? soundLevel : 0,
+                soundActive,
+                lastSoundActive: state.lastSoundActive,
+                elapsedMs,
+              });
               if (
                 soundActive &&
-                (!state.lastSoundActive || now - state.lastSoundEventMs >= 200)
+                (!state.lastSoundActive || elapsedMs >= 200)
               ) {
                 postToHost({
                   type: 'swarm-runtime-event',
                   eventType: 'sound',
                   payload: { level: soundLevel },
+                });
+                traceSound('emit-runtime-sound-event', {
+                  soundLevel,
+                  elapsedMs,
                 });
                 state.lastSoundEventMs = now;
               }
@@ -655,6 +667,13 @@
             return;
           }
           console.debug('[swarm-radio-trace]', `runner:${event}`, details);
+        }
+
+        function traceSound(event, details) {
+          if (!TRACE_SOUND) {
+            return;
+          }
+          console.debug('[swarm-sound-trace]', `runner:${event}`, details);
         }
 
         function isSerialLikeType(type) {

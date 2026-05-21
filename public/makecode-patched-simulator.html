@@ -45,6 +45,7 @@
           'setLevel',
         ];
         const TRACE_RADIO = window.location.hostname === 'localhost';
+        const TRACE_SOUND = window.location.hostname === 'localhost';
         const desiredSensors = {
           lightLevel: 0,
           soundLevel: 0,
@@ -439,8 +440,14 @@
           if (normalized <= 0) {
             return;
           }
+          const nextPulseUntilMs = Math.max(soundOutputPulseUntilMs, Date.now() + SOUND_OUTPUT_PULSE_MS);
+          traceSound('mark-sound-output', {
+            level: normalized,
+            previousLevel: lastSoundOutputLevel,
+            pulseRemainingMs: Math.max(0, nextPulseUntilMs - Date.now()),
+          });
           lastSoundOutputLevel = normalized;
-          soundOutputPulseUntilMs = Math.max(soundOutputPulseUntilMs, Date.now() + SOUND_OUTPUT_PULSE_MS);
+          soundOutputPulseUntilMs = nextPulseUntilMs;
         }
 
         function readActiveSoundLevel(board) {
@@ -585,6 +592,13 @@
             return;
           }
           console.debug('[swarm-radio-trace]', `sim:${event}`, details);
+        }
+
+        function traceSound(event, details) {
+          if (!TRACE_SOUND) {
+            return;
+          }
+          console.debug('[swarm-sound-trace]', `sim:${event}`, details);
         }
       })();
     </script>
