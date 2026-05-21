@@ -430,6 +430,46 @@ test.describe('core canvas workflows', () => {
     await expect(page.locator('.device-log__line', { hasText: "b'light:101'" })).toHaveCount(0);
   });
 
+  test('shows per-device sound feedback for MakeCode runtime sound events', async ({ page }) => {
+    await gotoCanvas(page);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')))
+      .toBe(true);
+    const simulatorFrame = page.frames().find((frame) => frame.url().includes('/makecode-patched-simulator.html'));
+    expect(simulatorFrame).toBeTruthy();
+
+    await simulatorFrame!.evaluate(() => {
+      const displayPixels = Array.from({ length: 25 }, () => 0);
+      window.parent.postMessage(
+        { type: 'swarm-simulator-state', displayPixels, soundLevel: 180 },
+        window.location.origin,
+      );
+      window.parent.postMessage(
+        { type: 'swarm-simulator-state', displayPixels, soundLevel: 120 },
+        window.location.origin,
+      );
+      window.parent.postMessage(
+        { type: 'swarm-simulator-state', displayPixels, soundLevel: 0 },
+        window.location.origin,
+      );
+    });
+
+    await expect(page.locator('[data-runtime-sound-indicator="device-1"]')).toBeVisible();
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+    const eventLog = page.getByLabel('Event log for Node 1');
+    await eventLog.locator('summary').click();
+    const soundLine = page.locator('.device-log__line', { hasText: 'Sound output started' });
+    await expect(soundLine).toHaveCount(1);
+    await expect(soundLine.locator('.device-log__type')).toHaveText('snd');
+  });
+
   test('surfaces runtime internal errors as device error state and clears on reset', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);

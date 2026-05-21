@@ -26,16 +26,20 @@
         let lastDisplay = '';
         let lastSound = -1;
         let lastRadioConfigKey = 'none';
+        const SOUND_OUTPUT_PULSE_MS = 240;
         const TRACE_RADIO = window.location.hostname === 'localhost';
         const desiredSensors = {
           lightLevel: 0,
           soundLevel: 0,
         };
         const patchedRadioStates = new WeakSet();
+        const patchedSoundStates = new WeakSet();
         const observedRadioConfig = {
           group: undefined,
           channel: undefined,
         };
+        let soundOutputPulseUntilMs = 0;
+        let lastSoundOutputLevel = 0;
 
         window.addEventListener('message', (event) => {
           if (event.source !== window.parent || event.origin !== RUNNER_ORIGIN) {
@@ -65,6 +69,7 @@
             postToRunner({ type: 'swarm-simulator-ready' });
           }
           patchRadioStateHooks(board);
+          patchSoundStateHooks(board);
           flushPendingMessages();
           applyDesiredSensors(board);
           publishState(board);
@@ -261,6 +266,34 @@
           };
         }
 
+        function patchSoundStateHooks(board) {
+          if (!board || !isRecord(board)) {
+            return;
+          }
+          for (const soundState of getCandidateSoundStates(board)) {
+            if (!isRecord(soundState) || patchedSoundStates.has(soundState)) {
+              continue;
+            }
+            patchedSoundStates.add(soundState);
+            for (const methodName of [
+              'play',
+              'playTone',
+              'playInstructions',
+              'playInstructionsAsync',
+              'queuePlayInstructions',
+              'playSound',
+              'playSoundEffect',
+              'start',
+              'startPlaying',
+              'speak',
+            ]) {
+              patchMethod(soundState, methodName, (args) => {
+                markSoundOutput(inferSoundLevelFromArgs(args));
+              });
+            }
+          }
+        }
+
         function readDisplayPixels(board) {
           const data = board.ledMatrixState?.image?.data;
           if (!data || typeof data.length !== 'number') {
@@ -275,8 +308,14 @@
         }
 
         function readSoundLevel(board) {
-          const level = board.microphoneState?.getLevel?.();
-          return clampByte(Number(level ?? 0));
+          const activeLevel = readActiveSoundLevel(board);
+          if (activeLevel > 0) {
+            markSoundOutput(activeLevel);
+          }
+          if (Date.now() < soundOutputPulseUntilMs) {
+            return lastSoundOutputLevel;
+          }
+          return 0;
         }
 
         function readRadioConfig(board) {
@@ -302,6 +341,58 @@
             return new TextEncoder().encode(value);
           }
           return new Uint8Array();
+        }
+
+        function getCandidateSoundStates(board) {
+          return [board.audioState, board.soundState, board.speakerState, board.buzzerState];
+        }
+
+        function inferSoundLevelFromArgs(args) {
+          for (const value of args ?? []) {
+            const numeric = Number(value);
+            if (Number.isFinite(numeric) && numeric > 0) {
+              return clampByte(numeric);
+            }
+          }
+          return 255;
+        }
+
+        function markSoundOutput(level) {
+          const normalized = clampByte(Number(level));
+          if (normalized <= 0) {
+            return;
+          }
+          lastSoundOutputLevel = normalized;
+          soundOutputPulseUntilMs = Math.max(soundOutputPulseUntilMs, Date.now() + SOUND_OUTPUT_PULSE_MS);
+        }
+
+        function readActiveSoundLevel(board) {
+          for (const soundState of getCandidateSoundStates(board)) {
+            if (!isRecord(soundState)) {
+              continue;
+            }
+            const isPlaying =
+              soundState.isPlaying?.() === true ||
+              soundState.playing === true ||
+              soundState.active === true;
+            if (!isPlaying) {
+              continue;
+            }
+            const levelCandidates = [
+              soundState.volume,
+              soundState.outputLevel,
+              soundState.level,
+              soundState.currentVolume,
+            ];
+            for (const candidate of levelCandidates) {
+              const numeric = Number(candidate);
+              if (Number.isFinite(numeric) && numeric > 0) {
+                return clampByte(numeric);
+              }
+            }
+            return 255;
+          }
+          return 0;
         }
 
         function queueDisplayUpdate() {

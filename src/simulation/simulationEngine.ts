@@ -93,6 +93,7 @@ export interface DeviceLogEvent {
     | 'radio-received'
     | 'radio-blocked'
     | 'serial-output'
+    | 'sound-output'
     | 'runtime-error';
   message: string;
 }
@@ -315,7 +316,7 @@ export function setDeviceButton(
 export function appendDeviceRuntimeLog(
   state: SimulationState,
   deviceId: DeviceId,
-  type: Extract<DeviceLogEvent['type'], 'serial-output' | 'runtime-error'>,
+  type: Extract<DeviceLogEvent['type'], 'serial-output' | 'sound-output' | 'runtime-error'>,
   message: string,
 ): SimulationState {
   requireDevice(state, deviceId);

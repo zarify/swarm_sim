@@ -767,6 +767,28 @@ try:
     except Exception:
         pass
 
+    try:
+        import speech as _swarm_speech
+
+        def _swarm_wrap_speech(_swarm_name):
+            try:
+                _swarm_original = getattr(_swarm_speech, _swarm_name)
+            except AttributeError:
+                return
+            if not callable(_swarm_original):
+                return
+
+            def _swarm_wrapped(*args, **kwargs):
+                _swarm_emit_sound()
+                return _swarm_original(*args, **kwargs)
+
+            setattr(_swarm_speech, _swarm_name, _swarm_wrapped)
+
+        for _swarm_name in ("say", "sing", "pronounce"):
+            _swarm_wrap_speech(_swarm_name)
+    except Exception:
+        pass
+
     _swarm_emit_display()
 except Exception as _swarm_error:
     _swarm_report_display_bridge_error(_swarm_error)

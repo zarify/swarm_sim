@@ -29,7 +29,7 @@ describe('SwarmCanvasPanel', () => {
     const { container } = render(<SwarmCanvasPanel />);
 
     expect(screen.queryByRole('heading', { name: 'Spatial radio bench' })).not.toBeInTheDocument();
-    expect(screen.getByText('v0.1.1')).toBeInTheDocument();
+    expect(screen.getByText('v0.2.0')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open project repository on GitHub' })).toHaveAttribute(
       'href',
       'https://github.com/zarify/swarm_sim',
@@ -272,7 +272,26 @@ describe('SwarmCanvasPanel', () => {
     await waitFor(() => {
       expect(container.querySelector('[data-runtime-activity="tx:device-1"]')).toHaveClass('runtime-activity--active');
       expect(container.querySelector('[data-runtime-activity="sound:device-1"]')).toHaveClass('runtime-activity--active');
+      expect(container.querySelector('[data-runtime-sound-indicator="device-1"]')).toBeInTheDocument();
     });
+  });
+
+  it('logs sound start once for bursty runtime sound events', async () => {
+    render(<SwarmCanvasPanel RuntimeHost={(props) => <BurstSoundEmitterHost {...props} />} />);
+
+    const deviceLog = screen.getByLabelText('Event log for Node 1');
+    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
+
+    await waitFor(() =>
+      expect(screen.getByText('Sound output started (level 9)')).toBeInTheDocument(),
+    );
+    expect(screen.getAllByText('Sound output started (level 9)')).toHaveLength(1);
+    expect(
+      screen
+        .getByText('Sound output started (level 9)')
+        .closest('.device-log__line')
+        ?.querySelector('.device-log__type'),
+    ).toHaveTextContent('snd');
   });
 
   it('normalizes invalid runtime radio signal-strength values instead of crashing the panel', async () => {
@@ -654,6 +673,21 @@ function ActivityEmitterHost({
     }, 0);
     return () => globalThis.clearTimeout(timerId);
   }, [onRadioPacket, onSoundOutput]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
+function BurstSoundEmitterHost({ onSoundOutput }: MicroPythonRuntimeHostProps) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    if (emitted.current || !onSoundOutput) {
+      return;
+    }
+    emitted.current = true;
+    onSoundOutput('device-1', 9);
+    onSoundOutput('device-1', 9);
+    onSoundOutput('device-1', 9);
+  }, [onSoundOutput]);
 
   return <div aria-label="MicroPython runtime host" />;
 }

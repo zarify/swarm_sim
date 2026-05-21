@@ -607,6 +607,28 @@ button:disabled {
   animation: runtime-activity-pulse 480ms ease-out;
 }
 
+.runtime-sound-badge {
+  pointer-events: none;
+}
+
+.runtime-sound-badge circle {
+  fill: rgba(255, 176, 46, 0.95);
+  stroke: rgba(7, 10, 12, 0.92);
+  stroke-width: 1.2;
+}
+
+.runtime-sound-badge path {
+  fill: none;
+  stroke: #061012;
+  stroke-linecap: round;
+  stroke-width: 1.4;
+}
+
+.runtime-sound-badge__speaker {
+  fill: #061012;
+  stroke: none;
+}
+
 .button-dot {
   fill: rgba(255, 176, 46, 0.82);
 }

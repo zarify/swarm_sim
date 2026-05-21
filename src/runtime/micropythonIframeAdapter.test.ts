@@ -26,6 +26,7 @@ describe('MicroPython iframe runtime adapter', () => {
     expect(targetWindow.messages[0]?.targetOrigin).toBe('https://python-simulator.usermbit.org');
     expect(source).toContain('_SwarmDisplayProxy');
     expect(source).toContain('_swarm_wrap_music');
+    expect(source).toContain('_swarm_wrap_speech');
     expect(source).not.toContain('__swarm');
     expect(source).toContain('from microbit import *');
     expect(source.indexOf('from microbit import *')).toBeLessThan(source.indexOf('class _SwarmDisplayProxy'));

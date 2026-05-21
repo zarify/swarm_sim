@@ -86,10 +86,12 @@ describe('simulation engine', () => {
     let state = createSimulationState(makeProject());
 
     state = appendDeviceRuntimeLog(state, 'device-a', 'serial-output', 'mp-receive');
+    state = appendDeviceRuntimeLog(state, 'device-a', 'sound-output', 'Sound output started');
     state = appendDeviceRuntimeLog(state, 'device-a', 'runtime-error', 'simulator fault');
 
-    expect(state.deviceLogs.slice(-2)).toMatchObject([
+    expect(state.deviceLogs.slice(-3)).toMatchObject([
       { deviceId: 'device-a', type: 'serial-output', message: 'mp-receive' },
+      { deviceId: 'device-a', type: 'sound-output', message: 'Sound output started' },
       { deviceId: 'device-a', type: 'runtime-error', message: 'simulator fault' },
     ]);
   });

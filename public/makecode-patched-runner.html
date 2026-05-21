@@ -41,6 +41,7 @@
           recentOutboundRadioFingerprint: null,
           recentSerialFingerprint: null,
           dataLogHeadings: null,
+          lastSoundActive: false,
           resolveSimulatorReady: null,
           rejectSimulatorReady: null,
         };
@@ -135,6 +136,7 @@
             state.recentOutboundRadioFingerprint = null;
             state.recentSerialFingerprint = null;
             state.dataLogHeadings = null;
+            state.lastSoundActive = false;
 
             if (window.pxt?.runner?.stop) {
               window.pxt.runner.stop();
@@ -195,6 +197,7 @@
           state.activeSimulatorWindow = null;
           state.simulatorReady = false;
           state.runtimeRadioConfig = {};
+          state.lastSoundActive = false;
           simulators.innerHTML = '';
         }
 
@@ -246,11 +249,16 @@
               });
             }
             if (data.soundLevel !== undefined) {
-              postToHost({
-                type: 'swarm-runtime-event',
-                eventType: 'sound',
-                payload: { level: Number(data.soundLevel) },
-              });
+              const soundLevel = Number(data.soundLevel);
+              const soundActive = Number.isFinite(soundLevel) && soundLevel > 0;
+              if (soundActive && !state.lastSoundActive) {
+                postToHost({
+                  type: 'swarm-runtime-event',
+                  eventType: 'sound',
+                  payload: { level: soundLevel },
+                });
+              }
+              state.lastSoundActive = soundActive;
             }
             return;
           }
