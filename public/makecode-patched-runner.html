@@ -42,6 +42,7 @@
           recentSerialFingerprint: null,
           dataLogHeadings: null,
           lastSoundActive: false,
+          lastSoundEventMs: 0,
           resolveSimulatorReady: null,
           rejectSimulatorReady: null,
         };
@@ -138,6 +139,7 @@
             state.recentSerialFingerprint = null;
             state.dataLogHeadings = null;
             state.lastSoundActive = false;
+            state.lastSoundEventMs = 0;
 
             if (window.pxt?.runner?.stop) {
               window.pxt.runner.stop();
@@ -199,6 +201,7 @@
           state.simulatorReady = false;
           state.runtimeRadioConfig = {};
           state.lastSoundActive = false;
+          state.lastSoundEventMs = 0;
           simulators.innerHTML = '';
         }
 
@@ -252,12 +255,17 @@
             if (data.soundLevel !== undefined) {
               const soundLevel = Number(data.soundLevel);
               const soundActive = Number.isFinite(soundLevel) && soundLevel > 0;
-              if (soundActive && !state.lastSoundActive) {
+              const now = Date.now();
+              if (
+                soundActive &&
+                (!state.lastSoundActive || now - state.lastSoundEventMs >= 200)
+              ) {
                 postToHost({
                   type: 'swarm-runtime-event',
                   eventType: 'sound',
                   payload: { level: soundLevel },
                 });
+                state.lastSoundEventMs = now;
               }
               state.lastSoundActive = soundActive;
             }

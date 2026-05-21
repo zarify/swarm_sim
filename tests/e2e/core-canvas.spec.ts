@@ -430,6 +430,30 @@ test.describe('core canvas workflows', () => {
     await expect(page.locator('.device-log__line', { hasText: "b'light:101'" })).toHaveCount(0);
   });
 
+  test('shows per-device sound feedback for MicroPython runtime sound markers', async ({ page }) => {
+    await gotoCanvas(page);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
+
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')))
+      .toBe(true);
+    const simulatorFrame = page.frames().find((frame) => frame.url().includes('/micropython-patched-simulator.html'));
+    expect(simulatorFrame).toBeTruthy();
+    await simulatorFrame!.evaluate(() => {
+      window.parent.postMessage({ kind: 'serial_output', data: '\x1eSWARM_SOUND:180\n' }, window.location.origin);
+    });
+
+    await expect(page.locator('[data-runtime-sound-indicator="device-1"]')).toBeVisible();
+    const eventLog = page.getByLabel('Event log for Node 1');
+    await eventLog.locator('summary').click();
+    const soundLine = page.locator('.device-log__line', { hasText: 'Sound output started' });
+    await expect(soundLine).toHaveCount(1);
+    await expect(soundLine.locator('.device-log__type')).toHaveText('snd');
+  });
+
   test('shows per-device sound feedback for MakeCode runtime sound events', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);

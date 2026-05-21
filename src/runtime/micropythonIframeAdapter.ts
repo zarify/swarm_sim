@@ -748,6 +748,12 @@ try:
     try:
         import music as _swarm_music
 
+        def _swarm_music_set_volume_zero():
+            try:
+                _swarm_music.set_volume(0)
+            except Exception:
+                pass
+
         def _swarm_wrap_music(_swarm_name):
             try:
                 _swarm_original = getattr(_swarm_music, _swarm_name)
@@ -758,12 +764,16 @@ try:
 
             def _swarm_wrapped(*args, **kwargs):
                 _swarm_emit_sound()
-                return _swarm_original(*args, **kwargs)
+                _swarm_music_set_volume_zero()
+                _swarm_result = _swarm_original(*args, **kwargs)
+                _swarm_music_set_volume_zero()
+                return _swarm_result
 
             setattr(_swarm_music, _swarm_name, _swarm_wrapped)
 
         for _swarm_name in ("play", "pitch", "play_tone", "ring_tone", "set_tempo"):
             _swarm_wrap_music(_swarm_name)
+        _swarm_music_set_volume_zero()
     except Exception:
         pass
 

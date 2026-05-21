@@ -27,6 +27,23 @@
         let lastSound = -1;
         let lastRadioConfigKey = 'none';
         const SOUND_OUTPUT_PULSE_MS = 240;
+        const SOUND_PLAY_METHODS = [
+          'play',
+          'playTone',
+          'playInstructions',
+          'playInstructionsAsync',
+          'queuePlayInstructions',
+          'playSound',
+          'playSoundEffect',
+          'playMelody',
+          'startPlaying',
+          'speak',
+        ];
+        const SOUND_MUTE_METHODS = [
+          'setVolume',
+          'setOutputLevel',
+          'setLevel',
+        ];
         const TRACE_RADIO = window.location.hostname === 'localhost';
         const desiredSensors = {
           lightLevel: 0,
@@ -290,20 +307,16 @@
               continue;
             }
             patchedSoundStates.add(soundState);
-            for (const methodName of [
-              'play',
-              'playTone',
-              'playInstructions',
-              'playInstructionsAsync',
-              'queuePlayInstructions',
-              'playSound',
-              'playSoundEffect',
-              'start',
-              'startPlaying',
-              'speak',
-            ]) {
+            forceMuteSoundState(soundState);
+            for (const methodName of SOUND_PLAY_METHODS) {
               patchMethod(soundState, methodName, (args) => {
                 markSoundOutput(inferSoundLevelFromArgs(args));
+                forceMuteSoundState(soundState);
+              });
+            }
+            for (const methodName of SOUND_MUTE_METHODS) {
+              patchMethod(soundState, methodName, () => {
+                forceMuteSoundState(soundState);
               });
             }
           }
@@ -359,7 +372,56 @@
         }
 
         function getCandidateSoundStates(board) {
-          return [board.audioState, board.soundState, board.speakerState, board.buzzerState];
+          const candidates = [];
+          const seen = new WeakSet();
+
+          const addCandidate = (value) => {
+            if (!isRecord(value) || seen.has(value) || !looksLikeSoundState(value)) {
+              return;
+            }
+            seen.add(value);
+            candidates.push(value);
+          };
+
+          addCandidate(board.audioState);
+          addCandidate(board.soundState);
+          addCandidate(board.speakerState);
+          addCandidate(board.buzzerState);
+          for (const [key, value] of Object.entries(board)) {
+            if (!isRecord(value)) {
+              continue;
+            }
+            const normalizedKey = key.toLowerCase();
+            if (
+              normalizedKey.includes('audio') ||
+              normalizedKey.includes('sound') ||
+              normalizedKey.includes('speaker') ||
+              normalizedKey.includes('buzzer') ||
+              looksLikeSoundState(value)
+            ) {
+              addCandidate(value);
+            }
+            if (!normalizedKey.includes('state')) {
+              continue;
+            }
+            for (const [nestedKey, nestedValue] of Object.entries(value)) {
+              if (!isRecord(nestedValue)) {
+                continue;
+              }
+              const normalizedNestedKey = nestedKey.toLowerCase();
+              if (
+                normalizedNestedKey.includes('audio') ||
+                normalizedNestedKey.includes('sound') ||
+                normalizedNestedKey.includes('speaker') ||
+                normalizedNestedKey.includes('buzzer') ||
+                looksLikeSoundState(nestedValue)
+              ) {
+                addCandidate(nestedValue);
+              }
+            }
+          }
+
+          return candidates;
         }
 
         function inferSoundLevelFromArgs(args) {
@@ -391,6 +453,7 @@
               soundState.playing === true ||
               soundState.active === true;
             if (!isPlaying) {
+              forceMuteSoundState(soundState);
               continue;
             }
             const levelCandidates = [
@@ -402,12 +465,53 @@
             for (const candidate of levelCandidates) {
               const numeric = Number(candidate);
               if (Number.isFinite(numeric) && numeric > 0) {
+                forceMuteSoundState(soundState);
                 return clampByte(numeric);
               }
             }
+            forceMuteSoundState(soundState);
             return 255;
           }
           return 0;
+        }
+
+        function looksLikeSoundState(value) {
+          if (!isRecord(value)) {
+            return false;
+          }
+          const hasPlaybackMethod =
+            SOUND_PLAY_METHODS.some((name) => typeof value[name] === 'function') ||
+            typeof value.isPlaying === 'function';
+          if (!hasPlaybackMethod) {
+            return false;
+          }
+          const hasAudioLevelSurface =
+            'volume' in value ||
+            'outputLevel' in value ||
+            'level' in value ||
+            'currentVolume' in value ||
+            'setVolume' in value ||
+            'setOutputLevel' in value ||
+            'setLevel' in value;
+          return hasAudioLevelSurface || value.playing === true;
+        }
+
+        function forceMuteSoundState(soundState) {
+          if (!isRecord(soundState)) {
+            return;
+          }
+          if ('volume' in soundState) {
+            soundState.volume = 0;
+          }
+          if ('outputLevel' in soundState) {
+            soundState.outputLevel = 0;
+          }
+          if ('level' in soundState) {
+            soundState.level = 0;
+          }
+          if ('currentVolume' in soundState) {
+            soundState.currentVolume = 0;
+          }
         }
 
         function queueDisplayUpdate() {
