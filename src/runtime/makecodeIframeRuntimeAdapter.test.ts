@@ -185,6 +185,22 @@ describe('MakeCode iframe runtime adapter', () => {
 
     await expect(adapter.setSensor('lightLevel', 999)).rejects.toThrow(/0-255/);
   });
+
+  it('posts a dedicated AB pulse message', async () => {
+    const targetWindow = makeTargetWindow();
+    const adapter = new MakeCodeIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://swarm.local',
+      initialReady: true,
+    });
+
+    await adapter.pulseButtonAB();
+
+    expect(targetWindow.messages).toContainEqual({
+      message: { type: 'swarm-pulse-button-ab' },
+      targetOrigin: 'https://swarm.local',
+    });
+  });
 });
 
 function makeTargetWindow() {

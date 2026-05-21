@@ -31,6 +31,7 @@ type RuntimeLoadPrograms = (
 type RuntimeRadioConfigHint = Partial<
   Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>
 >;
+type ABPulseCapableRuntimeAdapter = MicrobitRuntimeAdapter & { pulseButtonAB: () => Promise<void> };
 
 const MAKECODE_SIMULATOR_RUNNER_URL = '/makecode-patched-runner.html';
 const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
@@ -179,8 +180,18 @@ export function MakeCodeRuntimeHost({
     }
 
     const buttonKey = `${runtime.buttons.A}:${runtime.buttons.B}`;
-    if (force || lastButtonValues.current.get(deviceId) !== buttonKey) {
+    const previousButtonKey = lastButtonValues.current.get(deviceId);
+    if (force || previousButtonKey !== buttonKey) {
       lastButtonValues.current.set(deviceId, buttonKey);
+      if (!force && supportsABPulse(adapter)) {
+        if (previousButtonKey === 'false:false' && buttonKey === 'true:true') {
+          return tasks.length === 0 ? Promise.resolve() : Promise.all(tasks).then(() => undefined);
+        }
+        if (previousButtonKey === 'true:true' && buttonKey === 'false:false') {
+          tasks.push(adapter.pulseButtonAB());
+          return tasks.length === 0 ? Promise.resolve() : Promise.all(tasks).then(() => undefined);
+        }
+      }
       tasks.push(
         Promise.all([
           adapter.setButton('A', runtime.buttons.A),
@@ -566,6 +577,10 @@ export function MakeCodeRuntimeHost({
     }
 
     void (async () => {
+      if (supportsABPulse(adapter)) {
+        await adapter.pulseButtonAB();
+        return;
+      }
       await adapter.setButton('A', true);
       await adapter.setButton('B', true);
       await adapter.setButton('B', false);
@@ -925,6 +940,10 @@ function hasRuntimeRadioConfigHint(config: RuntimeRadioConfigHint): boolean {
     config.channel !== undefined ||
     config.signalStrength !== undefined
   );
+}
+
+function supportsABPulse(adapter: MicrobitRuntimeAdapter): adapter is ABPulseCapableRuntimeAdapter {
+  return typeof adapter.pulseButtonAB === 'function';
 }
 
 function isDuplicateRecentRadioPacket(

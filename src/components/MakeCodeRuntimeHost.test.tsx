@@ -101,6 +101,7 @@ describe('MakeCodeRuntimeHost', () => {
     const packets: string[] = [];
     const sounds: string[] = [];
     const buttonInputs: string[] = [];
+    const comboPulses: string[] = [];
     const radioHints: string[] = [];
     const dataLogs: string[] = [];
     let emitRuntimeEvent: ((event: RuntimeAdapterEvent) => void) | undefined;
@@ -158,6 +159,8 @@ describe('MakeCodeRuntimeHost', () => {
             emitRuntimeEvent = listener;
           }, (button, pressed) => {
             buttonInputs.push(`${button}:${pressed}`);
+          }, undefined, undefined, () => {
+            comboPulses.push('AB');
           })
         }
       />,
@@ -208,11 +211,12 @@ describe('MakeCodeRuntimeHost', () => {
     await waitFor(() =>
       expect(document.querySelector('[data-runtime-led="device-alpha:0"]')).toHaveClass('virtual-led-pixel--lit'),
     );
-    await waitFor(() => expect(buttonInputs).toHaveLength(8));
-    expect(buttonInputs.filter((entry) => entry === 'A:true')).toHaveLength(2);
-    expect(buttonInputs.filter((entry) => entry === 'A:false')).toHaveLength(2);
-    expect(buttonInputs.filter((entry) => entry === 'B:true')).toHaveLength(2);
-    expect(buttonInputs.filter((entry) => entry === 'B:false')).toHaveLength(2);
+    await waitFor(() => expect(buttonInputs).toHaveLength(4));
+    expect(buttonInputs.filter((entry) => entry === 'A:true')).toHaveLength(1);
+    expect(buttonInputs.filter((entry) => entry === 'A:false')).toHaveLength(1);
+    expect(buttonInputs.filter((entry) => entry === 'B:true')).toHaveLength(1);
+    expect(buttonInputs.filter((entry) => entry === 'B:false')).toHaveLength(1);
+    expect(comboPulses).toEqual(['AB']);
   });
 
   it('deduplicates back-to-back identical radio packets from the same runtime device', async () => {
@@ -495,6 +499,93 @@ describe('MakeCodeRuntimeHost', () => {
     await waitFor(() =>
       expect(sensorValues).toEqual(['lightLevel:17', 'soundLevel:23', 'lightLevel:81', 'soundLevel:5']),
     );
+  });
+
+  it('maps false:false -> true:true -> false:false button state cycles to one AB pulse when supported', async () => {
+    const buttonValues: string[] = [];
+    const comboPulses: string[] = [];
+    const project = makeProject();
+    const { rerender } = render(
+      <MakeCodeRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        deviceRuntimeStates={makeDeviceRuntimeStates(0, 0)}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={() =>
+          makeEventAdapter(
+            () => {},
+            (button, pressed) => {
+              buttonValues.push(`${button}:${pressed}`);
+            },
+            undefined,
+            undefined,
+            () => {
+              comboPulses.push('AB');
+            },
+          )
+        }
+      />
+    );
+
+    await markRunnerReady('Alpha');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare runtime' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(buttonValues).toEqual(['A:false', 'B:false']));
+
+    buttonValues.length = 0;
+
+    rerender(
+      <MakeCodeRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        deviceRuntimeStates={makeDeviceRuntimeStates(0, 0, { A: true, B: true })}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={() =>
+          makeEventAdapter(
+            () => {},
+            (button, pressed) => {
+              buttonValues.push(`${button}:${pressed}`);
+            },
+            undefined,
+            undefined,
+            () => {
+              comboPulses.push('AB');
+            },
+          )
+        }
+      />
+    );
+
+    rerender(
+      <MakeCodeRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        deviceRuntimeStates={makeDeviceRuntimeStates(0, 0, { A: false, B: false })}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={() =>
+          makeEventAdapter(
+            () => {},
+            (button, pressed) => {
+              buttonValues.push(`${button}:${pressed}`);
+            },
+            undefined,
+            undefined,
+            () => {
+              comboPulses.push('AB');
+            },
+          )
+        }
+      />
+    );
+
+    await waitFor(() => expect(comboPulses).toEqual(['AB']));
+    expect(buttonValues).toEqual([]);
   });
 
   it('reapplies engine sensor values after runtime reset even when values are unchanged', async () => {
@@ -801,6 +892,7 @@ function makeEventAdapter(
   onSetButton?: (button: 'A' | 'B', pressed: boolean) => void,
   onSetSensor?: (sensor: 'lightLevel' | 'soundLevel', value: number) => void,
   onReset?: () => void,
+  onPulseButtonAB?: () => void,
 ) {
   return {
     name: 'event adapter',
@@ -821,6 +913,9 @@ function makeEventAdapter(
     setButton: async (button: 'A' | 'B', pressed: boolean) => {
       onSetButton?.(button, pressed);
     },
+    pulseButtonAB: async () => {
+      onPulseButtonAB?.();
+    },
     setSensor: async (sensor: 'lightLevel' | 'soundLevel', value: number) => {
       onSetSensor?.(sensor, value);
     },
@@ -832,14 +927,18 @@ function makeEventAdapter(
   };
 }
 
-function makeDeviceRuntimeStates(lightLevel: number, soundLevel: number): Record<string, DeviceRuntimeState> {
+function makeDeviceRuntimeStates(
+  lightLevel: number,
+  soundLevel: number,
+  buttons: DeviceRuntimeState['buttons'] = { A: false, B: false },
+): Record<string, DeviceRuntimeState> {
   return {
     'device-alpha': {
       deviceId: 'device-alpha',
       lifecycle: 'stopped',
       position: { x: 100, y: 100 },
       radio: { group: 0, channel: 7, rangeRadius: 160 },
-      buttons: { A: false, B: false },
+      buttons,
       sensors: { lightLevel, soundLevel },
     },
   };

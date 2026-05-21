@@ -29,7 +29,7 @@ describe('SwarmCanvasPanel', () => {
     const { container } = render(<SwarmCanvasPanel />);
 
     expect(screen.queryByRole('heading', { name: 'Spatial radio bench' })).not.toBeInTheDocument();
-    expect(screen.getByText('v0.2.0')).toBeInTheDocument();
+    expect(screen.getByText(/^v\d+\.\d+\.\d+/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open project repository on GitHub' })).toHaveAttribute(
       'href',
       'https://github.com/zarify/swarm_sim',

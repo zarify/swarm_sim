@@ -64,6 +64,7 @@ export interface MicrobitRuntimeAdapter {
   reset(): Promise<void>;
   stop(): Promise<void>;
   setButton(button: 'A' | 'B', pressed: boolean): Promise<void>;
+  pulseButtonAB?(): Promise<void>;
   setSensor(sensor: 'lightLevel' | 'soundLevel', value: number): Promise<void>;
   sendRadio(packet: RuntimeRadioPacket): Promise<void>;
   onEvent(listener: (event: RuntimeAdapterEvent) => void): RuntimeAdapterUnsubscribe;

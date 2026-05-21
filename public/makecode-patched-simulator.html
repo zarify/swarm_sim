@@ -89,6 +89,8 @@
                 updateDesiredSensor(message);
               } else if (message.type === 'swarm-set-button') {
                 applyButton(board, message);
+              } else if (message.type === 'swarm-pulse-button-ab') {
+                applyButtonAB(board);
               } else if (message.type === 'swarm-radiopacket') {
                 applyRadioPacket(board, message);
               }
@@ -164,6 +166,19 @@
               board.bus.queue(pair.abBtn.id, 3);
             }
           }
+          queueDisplayUpdate();
+        }
+
+        function applyButtonAB(board) {
+          const pair = board.buttonPairState;
+          if (!pair || !board.bus) {
+            return;
+          }
+          pair.abBtn.pressed = true;
+          board.bus.queue(pair.abBtn.id, 1);
+          pair.abBtn.pressed = false;
+          board.bus.queue(pair.abBtn.id, 2);
+          board.bus.queue(pair.abBtn.id, 3);
           queueDisplayUpdate();
         }
 

@@ -126,6 +126,10 @@ export class MakeCodeIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     this.post({ type: 'swarm-set-button', button, pressed });
   }
 
+  async pulseButtonAB(): Promise<void> {
+    this.post({ type: 'swarm-pulse-button-ab' });
+  }
+
   async setSensor(sensor: 'lightLevel' | 'soundLevel', value: number): Promise<void> {
     const domain = MICROBIT_BUILTIN_SENSOR_DOMAINS[sensor];
     if (!Number.isFinite(value) || value < domain.min || value > domain.max) {
