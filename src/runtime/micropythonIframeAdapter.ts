@@ -140,6 +140,8 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
 
   private postFlash(program: MicroPythonRuntimeProgram): void {
     this.post({ kind: 'flash', filesystem: instrumentMicroPythonFilesystem(program.filesystem) });
+    this.post({ kind: 'mute' });
+    debugMicroPythonRuntimeSound('post-mute-command', {});
   }
 
   private postSetValue(id: ButtonId | SensorId, value: number): void {
@@ -404,7 +406,7 @@ const displayBridgePrefix = '\x1eSWARM_DISPLAY:';
 const displayBridgeErrorPrefix = '\x1eSWARM_DISPLAY_ERROR:';
 const soundBridgePrefix = '\x1eSWARM_SOUND:';
 const displayBridgeMarkerPattern =
-  /\x1eSWARM_DISPLAY:([0-9]{25})(?:\r?\n)?|\x1eSWARM_DISPLAY_ERROR:([^\r\n]*)(?:\r?\n)?|\x1eSWARM_SOUND:([0-9]{1,3})(?:\r?\n)/g;
+  /\x1eSWARM_DISPLAY:([0-9]{25})(?:\r?\n)?|\x1eSWARM_DISPLAY_ERROR:([^\r\n]*)(?:\r?\n)?|\x1eSWARM_SOUND:([0-9]{1,3})(?=\r?\n|[^0-9]|$)(?:\r?\n)?/g;
 
 function instrumentMicroPythonFilesystem(filesystem: MicroPythonRuntimeProgram['filesystem']) {
   const main = filesystem[mainPythonFile];

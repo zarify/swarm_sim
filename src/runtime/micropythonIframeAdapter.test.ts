@@ -120,6 +120,7 @@ display.show(Image.ARROW_N)`),
     await flash;
 
     expect(targetWindow.messages[0]?.message).toMatchObject({ kind: 'flash' });
+    expect(targetWindow.messages[1]?.message).toMatchObject({ kind: 'mute' });
   });
 
   it('maps buttons, sensors, reset, stop, and radio input to documented simulator messages', async () => {
@@ -248,6 +249,50 @@ display.show(Image.ARROW_N)`),
       { type: 'sound-output', level: 255 },
       { type: 'serial-output', data: 'after' },
     ]);
+  });
+
+  it('parses sound bridge markers even when the simulator omits a trailing newline', () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: 'before\n\x1eSWARM_SOUND:180after' });
+
+    expect(events).toEqual([
+      { type: 'serial-output', data: 'before' },
+      { type: 'sound-output', level: 180 },
+      { type: 'serial-output', data: 'after' },
+    ]);
+  });
+
+  it('does not parse malformed sound markers with 4+ digit payloads as sound events', () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    eventTarget.dispatchMessage({ kind: 'serial_output', data: 'before\n\x1eSWARM_SOUND:1234\nafter' });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'serial-output' });
+    if (events[0]?.type !== 'serial-output') {
+      throw new Error('Expected serial output');
+    }
+    expect(events[0].data).toContain('\x1eSWARM_SOUND:1234');
+    expect(events.some((event) => event.type === 'sound-output')).toBe(false);
   });
 
   it('coalesces fragmented serial chunks into one line and normalizes Python bytes literals', () => {
@@ -419,8 +464,9 @@ display.show(Image.ARROW_N)`),
     await adapter.flash(program);
     eventTarget.dispatchMessage({ kind: 'request_flash' });
 
-    expect(targetWindow.messages).toHaveLength(2);
-    expect(targetWindow.messages[1]?.message).toMatchObject({ kind: 'flash' });
+    const kinds = targetWindow.messages.map((entry) => (entry.message as { kind?: string }).kind);
+    expect(kinds.filter((kind) => kind === 'flash')).toHaveLength(2);
+    expect(kinds.filter((kind) => kind === 'mute')).toHaveLength(2);
   });
 
   it('can defer iframe flashing until the simulator requests it', async () => {
@@ -439,8 +485,9 @@ display.show(Image.ARROW_N)`),
     expect(targetWindow.messages).toEqual([]);
 
     eventTarget.dispatchMessage({ kind: 'request_flash' });
-    expect(targetWindow.messages).toHaveLength(1);
+    expect(targetWindow.messages).toHaveLength(2);
     expect(targetWindow.messages[0]?.message).toMatchObject({ kind: 'flash' });
+    expect(targetWindow.messages[1]?.message).toMatchObject({ kind: 'mute' });
   });
 
   it('rejects non-MicroPython programs and invalid sensor values before posting messages', async () => {

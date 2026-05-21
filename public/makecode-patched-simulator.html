@@ -56,6 +56,7 @@
           group: undefined,
           channel: undefined,
         };
+        let globalAudioStartHooksPatched = false;
         let soundOutputPulseUntilMs = 0;
         let lastSoundOutputLevel = 0;
 
@@ -86,6 +87,7 @@
             simulatorReady = true;
             postToRunner({ type: 'swarm-simulator-ready' });
           }
+          patchGlobalAudioStartHooks();
           patchRadioStateHooks(board);
           patchSoundStateHooks(board);
           flushPendingMessages();
@@ -297,6 +299,31 @@
             publishState(getBoard());
             return result;
           };
+        }
+
+        function patchGlobalAudioStartHooks() {
+          if (globalAudioStartHooksPatched) {
+            return;
+          }
+          const patchStart = (prototype, methodName, sourceName) => {
+            if (!prototype || typeof prototype[methodName] !== 'function') {
+              return;
+            }
+            const original = prototype[methodName];
+            if (original.__swarmSoundPatched) {
+              return;
+            }
+            prototype[methodName] = function patchedAudioStart(...args) {
+              markSoundOutput(255);
+              traceSound('global-audio-start', { source: sourceName });
+              return original.apply(this, args);
+            };
+            prototype[methodName].__swarmSoundPatched = true;
+          };
+          patchStart(window.AudioBufferSourceNode?.prototype, 'start', 'AudioBufferSourceNode.start');
+          patchStart(window.OscillatorNode?.prototype, 'start', 'OscillatorNode.start');
+          patchStart(window.ConstantSourceNode?.prototype, 'start', 'ConstantSourceNode.start');
+          globalAudioStartHooksPatched = true;
         }
 
         function patchSoundStateHooks(board) {
