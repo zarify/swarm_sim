@@ -12,7 +12,7 @@ import { decompressLzmaSource } from '../runtime/lzmaDecompressor';
 import { normalizeRuntimeDisplayPixels } from '../runtime/displayPixels';
 import {
   deliverRuntimeRadioPacket,
-  registerRuntimeRadioSink,
+  replaceRuntimeRadioSink,
 } from '../runtime/radioDeliveryRegistry';
 import type {
   MicrobitRuntimeAdapter,
@@ -453,7 +453,7 @@ export function MakeCodeRuntimeHost({
           adapterRadioSinkUnsubscribes.current.get(prepared.device.id)?.();
           adapterRadioSinkUnsubscribes.current.set(
             prepared.device.id,
-            registerRuntimeRadioSink(prepared.device.id, (packet) => adapter.sendRadio(packet)),
+            replaceRuntimeRadioSink(prepared.device.id, (packet) => adapter.sendRadio(packet)),
           );
           adapterUnsubscribes.current.set(
             prepared.device.id,
