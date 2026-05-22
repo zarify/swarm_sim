@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "release:zip": "./scripts/build-release-zip.sh",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false",
