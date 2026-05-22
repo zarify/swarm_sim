@@ -20,6 +20,12 @@
   <body>
     <script>
       (() => {
+        const SIM_INIT_FLAG = '__swarmMakeCodePatchedSimulatorInitialized__';
+        if (window[SIM_INIT_FLAG]) {
+          return;
+        }
+        window[SIM_INIT_FLAG] = true;
+
         const RUNNER_ORIGIN = window.location.origin;
         const pendingMessages = [];
         let simulatorReady = false;
@@ -27,6 +33,7 @@
         let lastSound = -1;
         let lastRadioConfigKey = 'none';
         const SOUND_OUTPUT_PULSE_MS = 240;
+        const SOUND_TRACE_MIN_INTERVAL_MS = 400;
         const SOUND_PLAY_METHODS = [
           'play',
           'playTone',
@@ -56,7 +63,10 @@
           group: undefined,
           channel: undefined,
         };
+        const AB_PULSE_DEDUP_WINDOW_MS = 50;
+        let lastABPulseAtMs = -Infinity;
         let globalAudioStartHooksPatched = false;
+        let lastGlobalAudioTraceAtMs = 0;
         let soundOutputPulseUntilMs = 0;
         let lastSoundOutputLevel = 0;
 
@@ -110,6 +120,9 @@
               } else if (message.type === 'swarm-set-button') {
                 applyButton(board, message);
               } else if (message.type === 'swarm-pulse-button-ab') {
+                if (isDuplicateABPulse()) {
+                  continue;
+                }
                 applyButtonAB(board);
               } else if (message.type === 'swarm-radiopacket') {
                 applyRadioPacket(board, message);
@@ -200,6 +213,15 @@
           board.bus.queue(pair.abBtn.id, 2);
           board.bus.queue(pair.abBtn.id, 3);
           queueDisplayUpdate();
+        }
+
+        function isDuplicateABPulse() {
+          const now = performance.now();
+          if (now - lastABPulseAtMs < AB_PULSE_DEDUP_WINDOW_MS) {
+            return true;
+          }
+          lastABPulseAtMs = now;
+          return false;
         }
 
         function applyRadioPacket(board, message) {
@@ -314,8 +336,12 @@
               return;
             }
             prototype[methodName] = function patchedAudioStart(...args) {
+              const now = Date.now();
               markSoundOutput(255);
-              traceSound('global-audio-start', { source: sourceName });
+              if (now - lastGlobalAudioTraceAtMs >= SOUND_TRACE_MIN_INTERVAL_MS) {
+                traceSound('global-audio-start', { source: sourceName });
+                lastGlobalAudioTraceAtMs = now;
+              }
               return original.apply(this, args);
             };
             prototype[methodName].__swarmSoundPatched = true;
@@ -467,12 +493,16 @@
           if (normalized <= 0) {
             return;
           }
-          const nextPulseUntilMs = Math.max(soundOutputPulseUntilMs, Date.now() + SOUND_OUTPUT_PULSE_MS);
-          traceSound('mark-sound-output', {
-            level: normalized,
-            previousLevel: lastSoundOutputLevel,
-            pulseRemainingMs: Math.max(0, nextPulseUntilMs - Date.now()),
-          });
+          const now = Date.now();
+          const pulseWasInactive = now >= soundOutputPulseUntilMs;
+          const nextPulseUntilMs = Math.max(soundOutputPulseUntilMs, now + SOUND_OUTPUT_PULSE_MS);
+          if (pulseWasInactive || normalized !== lastSoundOutputLevel) {
+            traceSound('mark-sound-output', {
+              level: normalized,
+              previousLevel: lastSoundOutputLevel,
+              pulseRemainingMs: Math.max(0, nextPulseUntilMs - now),
+            });
+          }
           lastSoundOutputLevel = normalized;
           soundOutputPulseUntilMs = nextPulseUntilMs;
         }

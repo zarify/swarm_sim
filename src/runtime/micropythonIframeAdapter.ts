@@ -761,25 +761,36 @@ try:
             except Exception:
                 pass
 
-        def _swarm_wrap_music(_swarm_name):
-            try:
-                _swarm_original = getattr(_swarm_music, _swarm_name)
-            except AttributeError:
-                return
-            if not callable(_swarm_original):
-                return
-
+        def _swarm_wrap_music_callable(_swarm_fn):
             def _swarm_wrapped(*args, **kwargs):
                 _swarm_emit_sound()
                 _swarm_music_set_volume_zero()
-                _swarm_result = _swarm_original(*args, **kwargs)
+                _swarm_result = _swarm_fn(*args, **kwargs)
                 _swarm_music_set_volume_zero()
                 return _swarm_result
+            return _swarm_wrapped
 
-            setattr(_swarm_music, _swarm_name, _swarm_wrapped)
+        class _SwarmMusicProxy:
+            _swarm_wrappable = ("play", "pitch", "play_tone", "ring_tone", "set_tempo")
+
+            def __init__(self, _swarm_target):
+                self._swarm_target = _swarm_target
+
+            def __getattr__(self, _swarm_name):
+                _swarm_attr = getattr(self._swarm_target, _swarm_name)
+                if _swarm_name in self._swarm_wrappable and callable(_swarm_attr):
+                    return _swarm_wrap_music_callable(_swarm_attr)
+                return _swarm_attr
+
+        music = _SwarmMusicProxy(_swarm_music)
 
         for _swarm_name in ("play", "pitch", "play_tone", "ring_tone", "set_tempo"):
-            _swarm_wrap_music(_swarm_name)
+            try:
+                _swarm_global = globals().get(_swarm_name)
+            except Exception:
+                _swarm_global = None
+            if callable(_swarm_global):
+                globals()[_swarm_name] = _swarm_wrap_music_callable(_swarm_global)
         _swarm_music_set_volume_zero()
     except Exception:
         pass
@@ -787,22 +798,33 @@ try:
     try:
         import speech as _swarm_speech
 
-        def _swarm_wrap_speech(_swarm_name):
-            try:
-                _swarm_original = getattr(_swarm_speech, _swarm_name)
-            except AttributeError:
-                return
-            if not callable(_swarm_original):
-                return
-
+        def _swarm_wrap_speech_callable(_swarm_fn):
             def _swarm_wrapped(*args, **kwargs):
                 _swarm_emit_sound()
-                return _swarm_original(*args, **kwargs)
+                return _swarm_fn(*args, **kwargs)
+            return _swarm_wrapped
 
-            setattr(_swarm_speech, _swarm_name, _swarm_wrapped)
+        class _SwarmSpeechProxy:
+            _swarm_wrappable = ("say", "sing", "pronounce")
+
+            def __init__(self, _swarm_target):
+                self._swarm_target = _swarm_target
+
+            def __getattr__(self, _swarm_name):
+                _swarm_attr = getattr(self._swarm_target, _swarm_name)
+                if _swarm_name in self._swarm_wrappable and callable(_swarm_attr):
+                    return _swarm_wrap_speech_callable(_swarm_attr)
+                return _swarm_attr
+
+        speech = _SwarmSpeechProxy(_swarm_speech)
 
         for _swarm_name in ("say", "sing", "pronounce"):
-            _swarm_wrap_speech(_swarm_name)
+            try:
+                _swarm_global = globals().get(_swarm_name)
+            except Exception:
+                _swarm_global = None
+            if callable(_swarm_global):
+                globals()[_swarm_name] = _swarm_wrap_speech_callable(_swarm_global)
     except Exception:
         pass
 

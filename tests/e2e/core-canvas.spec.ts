@@ -2,7 +2,9 @@ import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 
 const microPythonFixture = path.resolve(process.cwd(), 'hex_files/mp_beacon.hex');
+const microPythonDataLogFixture = path.resolve(process.cwd(), 'hex_files/mp_datalog.hex');
 const makeCodeBeaconFixture = path.resolve(process.cwd(), 'hex_files/mc_beacon.hex');
+const makeCodeDataLogFixture = path.resolve(process.cwd(), 'hex_files/mc_datalog.hex');
 
 async function gotoCanvas(page: Page) {
   await page.goto('/');
@@ -148,6 +150,49 @@ test.describe('core canvas workflows', () => {
     expect(download.suggestedFilename()).toMatch(/-device-logs\.zip$/);
   });
 
+  test('loads MicroPython datalog fixture without extraction failure', async ({ page }) => {
+    await gotoCanvas(page);
+    await addDeviceFromSwarmTools(page);
+    await page.getByLabel(/Load code onto Node 2/).setInputFiles(microPythonDataLogFixture);
+
+    await expect(page.getByText('Assigned: mp_datalog.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    const runtimeResults = page.getByLabel('Runtime load results');
+    await expect(runtimeResults).toContainText(/loaded|prepared/i, { timeout: 15_000 });
+    await expect(runtimeResults).not.toContainText('failed device-2');
+    await expect(runtimeResults).not.toContainText('No embedded MicroPython or MakeCode source found');
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+  });
+
+  test('keeps MakeCode datalog download enabled after stopping logging', async ({ page }) => {
+    await gotoCanvas(page);
+    await openSwarmTools(page);
+    const downloadLogsButton = page.getByRole('button', { name: 'Download log files' });
+    await expect(downloadLogsButton).toBeDisabled();
+
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeDataLogFixture);
+    await expect(page.getByText('Assigned: mc_datalog.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+
+    const buttonA = page.locator('[data-testid="device-button-device-1-A"]');
+    const buttonB = page.locator('[data-testid="device-button-device-1-B"]');
+    await buttonA.click();
+    await expect(downloadLogsButton).toBeEnabled({ timeout: 15_000 });
+
+    await buttonB.click();
+    await expect(downloadLogsButton).toBeEnabled({ timeout: 5_000 });
+  });
+
   test('clear canvas respects confirmation dialog', async ({ page }) => {
     await page.addInitScript(() => {
       const responses = [false, true];
@@ -249,6 +294,13 @@ test.describe('core canvas workflows', () => {
     await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
 
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+
     const makeCodeRunner = page.frames().find((frame) => frame.url().includes('/makecode-patched-runner.html'));
     expect(makeCodeRunner).toBeTruthy();
     await makeCodeRunner!.evaluate(() => {
@@ -331,6 +383,13 @@ test.describe('core canvas workflows', () => {
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
     await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
 
     const makeCodeRunner = page.frames().find((frame) => frame.url().includes('/makecode-patched-runner.html'));
     expect(makeCodeRunner).toBeTruthy();
@@ -557,6 +616,81 @@ test.describe('core canvas workflows', () => {
 
     await expect(page.locator('.device-log__line', { hasText: 'Button A pressed' })).toHaveCount(1);
     await expect(page.locator('.device-log__line', { hasText: 'Button B pressed' })).toHaveCount(1);
+  });
+
+  test('sends one MakeCode AB click event per canvas A+B press', async ({ page }) => {
+    await gotoCanvas(page);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+
+    await page.evaluate(async () => {
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const runnerFrame = Array.from(document.querySelectorAll('iframe')).find((element) =>
+        (element as HTMLIFrameElement).src.includes('/makecode-patched-runner.html'),
+      ) as HTMLIFrameElement | undefined;
+      if (!runnerFrame?.contentWindow) {
+        throw new Error('MakeCode runner iframe not found');
+      }
+      const runnerWindow = runnerFrame.contentWindow as Window & { document?: Document };
+
+      let simulatorWindow: (Window & Record<string, unknown>) | undefined;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const simulatorFrame = runnerWindow.document?.querySelector('#simulators iframe') as
+          | HTMLIFrameElement
+          | null;
+        simulatorWindow = simulatorFrame?.contentWindow as (Window & Record<string, unknown>) | undefined;
+        if (simulatorWindow?.pxsim?.board) {
+          break;
+        }
+        await sleep(100);
+      }
+
+      const board = simulatorWindow?.pxsim?.board?.() as
+        | { bus?: { queue: (id: number, eventId: number) => unknown }; buttonPairState?: { abBtn?: { id?: number } } }
+        | undefined;
+      const bus = board?.bus;
+      const abId = board?.buttonPairState?.abBtn?.id;
+      if (!simulatorWindow || !bus || typeof abId !== 'number') {
+        throw new Error('MakeCode simulator runtime bus not ready');
+      }
+
+      if (!simulatorWindow.__swarmOriginalBusQueue) {
+        simulatorWindow.__swarmOriginalBusQueue = bus.queue.bind(bus) as (
+          id: number,
+          eventId: number,
+        ) => unknown;
+        simulatorWindow.__swarmAbButtonId = abId;
+        bus.queue = (id: number, eventId: number) => {
+          if (id === simulatorWindow.__swarmAbButtonId && eventId === 3) {
+            simulatorWindow.__swarmAbClickEvents = (simulatorWindow.__swarmAbClickEvents as number) + 1;
+          }
+          return simulatorWindow.__swarmOriginalBusQueue(id, eventId);
+        };
+      }
+      simulatorWindow.__swarmAbClickEvents = 0;
+    });
+
+    await page.locator('[data-testid="device-button-device-1-AB"]').click();
+    await page.waitForTimeout(800);
+
+    const abClickEvents = await page.evaluate(() => {
+      const runnerFrame = Array.from(document.querySelectorAll('iframe')).find((element) =>
+        (element as HTMLIFrameElement).src.includes('/makecode-patched-runner.html'),
+      ) as HTMLIFrameElement | undefined;
+      const simulatorWindow = runnerFrame?.contentWindow?.document?.querySelector('#simulators iframe')
+        ?.contentWindow as (Window & Record<string, unknown>) | undefined;
+      return Number(simulatorWindow?.__swarmAbClickEvents ?? 0);
+    });
+
+    expect(abClickEvents).toBe(1);
   });
 
   test('renames selected nodes from the side panel for both devices and sources', async ({ page }) => {

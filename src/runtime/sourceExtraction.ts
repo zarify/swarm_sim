@@ -291,6 +291,9 @@ function parseMicroPythonFileWithBase(
 
     const nextIndex = currentChunk[127] ?? MICROBIT_FS_UNUSED;
     if (nextIndex === MICROBIT_FS_UNUSED) {
+      if (endOffset === 0) {
+        return { filename, bytes: new Uint8Array(fileBytes) };
+      }
       if (endOffset < chunkDataStart || endOffset > 126) {
         return undefined;
       }

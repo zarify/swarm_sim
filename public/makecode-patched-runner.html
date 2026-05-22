@@ -26,6 +26,12 @@
     <div id="simulators"></div>
     <script>
       (() => {
+        const RUNNER_INIT_FLAG = '__swarmMakeCodePatchedRunnerInitialized__';
+        if (window[RUNNER_INIT_FLAG]) {
+          return;
+        }
+        window[RUNNER_INIT_FLAG] = true;
+
         const HOST_ORIGIN = window.location.origin;
         const PATCHED_SIMULATOR_URL = `${HOST_ORIGIN}/makecode-patched-simulator.html`;
         const simulators = document.getElementById('simulators');
@@ -42,6 +48,8 @@
           recentOutboundRadioFingerprint: null,
           recentSerialFingerprint: null,
           dataLogHeadings: null,
+          programUsesDataLogger: false,
+          dataLogMirrorToSerial: false,
           lastSoundActive: false,
           lastSoundEventMs: 0,
           resolveSimulatorReady: null,
@@ -130,6 +138,7 @@
             if (typeof mainTs !== 'string') {
               throw new Error('MakeCode source is missing main.ts');
             }
+            const dataLogHints = parseDataLogProgramHints(sourceFiles);
 
             state.lastSourceFiles = sourceFiles;
             state.activeSimulatorWindow = null;
@@ -139,6 +148,8 @@
             state.recentOutboundRadioFingerprint = null;
             state.recentSerialFingerprint = null;
             state.dataLogHeadings = null;
+            state.programUsesDataLogger = dataLogHints.usesDataLogger;
+            state.dataLogMirrorToSerial = dataLogHints.mirrorToSerial;
             state.lastSoundActive = false;
             state.lastSoundEventMs = 0;
 
@@ -201,6 +212,9 @@
           state.activeSimulatorWindow = null;
           state.simulatorReady = false;
           state.runtimeRadioConfig = {};
+          state.dataLogHeadings = null;
+          state.programUsesDataLogger = false;
+          state.dataLogMirrorToSerial = false;
           state.lastSoundActive = false;
           state.lastSoundEventMs = 0;
           simulators.innerHTML = '';
@@ -258,12 +272,14 @@
               const soundActive = Number.isFinite(soundLevel) && soundLevel > 0;
               const now = Date.now();
               const elapsedMs = now - state.lastSoundEventMs;
-              traceSound('simulator-sound-state', {
-                soundLevel: Number.isFinite(soundLevel) ? soundLevel : 0,
-                soundActive,
-                lastSoundActive: state.lastSoundActive,
-                elapsedMs,
-              });
+              if (soundActive !== state.lastSoundActive) {
+                traceSound('simulator-sound-state', {
+                  soundLevel: Number.isFinite(soundLevel) ? soundLevel : 0,
+                  soundActive,
+                  lastSoundActive: state.lastSoundActive,
+                  elapsedMs,
+                });
+              }
               if (
                 soundActive &&
                 (!state.lastSoundActive || elapsedMs >= 200)
@@ -285,7 +301,11 @@
           }
 
           if (isSerialLikeType(data.type)) {
-            if (emitRuntimeDataLogPayload(data.data ?? data)) {
+            const dataLogKind = emitRuntimeDataLogPayload(data.data ?? data);
+            if (dataLogKind === 'delete') {
+              return;
+            }
+            if (dataLogKind === 'output' && !state.dataLogMirrorToSerial) {
               return;
             }
             emitSerialPayload(data.data ?? data);
@@ -305,7 +325,11 @@
               return;
             }
             if (isSerialChannel(data.channel)) {
-              if (emitRuntimeDataLogPayload(data.data ?? data)) {
+              const dataLogKind = emitRuntimeDataLogPayload(data.data ?? data);
+              if (dataLogKind === 'delete') {
+                return;
+              }
+              if (dataLogKind === 'output' && !state.dataLogMirrorToSerial) {
                 return;
               }
               emitSerialPayload(data.data ?? data);
@@ -455,6 +479,22 @@
           }
         }
 
+        function parseDataLogProgramHints(sourceFiles) {
+          const sourceText = Object.entries(sourceFiles)
+            .filter(([filename, text]) =>
+              typeof text === 'string' && /\.(ts|js)$/i.test(filename),
+            )
+            .map(([, text]) => text)
+            .join('\n');
+          const usesDataLogger = /\bdatalogger\./.test(sourceText);
+          let mirrorToSerial = false;
+          const mirrorMatch = /\bdatalogger\.mirrorToSerial\s*\(\s*(true|false)\s*\)/g;
+          for (const match of sourceText.matchAll(mirrorMatch)) {
+            mirrorToSerial = match[1] === 'true';
+          }
+          return { usesDataLogger, mirrorToSerial };
+        }
+
         function toSourceFiles(value) {
           if (!isRecord(value)) {
             return {};
@@ -514,9 +554,13 @@
         }
 
         function emitRuntimeDataLogPayload(rawValue) {
-          const normalized = normalizeRuntimeDataLogPayload(rawValue, state.dataLogHeadings);
+          const normalized = normalizeRuntimeDataLogPayload(
+            rawValue,
+            state.dataLogHeadings,
+            state.programUsesDataLogger,
+          );
           if (!normalized) {
-            return false;
+            return null;
           }
           if (normalized.kind === 'delete') {
             state.dataLogHeadings = null;
@@ -525,7 +569,7 @@
               eventType: 'data-log-delete',
               payload: {},
             });
-            return true;
+            return 'delete';
           }
           if (Array.isArray(normalized.entry.headings)) {
             state.dataLogHeadings = [...normalized.entry.headings];
@@ -535,48 +579,72 @@
             eventType: 'data-log-output',
             payload: normalized.entry,
           });
-          return true;
+          return 'output';
         }
 
-        function normalizeRuntimeDataLogPayload(rawValue, activeHeadings) {
-          if (!isRecord(rawValue)) {
+        function normalizeRuntimeDataLogPayload(rawValue, activeHeadings, allowCsvFallback) {
+          if (isRecord(rawValue)) {
+            const explicitEntry = normalizeDataLogEntryRecord(rawValue);
+            if (explicitEntry) {
+              return { kind: 'output', entry: explicitEntry };
+            }
+            const csvType = typeof rawValue.csvType === 'string' ? rawValue.csvType : '';
+            if (csvType !== '') {
+              if (csvType === 'clear') {
+                return { kind: 'delete' };
+              }
+              const text = normalizeSerialData(rawValue.data ?? rawValue.text ?? rawValue.value);
+              const parsed = parseCsvRecord(text);
+              if (csvType === 'headers') {
+                if (parsed.length === 0) {
+                  return null;
+                }
+                return {
+                  kind: 'output',
+                  entry: { headings: parsed },
+                };
+              }
+              if (csvType === 'row') {
+                if (parsed.length === 0) {
+                  return null;
+                }
+                return {
+                  kind: 'output',
+                  entry: {
+                    ...(Array.isArray(activeHeadings) ? { headings: [...activeHeadings] } : {}),
+                    data: parsed,
+                  },
+                };
+              }
+            }
+          }
+
+          if (!allowCsvFallback) {
             return null;
           }
-          const explicitEntry = normalizeDataLogEntryRecord(rawValue);
-          if (explicitEntry) {
-            return { kind: 'output', entry: explicitEntry };
-          }
-          const csvType = typeof rawValue.csvType === 'string' ? rawValue.csvType : '';
-          if (csvType === '') {
-            return null;
-          }
-          if (csvType === 'clear') {
-            return { kind: 'delete' };
-          }
-          const text = normalizeSerialData(rawValue.data ?? rawValue.text ?? rawValue.value);
+          const text = normalizeSerialData(
+            isRecord(rawValue) ? rawValue.data ?? rawValue.text ?? rawValue.value ?? rawValue : rawValue,
+          );
           const parsed = parseCsvRecord(text);
-          if (csvType === 'headers') {
-            if (parsed.length === 0) {
-              return null;
-            }
-            return {
-              kind: 'output',
-              entry: { headings: parsed },
-            };
+          if (parsed.length === 0) {
+            return null;
           }
-          if (csvType === 'row') {
-            if (parsed.length === 0) {
-              return null;
-            }
+          if (Array.isArray(activeHeadings) && activeHeadings.length > 0) {
             return {
               kind: 'output',
               entry: {
-                ...(Array.isArray(activeHeadings) ? { headings: [...activeHeadings] } : {}),
+                headings: [...activeHeadings],
                 data: parsed,
               },
             };
           }
-          return null;
+          if (!looksLikeDataLogHeadings(parsed)) {
+            return null;
+          }
+          return {
+            kind: 'output',
+            entry: { headings: parsed },
+          };
         }
 
         function normalizeDataLogEntryRecord(value) {
@@ -637,6 +705,22 @@
           }
           cells.push(current);
           return cells;
+        }
+
+        function looksLikeDataLogHeadings(values) {
+          if (!Array.isArray(values) || values.length < 2 || values.length > 24) {
+            return false;
+          }
+          const headings = values.map((value) => String(value).trim());
+          if (headings.some((heading) => heading === '')) {
+            return false;
+          }
+          if (headings.some((heading) => /time/i.test(heading))) {
+            return true;
+          }
+          return headings.every(
+            (heading) => /[A-Za-z_]/.test(heading) && !/^[+-]?\d+(?:\.\d+)?$/.test(heading),
+          );
         }
 
         function emitRuntimeRadioPayload(payload) {

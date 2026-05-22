@@ -1727,8 +1727,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   ) : null}
                   <rect className="microbit-body" x="-42" y="-30" width="84" height="60" rx="14" />
                   <g className="button-combo-link" data-device-button-combo-link={device.deviceId}>
-                    <path d="M-29 -2 V8 H29 V18" />
-                    <path d="M29 -2 V18" />
+		    <path d="M-29 -2 V20 H29 V-3"/>
                   </g>
                   <circle
                     className="button-dot button-dot--interactive"
@@ -1759,7 +1758,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                     data-device-button={`${device.deviceId}:AB`}
                     data-testid={`device-button-${device.deviceId}-AB`}
                     cx="29"
-                    cy="18"
+                    cy="20"
                     r="5.8"
                     onPointerDown={(event) => {
                       event.stopPropagation();
@@ -1767,7 +1766,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                     }}
                   />
                   <text className="button-dot-label" x="29" y="18" textAnchor="middle">
-                    AB
+                    
                   </text>
                   {runtimeState ? (
                     <g
@@ -1788,7 +1787,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                         className={lit ? 'led-pixel led-pixel--lit' : 'led-pixel'}
                         style={lit ? { opacity: 0.35 + (brightness / 9) * 0.65 } : undefined}
                         x={-18 + column * 8}
-                        y={-18 + row * 8}
+                        y={-21 + row * 8}
                         width="4.8"
                         height="4.8"
                         rx="1.2"

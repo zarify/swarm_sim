@@ -2,6 +2,7 @@ import { decompress } from 'lzma';
 import { extractHexSource, type LzmaDecompressor } from './sourceExtraction';
 import makeCodeBeaconHex from '../../hex_files/mc_beacon.hex?raw';
 import microPythonBeaconHex from '../../hex_files/mp_beacon.hex?raw';
+import microPythonDataLogHex from '../../hex_files/mp_datalog.hex?raw';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -88,6 +89,23 @@ describe('HEX source extraction', () => {
     await expect(extractHexSource('malformed.hex', encoder.encode(malformedHex))).rejects.toThrow(
       'No embedded MicroPython or MakeCode source found',
     );
+  });
+
+  it('extracts MicroPython files when terminal chunk metadata uses full-chunk sentinel values', async () => {
+    const extracted = await extractHexSource('mp_datalog.hex', encoder.encode(microPythonDataLogHex));
+
+    expect(extracted.runtimeSource).toBe('micropython');
+    if (extracted.runtimeSource !== 'micropython') {
+      throw new Error('Expected MicroPython extraction');
+    }
+
+    const mainPy = extracted.program.filesystem['main.py'];
+    expect(mainPy).toBeDefined();
+    const source = decoder.decode(mainPy);
+
+    expect(source).toContain('import log');
+    expect(source).toContain('log.set_labels');
+    expect(source).toContain('log.add');
   });
 });
 
