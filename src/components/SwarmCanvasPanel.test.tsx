@@ -131,7 +131,7 @@ describe('SwarmCanvasPanel', () => {
   it('assigns uploaded code to the selected device without showing MicroPython host chrome', async () => {
     render(<SwarmCanvasPanel />);
 
-    const file = new File([makeHexWithAscii('MicroPython')], 'mp.hex', { type: 'text/plain' });
+    const file = new File([makeMicroPythonHex('radio.send("ping")')], 'mp.hex', { type: 'text/plain' });
     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [file] },
     });
@@ -159,7 +159,7 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.queryByText(/Unable to identify this HEX/)).not.toBeInTheDocument();
   }, 30000);
 
-  it('keeps valid HEX assignments even when runtime source cannot yet be identified', async () => {
+  it('keeps unextractable HEX assignments as non-executable artifacts', async () => {
     render(<SwarmCanvasPanel />);
 
     const file = makeUploadFile('unknown.hex', makeHexWithAscii('hello'));
@@ -170,7 +170,7 @@ describe('SwarmCanvasPanel', () => {
     await waitFor(() => expect(screen.getByText('Assigned: unknown.hex')).toBeInTheDocument());
     expect(screen.getByText('Runtime source: unknown')).toBeInTheDocument();
     expect(
-      screen.getByText(/Assigned, but runtime source could not be identified yet/),
+      screen.getByText(/Assigned as non-executable because runtime source extraction failed/),
     ).toBeInTheDocument();
   });
 
@@ -181,11 +181,11 @@ describe('SwarmCanvasPanel', () => {
 
     fireEvent.change(input, { target: { files: [slowUpload.file] } });
     fireEvent.change(input, {
-      target: { files: [makeUploadFile('fast.hex', makeHexWithAscii('MicroPython'))] },
+      target: { files: [makeUploadFile('fast.hex', makeMicroPythonHex('radio.send("fast")'))] },
     });
 
     await waitFor(() => expect(screen.getByText('Assigned: fast.hex')).toBeInTheDocument());
-    slowUpload.resolve(makeHexWithAscii('MicroPython'));
+    slowUpload.resolve(makeMicroPythonHex('radio.send("slow")'));
 
     await waitFor(() => expect(screen.getByText('Assigned: fast.hex')).toBeInTheDocument());
     expect(screen.queryByText('Assigned: slow.hex')).not.toBeInTheDocument();
@@ -196,7 +196,7 @@ describe('SwarmCanvasPanel', () => {
 
     fireEvent.drop(screen.getByLabelText('Canvas controls and selection details'), {
       dataTransfer: {
-        files: [makeUploadFile('dropped.hex', makeHexWithAscii('MicroPython'))],
+        files: [makeUploadFile('dropped.hex', makeMicroPythonHex('radio.send("drop")'))],
         types: ['Files'],
       },
     });
@@ -208,11 +208,11 @@ describe('SwarmCanvasPanel', () => {
   it('prompts before overwriting existing code on a device', async () => {
     render(<SwarmCanvasPanel />);
     const input = screen.getByLabelText(/Load code onto Node 1/);
-    fireEvent.change(input, { target: { files: [makeUploadFile('first.hex', makeHexWithAscii('MicroPython'))] } });
+    fireEvent.change(input, { target: { files: [makeUploadFile('first.hex', makeMicroPythonHex('radio.send("one")'))] } });
     await waitFor(() => expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument());
 
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
-    fireEvent.change(input, { target: { files: [makeUploadFile('second.hex', makeHexWithAscii('MicroPython'))] } });
+    fireEvent.change(input, { target: { files: [makeUploadFile('second.hex', makeMicroPythonHex('radio.send("two")'))] } });
     await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
     expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument();
     expect(screen.queryByText('Assigned: second.hex')).not.toBeInTheDocument();
@@ -239,7 +239,7 @@ describe('SwarmCanvasPanel', () => {
     render(<SwarmCanvasPanel />);
 
     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
-      target: { files: [makeUploadFile('mp.hex', makeHexWithAscii('MicroPython'))] },
+      target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
     });
     await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
 
@@ -454,7 +454,7 @@ describe('SwarmCanvasPanel', () => {
     );
 
     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
-      target: { files: [makeUploadFile('mp.hex', makeHexWithAscii('MicroPython'))] },
+      target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
     });
     await waitFor(() => expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument());
 
@@ -493,7 +493,7 @@ describe('SwarmCanvasPanel', () => {
     );
 
     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
-      target: { files: [makeUploadFile('mp.hex', makeHexWithAscii('MicroPython'))] },
+      target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
     });
     await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
 
@@ -905,6 +905,32 @@ function MicroPythonToMakeCodeDeliveryProbeHost({
 function makeHexWithAscii(value: string): string {
   const bytes = [...new TextEncoder().encode(value)];
   return `${makeHexRecord(0, 0, bytes)}\n${makeHexRecord(0, 1, [])}`;
+}
+
+function makeMicroPythonHex(mainPy: string): string {
+  const encoder = new TextEncoder();
+  const filename = encoder.encode('main.py');
+  const source = encoder.encode(mainPy);
+  const chunk = new Uint8Array(128).fill(0xff);
+  const dataStart = 3 + filename.length;
+  chunk[0] = 0xfe;
+  chunk[1] = dataStart + source.length - 1;
+  chunk[2] = filename.length;
+  chunk.set(filename, 3);
+  chunk.set(source, dataStart);
+
+  return [
+    ...chunkBytes(chunk, 16).map((record, index) => makeHexRecord(index * 16, 0x00, [...record])),
+    makeHexRecord(0, 0x01, []),
+  ].join('\n');
+}
+
+function chunkBytes(bytes: Uint8Array, size: number): Uint8Array[] {
+  const chunks: Uint8Array[] = [];
+  for (let offset = 0; offset < bytes.length; offset += size) {
+    chunks.push(bytes.subarray(offset, offset + size));
+  }
+  return chunks;
 }
 
 function makeUploadFile(name: string, contents: string): File {

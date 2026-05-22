@@ -2831,26 +2831,14 @@ async function resolveRuntimeSource(
     }
     return { runtimeSource: extracted.runtimeSource };
   } catch (error) {
-    if (heuristicRuntimeSource !== 'unknown') {
-      return {
-        runtimeSource: heuristicRuntimeSource,
-        issue: {
-          severity: 'warning',
-          message:
-            error instanceof Error
-              ? `Runtime source extraction failed; using heuristic ${heuristicRuntimeSource}: ${error.message}`
-              : `Runtime source extraction failed; using heuristic ${heuristicRuntimeSource}`,
-        },
-      };
-    }
     return {
       runtimeSource: 'unknown',
       issue: {
         severity: 'warning',
         message:
           error instanceof Error
-            ? `Assigned, but runtime source could not be identified yet: ${error.message}`
-            : 'Assigned, but runtime source could not be identified yet',
+            ? `Assigned as non-executable because runtime source extraction failed: ${error.message}`
+            : 'Assigned as non-executable because runtime source extraction failed',
       },
     };
   }

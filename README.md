@@ -15,9 +15,12 @@ npm run build
 ## Static hosting notes
 
 - The app is static-hostable (`npm run build` + serve `dist/` from any HTTP server).
+- GitHub Pages is the baseline hosting target. The repo does not require custom response headers because GitHub Pages does not support project-defined headers.
 - A versioned release zip can be created with `npm run release:zip` (output: `release/microbit-swarm-simulator-v<version>.zip`).
 - Runtime debug traces (`[swarm-radio-debug]`) are development-only and intentionally suppressed in production bundles.
 - Browser warnings about iframe sandbox flags (`allow-scripts` + `allow-same-origin`) are expected with the current simulator embedding strategy.
+- The MakeCode runner and simulator scripts use Subresource Integrity hashes. If MakeCode updates those upstream assets, refresh the URLs/hashes together and validate MakeCode runtime smoke tests.
+- Self-hosters on platforms such as Netlify, Cloudflare Pages, Vercel, or a school server can add optional security headers, but CSP is not a universal default for this project: a strict policy can break MakeCode assets, local WASM, or LMS/Moodle embedding. If you opt in, test runtime loading before sharing with students.
 - New devices now spawn within default radio range of the first node, so two-node MicroPython smoke tests produce received packets without manual repositioning.
 
 ## Current implementation
@@ -30,7 +33,7 @@ The spike records the current technical position:
 
 - MakeCode `.hex` support is likely best approached through the official PXT simulator, but it must be isolated behind an adapter before the main simulator depends on it.
 - MicroPython `.hex` execution is now wired through selected-device upload, source extraction, and per-device Foundation simulator iframes for flash/radio/serial/error hooks; display-state extraction and full live-browser validation remain open.
-- The app accepts `.hex` uploads from the selected device panel, keeps assignments even when runtime-source identification is inconclusive, prepares assigned MicroPython programs through iframe simulators, and prepares/runs MakeCode programs through a patched official `pxtsim` iframe runner that emits display/radio/serial events into the swarm engine.
+- The app accepts `.hex` uploads from the selected device panel, keeps unextractable assignments as non-executable `unknown` artifacts, prepares assigned MicroPython programs through iframe simulators, and prepares/runs MakeCode programs through a patched official `pxtsim` iframe runner that emits display/radio/serial events into the swarm engine.
 - The runtime contract includes an explicit `runtimeSource` field so a future byte-level adapter can report `makecode-pxt` or `micropython` without relying on filenames.
 - Package availability reinforces the split: `pxt-microbit` and `pxt-core` are published on npm, while `microbit-micropython-js` is not available as an npm package.
 - Fixture-backed detection now parses Intel HEX data records and classifies the provided `hex_files/mc_beacon.hex` as `makecode-pxt` and `hex_files/mp_beacon.hex` as `micropython`; both can be prepared through runtime adapters, with MakeCode routed through a patched official simulator runner path.
