@@ -99,7 +99,7 @@ describe('SwarmCanvasPanel', () => {
     expect(container.querySelectorAll('.source-node--magnet')).toHaveLength(1);
     expect(screen.getByText('Magnet source')).toBeInTheDocument();
     expect(screen.getByLabelText('Angle')).toBeInTheDocument();
-    expect(screen.getByLabelText('Strength (µT)')).toBeInTheDocument();
+    expect(screen.getByLabelText('Strength (µT, microtesla)')).toBeInTheDocument();
   });
 
   it('renames selected devices from the side panel and truncates long names for display', () => {

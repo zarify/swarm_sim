@@ -2214,7 +2214,7 @@ function SourceSelection({
             />
           </label>
           <label className="range-field">
-            Strength (µT)
+            Strength (µT, microtesla)
             <input
               type="range"
               min={MICROBIT_MAGNETIC_STRENGTH_MIN}

@@ -320,14 +320,18 @@ describe('MicroPythonRuntimeHost', () => {
     expect(disposed).toEqual([]);
   });
 
-  it('syncs engine-derived light and sound levels into prepared adapters', async () => {
+  it('syncs engine-derived light, sound, and magnetic levels into prepared adapters', async () => {
     const sensorValues: string[] = [];
     const project = makeProject();
     const { rerender } = render(
       <MicroPythonRuntimeHost
         project={project}
         selectedDeviceId="device-alpha"
-        deviceRuntimeStates={makeDeviceRuntimeStates(17, 23)}
+        deviceRuntimeStates={makeDeviceRuntimeStates(17, 23, {
+          x: 12,
+          y: -34,
+          z: 56,
+        })}
         onRadioPacket={() => []}
         onRuntimeLog={() => {}}
         loadPrograms={loadTargetProjectDevices}
@@ -341,9 +345,9 @@ describe('MicroPythonRuntimeHost', () => {
       expect(sensorValues).toEqual([
         'lightLevel:17',
         'soundLevel:23',
-        'magneticForceX:0',
-        'magneticForceY:45',
-        'magneticForceZ:0',
+        'magneticForceX:12',
+        'magneticForceY:-34',
+        'magneticForceZ:56',
       ]),
     );
 
@@ -351,7 +355,11 @@ describe('MicroPythonRuntimeHost', () => {
       <MicroPythonRuntimeHost
         project={project}
         selectedDeviceId="device-alpha"
-        deviceRuntimeStates={makeDeviceRuntimeStates(81, 5)}
+        deviceRuntimeStates={makeDeviceRuntimeStates(81, 5, {
+          x: -400,
+          y: 200,
+          z: 1,
+        })}
         onRadioPacket={() => []}
         onRuntimeLog={() => {}}
         loadPrograms={loadTargetProjectDevices}
@@ -363,14 +371,14 @@ describe('MicroPythonRuntimeHost', () => {
       expect(sensorValues).toEqual([
         'lightLevel:17',
         'soundLevel:23',
-        'magneticForceX:0',
-        'magneticForceY:45',
-        'magneticForceZ:0',
+        'magneticForceX:12',
+        'magneticForceY:-34',
+        'magneticForceZ:56',
         'lightLevel:81',
         'soundLevel:5',
-        'magneticForceX:0',
-        'magneticForceY:45',
-        'magneticForceZ:0',
+        'magneticForceX:-400',
+        'magneticForceY:200',
+        'magneticForceZ:1',
       ]),
     );
   });
@@ -1174,7 +1182,14 @@ function makeDisposableAdapter(disposed: string[], unsubscribed: string[], devic
   } as MicrobitRuntimeAdapter & { dispose(): void };
 }
 
-function makeDeviceRuntimeStates(lightLevel: number, soundLevel: number): Record<string, DeviceRuntimeState> {
+function makeDeviceRuntimeStates(
+  lightLevel: number,
+  soundLevel: number,
+  magnetic: { x: number; y: number; z: number } = { x: 0, y: 45, z: 0 },
+): Record<string, DeviceRuntimeState> {
+  const magneticFieldStrength = Math.round(
+    Math.hypot(magnetic.x, magnetic.y, magnetic.z),
+  );
   return {
     'device-alpha': {
       deviceId: 'device-alpha',
@@ -1185,10 +1200,10 @@ function makeDeviceRuntimeStates(lightLevel: number, soundLevel: number): Record
       sensors: {
         lightLevel,
         soundLevel,
-        magneticForceX: 0,
-        magneticForceY: 45,
-        magneticForceZ: 0,
-        magneticFieldStrength: 45,
+        magneticForceX: magnetic.x,
+        magneticForceY: magnetic.y,
+        magneticForceZ: magnetic.z,
+        magneticFieldStrength,
       },
     },
   };

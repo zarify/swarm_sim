@@ -75,6 +75,11 @@
           channel: undefined,
         };
         const AB_PULSE_DEDUP_WINDOW_MS = 50;
+        const MAGNETIC_DIMENSION_X = 0;
+        const MAGNETIC_DIMENSION_Y = 1;
+        const MAGNETIC_DIMENSION_Z = 2;
+        const MAGNETIC_DIMENSION_STRENGTH = 3;
+        const MAGNETIC_STRENGTH_MAX = 2000;
         let lastABPulseAtMs = -Infinity;
         let globalAudioStartHooksPatched = false;
         let lastGlobalAudioTraceAtMs = 0;
@@ -108,6 +113,7 @@
             simulatorReady = true;
             postToRunner({ type: 'swarm-simulator-ready' });
           }
+          patchMagneticForceApi();
           patchGlobalAudioStartHooks();
           patchRadioStateHooks(board);
           patchSoundStateHooks(board);
@@ -241,6 +247,64 @@
         function headingFromMagneticForce(x, y) {
           const heading = Math.round((Math.atan2(x, -y) * 180) / Math.PI);
           return ((heading % 360) + 360) % 360;
+        }
+
+        function patchMagneticForceApi() {
+          const input = window.pxsim?.input;
+          if (!input || typeof input.magneticForce !== 'function') {
+            return;
+          }
+          if (input.magneticForce.__swarmMagneticForcePatched) {
+            return;
+          }
+          const patchedMagneticForce = function swarmMagneticForce(dimension) {
+            return magneticForceForDimension(dimension);
+          };
+          patchedMagneticForce.__swarmMagneticForcePatched = true;
+          input.magneticForce = patchedMagneticForce;
+        }
+
+        function magneticForceForDimension(dimension) {
+          const normalizedDimension = normalizeMagneticDimension(dimension);
+          if (normalizedDimension === MAGNETIC_DIMENSION_X) {
+            return desiredSensors.magneticForceX;
+          }
+          if (normalizedDimension === MAGNETIC_DIMENSION_Y) {
+            return desiredSensors.magneticForceY;
+          }
+          if (normalizedDimension === MAGNETIC_DIMENSION_Z) {
+            return desiredSensors.magneticForceZ;
+          }
+          return clampMagneticStrength(
+            Math.hypot(
+              desiredSensors.magneticForceX,
+              desiredSensors.magneticForceY,
+              desiredSensors.magneticForceZ,
+            ),
+          );
+        }
+
+        function normalizeMagneticDimension(dimension) {
+          const numeric = Number(dimension);
+          if (Number.isFinite(numeric)) {
+            return Math.round(numeric);
+          }
+          if (typeof dimension === 'string') {
+            const normalized = dimension.trim().toLowerCase();
+            if (normalized === 'x') {
+              return MAGNETIC_DIMENSION_X;
+            }
+            if (normalized === 'y') {
+              return MAGNETIC_DIMENSION_Y;
+            }
+            if (normalized === 'z') {
+              return MAGNETIC_DIMENSION_Z;
+            }
+            if (normalized === 'strength') {
+              return MAGNETIC_DIMENSION_STRENGTH;
+            }
+          }
+          return MAGNETIC_DIMENSION_STRENGTH;
         }
 
         function applyButton(board, message) {
@@ -678,6 +742,13 @@
             return 0;
           }
           return Math.max(-2000, Math.min(2000, Math.round(value)));
+        }
+
+        function clampMagneticStrength(value) {
+          if (!Number.isFinite(value)) {
+            return 0;
+          }
+          return Math.max(0, Math.min(MAGNETIC_STRENGTH_MAX, Math.round(value)));
         }
 
         function clampDisplay(raw) {

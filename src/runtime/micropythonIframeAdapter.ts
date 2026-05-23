@@ -65,6 +65,7 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   private readonly readyPromise = new Promise<void>((resolve) => {
     this.resolveReady = resolve;
   });
+  private mainPyTracebackLineMap?: MainPyTracebackLineMap;
 
   constructor(options: MicroPythonIframeRuntimeAdapterOptions) {
     this.name = options.name ?? 'micro:bit Foundation MicroPython iframe';
@@ -109,13 +110,15 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
 
   async setSensor(sensor: RuntimeSensorId, value: number): Promise<void> {
     const domain = MICROBIT_BUILTIN_SENSOR_DOMAINS[sensor];
-    if (!Number.isFinite(value) || value < domain.min || value > domain.max) {
-      throw new Error(
-        `MicroPython simulator sensor value for ${sensor} must be ${domain.min}-${domain.max}: ${value}`,
-      );
+    if (!Number.isFinite(value)) {
+      throw new Error(`MicroPython simulator sensor value for ${sensor} must be finite: ${value}`);
     }
+    const clampedValue = Math.max(domain.min, Math.min(domain.max, value));
 
-    this.postSetValue(toMicroPythonSimulatorSensorId(sensor), toMicroPythonSimulatorSensorValue(sensor, value));
+    this.postSetValue(
+      toMicroPythonSimulatorSensorId(sensor),
+      toMicroPythonSimulatorSensorValue(sensor, clampedValue),
+    );
   }
 
   async sendRadio(packet: RuntimeRadioPacket): Promise<void> {
@@ -144,7 +147,9 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   }
 
   private postFlash(program: MicroPythonRuntimeProgram): void {
-    this.post({ kind: 'flash', filesystem: instrumentMicroPythonFilesystem(program.filesystem) });
+    const instrumented = instrumentMicroPythonFilesystem(program.filesystem);
+    this.mainPyTracebackLineMap = instrumented.mainPyLineMap;
+    this.post({ kind: 'flash', filesystem: instrumented.filesystem });
     this.post({ kind: 'mute' });
     debugMicroPythonRuntimeSound('post-mute-command', {});
   }
@@ -259,7 +264,7 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
       return;
     }
 
-    this.emit({ type: 'serial-output', data: normalizeSerialOutput(data) });
+    this.emit({ type: 'serial-output', data: this.normalizeSerialOutputForUser(data) });
   }
 
   private flushPendingSerialLines(): void {
@@ -272,7 +277,7 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
       this.pendingSerialFragments[marker] === '\r' && this.pendingSerialFragments[marker + 1] === '\n' ? 2 : 1;
     const completed = this.pendingSerialFragments.slice(0, marker);
     this.pendingSerialFragments = this.pendingSerialFragments.slice(marker + terminatorLength);
-    this.emit({ type: 'serial-output', data: normalizeSerialOutput(completed) });
+    this.emit({ type: 'serial-output', data: this.normalizeSerialOutputForUser(completed) });
     this.flushPendingSerialLines();
   }
 
@@ -302,8 +307,18 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     if (!force || this.pendingSerialFragments === '') {
       return;
     }
-    this.emit({ type: 'serial-output', data: normalizeSerialOutput(this.pendingSerialFragments) });
+    this.emit({
+      type: 'serial-output',
+      data: this.normalizeSerialOutputForUser(this.pendingSerialFragments),
+    });
     this.pendingSerialFragments = '';
+  }
+
+  private normalizeSerialOutputForUser(data: string): string {
+    return remapMainPyTracebackLineNumbers(
+      normalizeSerialOutput(data),
+      this.mainPyTracebackLineMap,
+    );
   }
 
   private handleStateChange(change: unknown): void {
@@ -416,17 +431,29 @@ const displayBridgeMarkerPattern =
 function instrumentMicroPythonFilesystem(filesystem: MicroPythonRuntimeProgram['filesystem']) {
   const main = filesystem[mainPythonFile];
   if (!main) {
-    return filesystem;
+    return { filesystem };
   }
 
   const source = utf8Decoder.decode(main);
+  const instrumented = instrumentMicroPythonSource(source);
   return {
-    ...filesystem,
-    [mainPythonFile]: utf8Encoder.encode(instrumentMicroPythonSource(source)),
+    filesystem: {
+      ...filesystem,
+      [mainPythonFile]: utf8Encoder.encode(instrumented.source),
+    },
+    mainPyLineMap: instrumented.lineMap,
   };
 }
 
-function instrumentMicroPythonSource(source: string): string {
+interface MainPyTracebackLineMap {
+  insertStartLine: number;
+  insertedLineCount: number;
+}
+
+function instrumentMicroPythonSource(source: string): {
+  source: string;
+  lineMap: MainPyTracebackLineMap;
+} {
   const lines = source.split(/\r?\n/);
   let insertIndex = 0;
 
@@ -449,11 +476,18 @@ function instrumentMicroPythonSource(source: string): string {
     insertIndex = findImportStatementEnd(lines, insertIndex);
   }
 
-  return [
+  const instrumentedSource = [
     ...lines.slice(0, insertIndex),
     microPythonDisplayBridgeSource,
     ...lines.slice(insertIndex),
   ].join('\n');
+  return {
+    source: instrumentedSource,
+    lineMap: {
+      insertStartLine: insertIndex + 1,
+      insertedLineCount: microPythonDisplayBridgeSourceLineCount,
+    },
+  };
 }
 
 function skipBlankAndCommentLines(lines: string[], startIndex: number): number {
@@ -672,6 +706,32 @@ function clampSoundLevel(value: number): number {
   return Math.max(0, Math.min(255, Math.round(value)));
 }
 
+const mainPyTracebackPattern = /(File "main\.py", line )(\d+)([^\r\n]*)/g;
+
+function remapMainPyTracebackLineNumbers(
+  output: string,
+  lineMap: MainPyTracebackLineMap | undefined,
+): string {
+  if (!lineMap) {
+    return output;
+  }
+
+  const insertStartLine = lineMap.insertStartLine;
+  const insertEndExclusive = insertStartLine + lineMap.insertedLineCount;
+  return output.replace(mainPyTracebackPattern, (_full, prefix: string, lineText: string, suffix: string) => {
+    const lineNumber = Number.parseInt(lineText, 10);
+    if (!Number.isFinite(lineNumber) || lineNumber < insertStartLine) {
+      return `${prefix}${lineText}${suffix}`;
+    }
+
+    if (lineNumber >= insertEndExclusive) {
+      return `${prefix}${lineNumber - lineMap.insertedLineCount}${suffix}`;
+    }
+
+    return `${prefix}${lineNumber}${suffix} [swarm runtime bridge]`;
+  });
+}
+
 function normalizeDisplayCoalesceWindowMs(value: number | undefined): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -837,6 +897,7 @@ try:
 except Exception as _swarm_error:
     _swarm_report_display_bridge_error(_swarm_error)
 `;
+const microPythonDisplayBridgeSourceLineCount = microPythonDisplayBridgeSource.split('\n').length;
 
 export function encodeMicroPythonRadioString(value: string): Uint8Array {
   const encoded = new TextEncoder().encode(value);
@@ -989,10 +1050,7 @@ function toMicroPythonSimulatorSensorId(sensor: RuntimeSensorId): SimulatorSenso
   }
 }
 
-function toMicroPythonSimulatorSensorValue(sensor: RuntimeSensorId, value: number): number {
-  if (sensor === 'magneticForceX' || sensor === 'magneticForceY' || sensor === 'magneticForceZ') {
-    return Math.round(value * 1000);
-  }
+function toMicroPythonSimulatorSensorValue(_sensor: RuntimeSensorId, value: number): number {
   return Math.round(value);
 }
 

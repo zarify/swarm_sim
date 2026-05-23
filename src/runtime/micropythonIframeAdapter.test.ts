@@ -147,8 +147,8 @@ display.show(Image.ARROW_N)`),
       { message: { kind: 'set_value', id: 'buttonB', value: 0 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'lightLevel', value: 200 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'soundLevel', value: 64 }, targetOrigin: 'https://python-simulator.usermbit.org' },
-      { message: { kind: 'set_value', id: 'compassX', value: -12000 }, targetOrigin: 'https://python-simulator.usermbit.org' },
-      { message: { kind: 'set_value', id: 'compassY', value: 45000 }, targetOrigin: 'https://python-simulator.usermbit.org' },
+      { message: { kind: 'set_value', id: 'compassX', value: -12 }, targetOrigin: 'https://python-simulator.usermbit.org' },
+      { message: { kind: 'set_value', id: 'compassY', value: 45 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'compassZ', value: 0 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       {
         message: { kind: 'radio_input', data: new TextEncoder().encode('ping'), rssi: 63 },
@@ -318,6 +318,54 @@ display.show(Image.ARROW_N)`),
     eventTarget.dispatchMessage({ kind: 'serial_output', data: '\n' });
 
     expect(events).toEqual([{ type: 'serial-output', data: 'light:101' }]);
+  });
+
+  it('remaps transformed MicroPython traceback line numbers back to user lines and tags bridge frames', async () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+    const program = makeMicroPythonProgram();
+    const flashPromise = adapter.flash(program);
+    eventTarget.dispatchMessage({ kind: 'ready' });
+    await flashPromise;
+    const flashMessage = getFlashMessage(targetWindow.messages[0]?.message);
+    const transformedSource = decoder.decode(flashMessage.filesystem['main.py']);
+    const transformedUserLine = lineNumberContaining(
+      transformedSource,
+      'display.show(Image.ARROW_N)',
+    );
+    const transformedBridgeLine = lineNumberContaining(
+      transformedSource,
+      'class _SwarmDisplayProxy',
+    );
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    eventTarget.dispatchMessage({
+      kind: 'serial_output',
+      data:
+        `Traceback (most recent call last):\n` +
+        `  File "main.py", line ${transformedUserLine}, in <module>\n` +
+        `  File "main.py", line ${transformedBridgeLine}, in set_pixel\n`,
+    });
+
+    const serialOutput = events
+      .filter((event): event is Extract<RuntimeAdapterEvent, { type: 'serial-output' }> =>
+        event.type === 'serial-output',
+      )
+      .map((event) => event.data)
+      .join('\n');
+
+    expect(serialOutput).toContain('Traceback (most recent call last):');
+    expect(serialOutput).toContain('  File "main.py", line 6, in <module>');
+    expect(serialOutput).toContain(
+      `  File "main.py", line ${transformedBridgeLine}, in set_pixel [swarm runtime bridge]`,
+    );
   });
 
   it('normalizes escaped MicroPython wire-prefix bytes literals in serial logs', () => {
@@ -496,7 +544,7 @@ display.show(Image.ARROW_N)`),
     expect(targetWindow.messages[1]?.message).toMatchObject({ kind: 'mute' });
   });
 
-  it('rejects non-MicroPython programs and invalid sensor values before posting messages', async () => {
+  it('rejects non-MicroPython programs, clamps sensor ranges, and rejects non-finite sensor values', async () => {
     const targetWindow = makeTargetWindow();
     const adapter = new MicroPythonIframeRuntimeAdapter({
       targetWindow,
@@ -507,10 +555,21 @@ display.show(Image.ARROW_N)`),
     await expect(adapter.flash(makeCodeProgram)).rejects.toThrow(
       'MicroPython iframe adapter cannot flash makecode-pxt programs',
     );
-    await expect(adapter.setSensor('lightLevel', 300)).rejects.toThrow(
-      'MicroPython simulator sensor value for lightLevel must be 0-255',
+    await adapter.setSensor('lightLevel', 300);
+    await adapter.setSensor('magneticForceX', -5000);
+    await expect(adapter.setSensor('soundLevel', Number.NaN)).rejects.toThrow(
+      'MicroPython simulator sensor value for soundLevel must be finite',
     );
-    expect(targetWindow.messages).toEqual([]);
+    expect(targetWindow.messages).toEqual([
+      {
+        message: { kind: 'set_value', id: 'lightLevel', value: 255 },
+        targetOrigin: 'https://python-simulator.usermbit.org',
+      },
+      {
+        message: { kind: 'set_value', id: 'compassX', value: -2000 },
+        targetOrigin: 'https://python-simulator.usermbit.org',
+      },
+    ]);
   });
 
   it('requires and enforces a trusted postMessage origin', () => {
@@ -591,6 +650,15 @@ display.show(Image.ARROW_N)`),
 
 function digits(value: string): number[] {
   return [...value].map((digit) => Number(digit));
+}
+
+function lineNumberContaining(source: string, token: string): number {
+  const lines = source.split('\n');
+  const index = lines.findIndex((line) => line.includes(token));
+  if (index < 0) {
+    throw new Error(`Could not find token in source: ${token}`);
+  }
+  return index + 1;
 }
 
 function makeTargetWindow() {
