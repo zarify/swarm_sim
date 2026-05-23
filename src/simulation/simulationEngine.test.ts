@@ -1,4 +1,5 @@
 import { createBlankProject, type SwarmProject } from '../domain/project';
+import { FEATURE_FLAGS } from '../runtime/featureFlags';
 import {
   appendDeviceRuntimeLog,
   advanceSimulation,
@@ -194,10 +195,50 @@ describe('simulation engine', () => {
   it('calculates light and sound levels from environmental source radius and intensity', () => {
     const state = createSimulationState(makeProject());
 
-    expect(state.devices['device-a']?.sensors).toEqual({ lightLevel: 255, soundLevel: 0 });
+    expect(state.devices['device-a']?.sensors).toMatchObject({ lightLevel: 255, soundLevel: 0 });
     expect(state.devices['device-b']?.sensors.lightLevel).toBe(128);
     expect(state.devices['device-c']?.sensors.soundLevel).toBe(128);
-    expect(state.devices['device-e']?.sensors).toEqual({ lightLevel: 0, soundLevel: 0 });
+    expect(state.devices['device-e']?.sensors).toMatchObject({ lightLevel: 0, soundLevel: 0 });
+  });
+
+  it('projects magnet sources into fixed canvas-aligned magnetic readings', () => {
+    const state = createSimulationState({
+      ...makeProject(),
+      devices: [
+        { id: 'device-a', name: 'A', position: { x: 80, y: 0 } },
+        { id: 'device-b', name: 'B', position: { x: 0, y: 80 } },
+      ],
+      environmentSources: [
+        {
+          id: 'magnet-1',
+          type: 'magnet',
+          name: 'Magnet 1',
+          position: { x: 0, y: 0 },
+          radius: 160,
+          angleDeg: 0,
+          strengthMicroTesla: 100,
+        },
+      ],
+    });
+
+    if (FEATURE_FLAGS.magnet) {
+      expect(state.devices['device-a']?.sensors).toMatchObject({
+        magneticForceX: 100,
+        magneticForceY: 45,
+        magneticForceZ: 0,
+        magneticFieldStrength: 110,
+      });
+      expect(state.devices['device-b']?.sensors.magneticForceX).toBe(-50);
+      return;
+    }
+
+    expect(state.devices['device-a']?.sensors).toMatchObject({
+      magneticForceX: 0,
+      magneticForceY: 45,
+      magneticForceZ: 0,
+      magneticFieldStrength: 45,
+    });
+    expect(state.devices['device-b']?.sensors.magneticForceX).toBe(0);
   });
 
   it('surfaces invalid lifecycle transitions and input values', () => {

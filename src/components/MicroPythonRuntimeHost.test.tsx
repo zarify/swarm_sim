@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import { createBlankProject, type SwarmProject } from '../domain/project';
+import { FEATURE_FLAGS } from '../runtime/featureFlags';
 import type { LoadProjectRuntimeProgramsOptions } from '../runtime/programLoader';
 import { registerRuntimeRadioSink } from '../runtime/radioDeliveryRegistry';
 import type { MicrobitRuntimeAdapter, RuntimeAdapterEvent, RuntimeProgram } from '../runtime/runtimeAdapter';
@@ -320,14 +321,18 @@ describe('MicroPythonRuntimeHost', () => {
     expect(disposed).toEqual([]);
   });
 
-  it('syncs engine-derived light and sound levels into prepared adapters', async () => {
+  it('syncs engine-derived light, sound, and magnetic levels into prepared adapters', async () => {
     const sensorValues: string[] = [];
     const project = makeProject();
     const { rerender } = render(
       <MicroPythonRuntimeHost
         project={project}
         selectedDeviceId="device-alpha"
-        deviceRuntimeStates={makeDeviceRuntimeStates(17, 23)}
+        deviceRuntimeStates={makeDeviceRuntimeStates(17, 23, {
+          x: 12,
+          y: -34,
+          z: 56,
+        })}
         onRadioPacket={() => []}
         onRuntimeLog={() => {}}
         loadPrograms={loadTargetProjectDevices}
@@ -337,13 +342,19 @@ describe('MicroPythonRuntimeHost', () => {
     dispatchReadyFor('MicroPython simulator for Alpha');
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
 
-    await waitFor(() => expect(sensorValues).toEqual(['lightLevel:17', 'soundLevel:23']));
+    await waitFor(() =>
+      expect(sensorValues).toEqual(expectedSyncedSensors(17, 23, { x: 12, y: -34, z: 56 })),
+    );
 
     rerender(
       <MicroPythonRuntimeHost
         project={project}
         selectedDeviceId="device-alpha"
-        deviceRuntimeStates={makeDeviceRuntimeStates(81, 5)}
+        deviceRuntimeStates={makeDeviceRuntimeStates(81, 5, {
+          x: -400,
+          y: 200,
+          z: 1,
+        })}
         onRadioPacket={() => []}
         onRuntimeLog={() => {}}
         loadPrograms={loadTargetProjectDevices}
@@ -352,7 +363,10 @@ describe('MicroPythonRuntimeHost', () => {
     );
 
     await waitFor(() =>
-      expect(sensorValues).toEqual(['lightLevel:17', 'soundLevel:23', 'lightLevel:81', 'soundLevel:5']),
+      expect(sensorValues).toEqual([
+        ...expectedSyncedSensors(17, 23, { x: 12, y: -34, z: 56 }),
+        ...expectedSyncedSensors(81, 5, { x: -400, y: 200, z: 1 }),
+      ]),
     );
   });
 
@@ -1155,7 +1169,14 @@ function makeDisposableAdapter(disposed: string[], unsubscribed: string[], devic
   } as MicrobitRuntimeAdapter & { dispose(): void };
 }
 
-function makeDeviceRuntimeStates(lightLevel: number, soundLevel: number): Record<string, DeviceRuntimeState> {
+function makeDeviceRuntimeStates(
+  lightLevel: number,
+  soundLevel: number,
+  magnetic: { x: number; y: number; z: number } = { x: 0, y: 45, z: 0 },
+): Record<string, DeviceRuntimeState> {
+  const magneticFieldStrength = Math.round(
+    Math.hypot(magnetic.x, magnetic.y, magnetic.z),
+  );
   return {
     'device-alpha': {
       deviceId: 'device-alpha',
@@ -1163,7 +1184,36 @@ function makeDeviceRuntimeStates(lightLevel: number, soundLevel: number): Record
       position: { x: 100, y: 100 },
       radio: { group: 0, channel: 7, rangeRadius: 160 },
       buttons: { A: false, B: false },
-      sensors: { lightLevel, soundLevel },
+      sensors: {
+        lightLevel,
+        soundLevel,
+        magneticForceX: magnetic.x,
+        magneticForceY: magnetic.y,
+        magneticForceZ: magnetic.z,
+        magneticFieldStrength,
+      },
     },
   };
+}
+
+function expectedSyncedSensors(
+  lightLevel: number,
+  soundLevel: number,
+  magnetic: { x: number; y: number; z: number },
+): string[] {
+  const values: string[] = [];
+  if (FEATURE_FLAGS.light) {
+    values.push(`lightLevel:${lightLevel}`);
+  }
+  if (FEATURE_FLAGS.sound) {
+    values.push(`soundLevel:${soundLevel}`);
+  }
+  if (FEATURE_FLAGS.magnet) {
+    values.push(
+      `magneticForceX:${magnetic.x}`,
+      `magneticForceY:${magnetic.y}`,
+      `magneticForceZ:${magnetic.z}`,
+    );
+  }
+  return values;
 }

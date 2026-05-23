@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { vi } from 'vitest';
 import type { MicroPythonRuntimeHostProps, RoutedRadioDelivery } from './MicroPythonRuntimeHost';
 import { SwarmCanvasPanel, translateRuntimeRadioPacketForRecipient } from './SwarmCanvasPanel';
+import { FEATURE_FLAGS } from '../runtime/featureFlags';
 import makeCodeBeaconHex from '../../hex_files/mc_beacon.hex?raw';
 
 describe('SwarmCanvasPanel', () => {
@@ -88,6 +89,24 @@ describe('SwarmCanvasPanel', () => {
 
     expect(screen.getAllByText('Node 3').length).toBeGreaterThan(0);
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(3);
+  });
+
+  it('handles magnet source controls according to feature flags', () => {
+    const { container } = render(<SwarmCanvasPanel />);
+
+    openSwarmTools();
+    if (FEATURE_FLAGS.magnet) {
+      fireEvent.click(screen.getByRole('button', { name: 'Add magnet' }));
+      expect(container.querySelectorAll('.source-node--magnet')).toHaveLength(1);
+      expect(screen.getByText('Magnet source')).toBeInTheDocument();
+      expect(screen.getByLabelText('Angle')).toBeInTheDocument();
+      expect(screen.getByLabelText('Strength (µT, microtesla)')).toBeInTheDocument();
+      return;
+    }
+
+    expect(screen.queryByRole('button', { name: 'Add magnet' })).not.toBeInTheDocument();
+    expect(container.querySelectorAll('.source-node--magnet')).toHaveLength(0);
+    expect(screen.queryByText('Mag strength')).not.toBeInTheDocument();
   });
 
   it('renames selected devices from the side panel and truncates long names for display', () => {

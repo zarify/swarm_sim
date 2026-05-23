@@ -14,16 +14,8 @@
         background: transparent;
       }
     </style>
-    <script
-      src="https://cdn.makecode.com/blob/5d475bb1e350ee095419e8757b8e3cd6a09b1291/pxtsim.js"
-      integrity="sha384-BuPNYaTeBCumzPgicNViEd8EYO/IScrK47bBYarG20ntZWBmC4JyjwmObbgs1B7H"
-      crossorigin="anonymous"
-    ></script>
-    <script
-      src="https://cdn.makecode.com/blob/9d07f74640d92282a192245b78ab9f27865735de/sim.js"
-      integrity="sha384-efc8oZRKc7hVXh33zMC/pGNWHR6tsG8tATGIB92rib3PSFlaTf4sfnqtiVFomm5K"
-      crossorigin="anonymous"
-    ></script>
+    <script src="./makecode-local/pxtsim.js"></script>
+    <script src="./makecode-local/sim.js"></script>
   </head>
   <body>
     <script>
@@ -59,11 +51,16 @@
           'setOutputLevel',
           'setLevel',
         ];
-        const TRACE_RADIO = window.location.hostname === 'localhost';
-        const TRACE_SOUND = window.location.hostname === 'localhost';
+        const TRACE_QUERY_PARAM = 'swarmTrace';
+        const TRACE_ENABLED = new URLSearchParams(window.location.search).get(TRACE_QUERY_PARAM) === '1';
+        const TRACE_RADIO = TRACE_ENABLED;
+        const TRACE_SOUND = TRACE_ENABLED;
         const desiredSensors = {
           lightLevel: 0,
           soundLevel: 0,
+          magneticForceX: 0,
+          magneticForceY: 45,
+          magneticForceZ: 0,
         };
         const patchedRadioStates = new WeakSet();
         const patchedSoundStates = new WeakSet();
@@ -72,6 +69,11 @@
           channel: undefined,
         };
         const AB_PULSE_DEDUP_WINDOW_MS = 50;
+        const MAGNETIC_DIMENSION_X = 0;
+        const MAGNETIC_DIMENSION_Y = 1;
+        const MAGNETIC_DIMENSION_Z = 2;
+        const MAGNETIC_DIMENSION_STRENGTH = 3;
+        const MAGNETIC_STRENGTH_MAX = 2000;
         let lastABPulseAtMs = -Infinity;
         let globalAudioStartHooksPatched = false;
         let lastGlobalAudioTraceAtMs = 0;
@@ -105,6 +107,7 @@
             simulatorReady = true;
             postToRunner({ type: 'swarm-simulator-ready' });
           }
+          patchMagneticForceApi();
           patchGlobalAudioStartHooks();
           patchRadioStateHooks(board);
           patchSoundStateHooks(board);
@@ -148,11 +151,16 @@
 
         function updateDesiredSensor(message) {
           const sensor = message.sensor;
-          const value = clampByte(Number(message.value));
           if (sensor === 'lightLevel') {
-            desiredSensors.lightLevel = value;
+            desiredSensors.lightLevel = clampByte(Number(message.value));
           } else if (sensor === 'soundLevel') {
-            desiredSensors.soundLevel = value;
+            desiredSensors.soundLevel = clampByte(Number(message.value));
+          } else if (sensor === 'magneticForceX') {
+            desiredSensors.magneticForceX = clampMagneticForce(Number(message.value));
+          } else if (sensor === 'magneticForceY') {
+            desiredSensors.magneticForceY = clampMagneticForce(Number(message.value));
+          } else if (sensor === 'magneticForceZ') {
+            desiredSensors.magneticForceZ = clampMagneticForce(Number(message.value));
           }
         }
 
@@ -177,9 +185,120 @@
               changed = true;
             }
           }
+          if (applyDesiredMagneticSensors(board)) {
+            changed = true;
+          }
           if (changed) {
             queueDisplayUpdate();
           }
+        }
+
+        function applyDesiredMagneticSensors(board) {
+          const compass = [
+            board.compassState,
+            board.compass,
+            board.magnetometerState,
+            board.magnetometer,
+          ].find(isRecord);
+          if (!compass) {
+            return false;
+          }
+          compass.usesMagneticForce = true;
+          compass.usesCompass = true;
+          compass.isCalibrated = true;
+          let changed = false;
+          changed = setCompassAxis(compass, 'x', desiredSensors.magneticForceX) || changed;
+          changed = setCompassAxis(compass, 'y', desiredSensors.magneticForceY) || changed;
+          changed = setCompassAxis(compass, 'z', desiredSensors.magneticForceZ) || changed;
+          const heading = headingFromMagneticForce(desiredSensors.magneticForceX, desiredSensors.magneticForceY);
+          for (const target of [compass, compass.sample, compass.lastSample].filter(isRecord)) {
+            if (target.heading !== heading) {
+              target.heading = heading;
+              changed = true;
+            }
+          }
+          return changed;
+        }
+
+        function setCompassAxis(compass, axis, value) {
+          let changed = false;
+          const names = axis === 'x'
+            ? ['x', 'X', 'compassX', 'magneticForceX']
+            : axis === 'y'
+              ? ['y', 'Y', 'compassY', 'magneticForceY']
+              : ['z', 'Z', 'compassZ', 'magneticForceZ'];
+          for (const target of [compass, compass.sample, compass.lastSample].filter(isRecord)) {
+            for (const name of names) {
+              if (target[name] !== value) {
+                target[name] = value;
+                changed = true;
+              }
+            }
+          }
+          return changed;
+        }
+
+        function headingFromMagneticForce(x, y) {
+          const heading = Math.round((Math.atan2(x, -y) * 180) / Math.PI);
+          return ((heading % 360) + 360) % 360;
+        }
+
+        function patchMagneticForceApi() {
+          const input = window.pxsim?.input;
+          if (!input || typeof input.magneticForce !== 'function') {
+            return;
+          }
+          if (input.magneticForce.__swarmMagneticForcePatched) {
+            return;
+          }
+          const patchedMagneticForce = function swarmMagneticForce(dimension) {
+            return magneticForceForDimension(dimension);
+          };
+          patchedMagneticForce.__swarmMagneticForcePatched = true;
+          input.magneticForce = patchedMagneticForce;
+        }
+
+        function magneticForceForDimension(dimension) {
+          const normalizedDimension = normalizeMagneticDimension(dimension);
+          if (normalizedDimension === MAGNETIC_DIMENSION_X) {
+            return desiredSensors.magneticForceX;
+          }
+          if (normalizedDimension === MAGNETIC_DIMENSION_Y) {
+            return desiredSensors.magneticForceY;
+          }
+          if (normalizedDimension === MAGNETIC_DIMENSION_Z) {
+            return desiredSensors.magneticForceZ;
+          }
+          return clampMagneticStrength(
+            Math.hypot(
+              desiredSensors.magneticForceX,
+              desiredSensors.magneticForceY,
+              desiredSensors.magneticForceZ,
+            ),
+          );
+        }
+
+        function normalizeMagneticDimension(dimension) {
+          const numeric = Number(dimension);
+          if (Number.isFinite(numeric)) {
+            return Math.round(numeric);
+          }
+          if (typeof dimension === 'string') {
+            const normalized = dimension.trim().toLowerCase();
+            if (normalized === 'x') {
+              return MAGNETIC_DIMENSION_X;
+            }
+            if (normalized === 'y') {
+              return MAGNETIC_DIMENSION_Y;
+            }
+            if (normalized === 'z') {
+              return MAGNETIC_DIMENSION_Z;
+            }
+            if (normalized === 'strength') {
+              return MAGNETIC_DIMENSION_STRENGTH;
+            }
+          }
+          return MAGNETIC_DIMENSION_STRENGTH;
         }
 
         function applyButton(board, message) {
@@ -610,6 +729,20 @@
             return 0;
           }
           return Math.max(0, Math.min(255, Math.round(value)));
+        }
+
+        function clampMagneticForce(value) {
+          if (!Number.isFinite(value)) {
+            return 0;
+          }
+          return Math.max(-2000, Math.min(2000, Math.round(value)));
+        }
+
+        function clampMagneticStrength(value) {
+          if (!Number.isFinite(value)) {
+            return 0;
+          }
+          return Math.max(0, Math.min(MAGNETIC_STRENGTH_MAX, Math.round(value)));
         }
 
         function clampDisplay(raw) {

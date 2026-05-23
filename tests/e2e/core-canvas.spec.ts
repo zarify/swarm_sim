@@ -1,10 +1,18 @@
 import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { resolveBuildFeatureFlags } from '../../featureFlags.config';
 
 const microPythonFixture = path.resolve(process.cwd(), 'hex_files/mp_beacon.hex');
 const microPythonDataLogFixture = path.resolve(process.cwd(), 'hex_files/mp_datalog.hex');
 const makeCodeBeaconFixture = path.resolve(process.cwd(), 'hex_files/mc_beacon.hex');
 const makeCodeDataLogFixture = path.resolve(process.cwd(), 'hex_files/mc_datalog.hex');
+const featureFlags = resolveBuildFeatureFlags(process.env);
+const makeCodeUpstreamHosts = new Set([
+  'makecode.microbit.org',
+  'cdn.makecode.com',
+  'trg-microbit.userpxt.io',
+  'gc.zgo.at',
+]);
 
 async function gotoCanvas(page: Page) {
   await page.goto('/');
@@ -25,6 +33,44 @@ async function addDeviceFromSwarmTools(page: Page) {
 async function addLightFromSwarmTools(page: Page) {
   await openSwarmTools(page);
   await page.getByRole('button', { name: 'Add light' }).click();
+}
+
+async function addMagnetFromSwarmTools(page: Page) {
+  await openSwarmTools(page);
+  await page.getByRole('button', { name: 'Add magnet' }).click();
+}
+
+async function readMakeCodeMagneticReadings(page: Page): Promise<{
+  x: number;
+  y: number;
+  z: number;
+  strength: number;
+}> {
+  return page.evaluate(() => {
+    const runnerFrame = Array.from(document.querySelectorAll('iframe')).find((element) =>
+      (element as HTMLIFrameElement).src.includes('/makecode-patched-runner.html'),
+    ) as HTMLIFrameElement | undefined;
+    const simulatorWindow = runnerFrame?.contentWindow?.document?.querySelector('#simulators iframe')
+      ?.contentWindow as
+      | (Window & {
+          pxsim?: {
+            input?: {
+              magneticForce?: (dimension: number) => number;
+            };
+          };
+        })
+      | undefined;
+    const magneticForce = simulatorWindow?.pxsim?.input?.magneticForce;
+    if (typeof magneticForce !== 'function') {
+      throw new Error('MakeCode magneticForce API is not ready');
+    }
+    return {
+      x: Number(magneticForce(0)),
+      y: Number(magneticForce(1)),
+      z: Number(magneticForce(2)),
+      strength: Number(magneticForce(3)),
+    };
+  });
 }
 
 async function dismissSplash(page: Page) {
@@ -52,6 +98,138 @@ test.describe('core canvas workflows', () => {
     await addDeviceFromSwarmTools(page);
 
     await expect(page.locator('.microbit-node')).toHaveCount(2);
+  });
+
+  test('adds a magnet source and shows magnetic readings on devices', async ({ page }) => {
+    await gotoCanvas(page);
+
+    if (!featureFlags.magnetEnabled) {
+      await openSwarmTools(page);
+      await expect(page.getByRole('button', { name: 'Add magnet' })).toHaveCount(0);
+      await page.locator('.microbit-node').first().click();
+      await expect(page.getByText('Mag strength')).toHaveCount(0);
+      return;
+    }
+
+    await addMagnetFromSwarmTools(page);
+
+    await expect(page.locator('.source-node--magnet')).toHaveCount(1);
+    await expect(page.getByText('Magnet source')).toBeVisible();
+    await expect(page.getByLabel('Angle')).toBeVisible();
+    await expect(page.getByLabel('Strength (µT, microtesla)')).toBeVisible();
+
+    await page.locator('.microbit-node').first().click();
+    await expect(page.getByText('Mag strength')).toBeVisible();
+    await expect(page.getByText(/µT/).first()).toBeVisible();
+  });
+
+  test('updates MakeCode magnetic dimensions when magnet settings change', async ({ page }) => {
+    await gotoCanvas(page);
+    if (!featureFlags.magnetEnabled) {
+      await openSwarmTools(page);
+      await expect(page.getByRole('button', { name: 'Add magnet' })).toHaveCount(0);
+      return;
+    }
+    await addMagnetFromSwarmTools(page);
+    await page.locator('.microbit-node').first().click();
+
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')))
+      .toBe(true);
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+
+    const setRangeValue = async (label: 'Angle' | 'Strength (µT, microtesla)', value: number) => {
+      const slider = page.getByLabel(label);
+      await slider.evaluate((element, nextValue) => {
+        const input = element as HTMLInputElement;
+        const valueSetter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          'value',
+        )?.set;
+        valueSetter?.call(input, String(nextValue));
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, composed: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }, value);
+      await expect(slider).toHaveValue(String(value));
+    };
+
+    await page.locator('.source-node--magnet').first().click();
+    await setRangeValue('Strength (µT, microtesla)', 2000);
+    await expect
+      .poll(async () => (await readMakeCodeMagneticReadings(page)).strength, { timeout: 5_000 })
+      .toBeGreaterThan(100);
+    const boostedReadings = await readMakeCodeMagneticReadings(page);
+    expect(boostedReadings).toMatchObject({
+      x: expect.any(Number),
+      y: expect.any(Number),
+      z: expect.any(Number),
+      strength: expect.any(Number),
+    });
+
+    await setRangeValue('Angle', 90);
+    await expect
+      .poll(async () => (await readMakeCodeMagneticReadings(page)).x, { timeout: 5_000 })
+      .not.toBe(boostedReadings.x);
+    const rotatedReadings = await readMakeCodeMagneticReadings(page);
+
+    await setRangeValue('Strength (µT, microtesla)', 0);
+    await expect
+      .poll(async () => (await readMakeCodeMagneticReadings(page)).strength, { timeout: 5_000 })
+      .toBeGreaterThan(0);
+    const ambientReadings = await readMakeCodeMagneticReadings(page);
+
+    expect(boostedReadings.strength).toBeGreaterThan(ambientReadings.strength);
+    expect(
+      boostedReadings.x !== rotatedReadings.x ||
+        boostedReadings.y !== rotatedReadings.y ||
+        boostedReadings.z !== rotatedReadings.z,
+    ).toBe(true);
+    expect(boostedReadings.strength).toBeGreaterThan(0);
+    expect(boostedReadings.strength).toBeGreaterThanOrEqual(Math.abs(boostedReadings.x));
+    expect(boostedReadings.strength).toBeGreaterThanOrEqual(Math.abs(boostedReadings.y));
+  });
+
+  test('loads MakeCode runtime without upstream network requests', async ({ page }) => {
+    const upstreamRequests = new Set<string>();
+    page.on('request', (request) => {
+      const requestUrl = request.url();
+      let hostname = '';
+      try {
+        hostname = new URL(requestUrl).hostname;
+      } catch {
+        return;
+      }
+      if (makeCodeUpstreamHosts.has(hostname)) {
+        upstreamRequests.add(requestUrl);
+      }
+    });
+
+    await gotoCanvas(page);
+    await page.locator('.microbit-node').first().click();
+
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')))
+      .toBe(true);
+
+    expect([...upstreamRequests]).toEqual([]);
   });
 
   test('keeps telemetry behind the debug modal until opened', async ({ page }) => {

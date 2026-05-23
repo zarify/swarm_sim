@@ -19,6 +19,11 @@ import { decompressLzmaSource } from '../runtime/lzmaDecompressor';
 import { normalizeRuntimeDisplayPixels } from '../runtime/displayPixels';
 import { MICROBIT_BUILTIN_SENSOR_DOMAINS } from '../runtime/microbitSensorDomains';
 import {
+  FEATURE_FLAGS,
+  filterEnabledEnvironmentSources,
+  isEnvironmentSourceTypeEnabled,
+} from '../runtime/featureFlags';
+import {
   appendDeviceRuntimeLog,
   moveDevice,
   reconcileSimulationProject,
@@ -106,6 +111,8 @@ const buttonPulseMs = 110;
 const AB_BUTTONS = ['A', 'B'] as const;
 const MICROBIT_SENSOR_LEVEL_MIN = MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel.min;
 const MICROBIT_SENSOR_LEVEL_MAX = MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel.max;
+const MICROBIT_MAGNETIC_STRENGTH_MIN = 0;
+const MICROBIT_MAGNETIC_STRENGTH_MAX = MICROBIT_BUILTIN_SENSOR_DOMAINS.magneticFieldStrength.max;
 const RADIO_GROUP_MIN = 0;
 const RADIO_GROUP_MAX = 255;
 const RADIO_CHANNEL_MIN = 0;
@@ -158,16 +165,18 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const pendingRadioConfigHints = useRef(new Map<DeviceId, RuntimeRadioConfigHint>());
   const runtimeResetNonce = useRef(0);
   const nextDeviceNumber = useRef(model.project.devices.length + 1);
+  const nextSourceNumber = useRef(nextEnvironmentSourceNumber(model.project.environmentSources));
   const capturedPointerId = useRef<number | null>(null);
   const browserProjectStore = useRef<BrowserProjectStore | undefined>(undefined);
   const { project, simulationState } = model;
+  const visibleEnvironmentSources = filterEnabledEnvironmentSources(project.environmentSources);
   const selectedDevice =
     selected.type === 'device'
       ? project.devices.find((device) => device.id === selected.id)
       : undefined;
   const selectedSource =
     selected.type === 'source'
-      ? project.environmentSources.find((source) => source.id === selected.id)
+      ? visibleEnvironmentSources.find((source) => source.id === selected.id)
       : undefined;
 
   useEffect(
@@ -413,31 +422,59 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   }
 
   function addSource(type: EnvironmentSource['type']) {
+    if (!isEnvironmentSourceTypeEnabled(type)) {
+      setCanvasStateMessage(`${type} sources are disabled in this build.`);
+      return;
+    }
+    const sourceNumber = Math.max(
+      nextSourceNumber.current,
+      nextEnvironmentSourceNumber(modelRef.current.project.environmentSources, type),
+    );
+    nextSourceNumber.current = sourceNumber + 1;
+    const id = `${type}-${sourceNumber}`;
     updateProject((current) => {
-      const sourceNumber = current.environmentSources.length + 1;
-      const id = `${type}-${sourceNumber}`;
+      nextSourceNumber.current = Math.max(
+        nextSourceNumber.current,
+        nextEnvironmentSourceNumber(current.environmentSources),
+      );
+      const position =
+        type === 'light'
+          ? { x: 220, y: 360 }
+          : type === 'sound'
+            ? { x: 650, y: 140 }
+            : { x: 640, y: 360 };
+      const source: EnvironmentSource =
+        type === 'magnet'
+          ? {
+              id,
+              type: 'magnet',
+              name: defaultEnvironmentSourceName({ id, type: 'magnet' }),
+              position,
+              radius: 240,
+              angleDeg: 0,
+              strengthMicroTesla: 160,
+            }
+          : {
+              id,
+              type,
+              name: defaultEnvironmentSourceName({ id, type }),
+              position,
+              radius: type === 'light' ? 180 : 150,
+              intensity: sensorLevelToIntensity(type === 'light' ? 200 : 168),
+            };
       return {
         ...current,
-        environmentSources: [
-          ...current.environmentSources,
-          {
-            id,
-            type,
-            name: defaultEnvironmentSourceName({ id, type }),
-            position: { x: type === 'light' ? 220 : 650, y: type === 'light' ? 360 : 140 },
-            radius: type === 'light' ? 180 : 150,
-            intensity: sensorLevelToIntensity(type === 'light' ? 200 : 168),
-          },
-        ],
+        environmentSources: [...current.environmentSources, source],
       };
     });
+    setSelected({ type: 'source', id });
   }
 
   function updateSource(sourceId: EnvironmentSourceId, patch: Partial<EnvironmentSource>) {
     updateProject((current) => ({
       ...current,
       environmentSources: current.environmentSources.map((source) =>
-        source.id === sourceId ? { ...source, ...patch } : source,
+        source.id === sourceId ? ({ ...source, ...patch } as EnvironmentSource) : source,
       ),
     }));
   }
@@ -1228,6 +1265,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     setModel(next);
     setSelected(pickFallbackSelection(nextProject));
     nextDeviceNumber.current = nextProject.devices.length + 1;
+    nextSourceNumber.current = nextEnvironmentSourceNumber(nextProject.environmentSources);
     setScenarioResetSignal((current) => current + 1);
   }
 
@@ -1476,12 +1514,21 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               <button type="button" onClick={addDevice}>
                 Add device
               </button>
-              <button type="button" onClick={() => addSource('light')}>
-                Add light
-              </button>
-              <button type="button" onClick={() => addSource('sound')}>
-                Add sound
-              </button>
+              {FEATURE_FLAGS.light ? (
+                <button type="button" onClick={() => addSource('light')}>
+                  Add light
+                </button>
+              ) : null}
+              {FEATURE_FLAGS.sound ? (
+                <button type="button" onClick={() => addSource('sound')}>
+                  Add sound
+                </button>
+              ) : null}
+              {FEATURE_FLAGS.magnet ? (
+                <button type="button" onClick={() => addSource('magnet')}>
+                  Add magnet
+                </button>
+              ) : null}
               <label className="toggle-field canvas-state-toggle">
                 <input
                   type="checkbox"
@@ -1632,7 +1679,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                 );
               })}
 
-            {project.environmentSources.map((source) => (
+            {visibleEnvironmentSources.map((source) => (
               <circle
                 key={`${source.id}-radius`}
                 className={`source-radius source-radius--${source.type}`}
@@ -1654,7 +1701,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                 ))
               : null}
 
-            {project.environmentSources.map((source) => (
+            {visibleEnvironmentSources.map((source) => (
               <g
                 key={source.id}
                 className={`source-node source-node--${source.type}`}
@@ -1665,10 +1712,21 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   setDragTarget({ type: 'source', id: source.id });
                 }}
               >
-                <circle className="source-core" r="16" />
-                <text y="5" textAnchor="middle">
-                  {source.type === 'light' ? 'L' : 'S'}
-                </text>
+                {source.type === 'magnet' ? (
+                  <g transform={`rotate(${source.angleDeg})`}>
+                    <rect className="source-magnet source-magnet--north" x="-26" y="-9" width="26" height="18" rx="4" />
+                    <rect className="source-magnet source-magnet--south" x="0" y="-9" width="26" height="18" rx="4" />
+                    <text x="-13" y="5" textAnchor="middle">N</text>
+                    <text x="13" y="5" textAnchor="middle">S</text>
+                  </g>
+                ) : (
+                  <>
+                    <circle className="source-core" r="16" />
+                    <text y="5" textAnchor="middle">
+                      {source.type === 'light' ? 'L' : 'S'}
+                    </text>
+                  </>
+                )}
               </g>
             ))}
 
@@ -1826,6 +1884,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                 <DeviceSelection
                   project={project}
                   runtime={simulationState.devices[selectedDevice.id]}
+                  showMagneticReadings={FEATURE_FLAGS.magnet}
                   runtimeLoadResult={selectedRuntimeLoadResult}
                   uploadState={artifactUploadState[selectedDevice.id]}
                   deviceId={selectedDevice.id}
@@ -1952,6 +2011,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
 function DeviceSelection({
   project,
   deviceId,
+  showMagneticReadings,
   runtime,
   runtimeLoadResult,
   uploadState,
@@ -1970,6 +2030,7 @@ function DeviceSelection({
 }: {
   project: SwarmProject;
   deviceId: DeviceId;
+  showMagneticReadings: boolean;
   runtime?: DeviceRuntimeState;
   runtimeLoadResult?: DeviceProgramLoadResult;
   uploadState?: ArtifactUploadState;
@@ -2025,6 +2086,22 @@ function DeviceSelection({
               <dt>Sound</dt>
               <dd>{runtime.sensors.soundLevel}</dd>
             </div>
+            {showMagneticReadings ? (
+              <>
+                <div>
+                  <dt>Mag X</dt>
+                  <dd>{runtime.sensors.magneticForceX} µT</dd>
+                </div>
+                <div>
+                  <dt>Mag Y</dt>
+                  <dd>{runtime.sensors.magneticForceY} µT</dd>
+                </div>
+                <div>
+                  <dt>Mag strength</dt>
+                  <dd>{runtime.sensors.magneticFieldStrength} µT</dd>
+                </div>
+              </>
+            ) : null}
           </dl>
         </>
       ) : null}
@@ -2116,7 +2193,7 @@ function SourceSelection({
   onCommitRename: () => void;
   onCancelRename: () => void;
 }) {
-  const peakLevel = intensityToSensorLevel(source.intensity);
+  const peakLevel = source.type === 'magnet' ? 0 : intensityToSensorLevel(source.intensity);
   return (
     <>
       <SelectionNameEditor
@@ -2128,7 +2205,9 @@ function SourceSelection({
         onCommitRename={onCommitRename}
         onCancelRename={onCancelRename}
       />
-      <p className="hint">{source.type === 'light' ? 'Light source' : 'Sound source'}</p>
+      <p className="hint">
+        {source.type === 'light' ? 'Light source' : source.type === 'sound' ? 'Sound source' : 'Magnet source'}
+      </p>
       <div className="selection-actions">
         <button type="button" onClick={onDeleteNode}>
           <span aria-hidden="true">🗑</span> Delete
@@ -2144,21 +2223,52 @@ function SourceSelection({
           onChange={(event) => updateSource(source.id, { radius: Number(event.target.value) })}
         />
       </label>
-      <label className="range-field">
-        Peak level (micro:bit scale)
-        <input
-          type="range"
-          min={MICROBIT_SENSOR_LEVEL_MIN}
-          max={MICROBIT_SENSOR_LEVEL_MAX}
-          step="1"
-          value={peakLevel}
-          onChange={(event) =>
-            updateSource(source.id, {
-              intensity: sensorLevelToIntensity(Number(event.target.value)),
-            })
-          }
-        />
-      </label>
+      {source.type === 'magnet' ? (
+        <>
+          <label className="range-field">
+            Angle
+            <input
+              type="range"
+              min="0"
+              max="359"
+              step="1"
+              value={source.angleDeg}
+              onChange={(event) => updateSource(source.id, { angleDeg: Number(event.target.value) })}
+            />
+          </label>
+          <label className="range-field">
+            Strength (µT, microtesla)
+            <input
+              type="range"
+              min={MICROBIT_MAGNETIC_STRENGTH_MIN}
+              max={MICROBIT_MAGNETIC_STRENGTH_MAX}
+              step="1"
+              value={source.strengthMicroTesla}
+              onChange={(event) =>
+                updateSource(source.id, {
+                  strengthMicroTesla: Number(event.target.value),
+                })
+              }
+            />
+          </label>
+        </>
+      ) : (
+        <label className="range-field">
+          Peak level (micro:bit scale)
+          <input
+            type="range"
+            min={MICROBIT_SENSOR_LEVEL_MIN}
+            max={MICROBIT_SENSOR_LEVEL_MAX}
+            step="1"
+            value={peakLevel}
+            onChange={(event) =>
+              updateSource(source.id, {
+                intensity: sensorLevelToIntensity(Number(event.target.value)),
+              })
+            }
+          />
+        </label>
+      )}
     </>
   );
 }
@@ -2246,7 +2356,9 @@ function pickFallbackSelection(project: SwarmProject): Selection {
   if (firstDevice) {
     return { type: 'device', id: firstDevice.id };
   }
-  const firstSource = project.environmentSources[0];
+  const firstSource = project.environmentSources.find((source) =>
+    isEnvironmentSourceTypeEnabled(source.type),
+  );
   if (firstSource) {
     return { type: 'source', id: firstSource.id };
   }
@@ -2906,6 +3018,21 @@ function defaultNewDevicePosition(existingDevices: SwarmProject['devices']): Poi
     x: anchor.x + Math.cos(angle) * radius,
     y: anchor.y + Math.sin(angle) * radius,
   });
+}
+
+function nextEnvironmentSourceNumber(
+  environmentSources: SwarmProject['environmentSources'],
+  type?: EnvironmentSource['type'],
+): number {
+  const maxSuffix = environmentSources.reduce((max, source) => {
+    if (type && source.type !== type) {
+      return max;
+    }
+    const suffix = source.id.slice(source.type.length + 1);
+    const numericSuffix = /^\d+$/.test(suffix) ? Number(suffix) : 0;
+    return Math.max(max, numericSuffix);
+  }, 0);
+  return maxSuffix + 1;
 }
 
 function clampPoint(point: Point): Point {

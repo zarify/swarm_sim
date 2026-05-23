@@ -548,6 +548,11 @@ button:disabled {
   stroke: rgba(105, 247, 255, 0.25);
 }
 
+.source-radius--magnet {
+  fill: rgba(255, 93, 77, 0.07);
+  stroke: rgba(255, 93, 77, 0.28);
+}
+
 .source-core {
   fill: rgba(255, 176, 46, 0.84);
   stroke: rgba(255, 255, 255, 0.72);
@@ -556,6 +561,19 @@ button:disabled {
 
 .source-node--sound .source-core {
   fill: rgba(105, 247, 255, 0.72);
+}
+
+.source-magnet {
+  stroke: rgba(255, 255, 255, 0.74);
+  stroke-width: 1.6;
+}
+
+.source-magnet--north {
+  fill: rgba(255, 93, 77, 0.9);
+}
+
+.source-magnet--south {
+  fill: rgba(105, 247, 255, 0.82);
 }
 
 .source-node text {

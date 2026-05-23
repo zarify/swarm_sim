@@ -1,17 +1,24 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createBlankProject, type DeviceId, type SwarmProject } from '../domain/project';
+import { FEATURE_FLAGS } from '../runtime/featureFlags';
 import type {
   DeviceProgramLoadResult,
   LoadProjectRuntimeProgramsOptions,
 } from '../runtime/programLoader';
 import { registerRuntimeRadioSink } from '../runtime/radioDeliveryRegistry';
-import type { RuntimeAdapterEvent, RuntimeProgram } from '../runtime/runtimeAdapter';
+import type { RuntimeAdapterEvent, RuntimeProgram, RuntimeSensorId } from '../runtime/runtimeAdapter';
 import type { DeviceRuntimeState } from '../simulation/simulationEngine';
-import { MakeCodeRuntimeHost } from './MakeCodeRuntimeHost';
+import { buildMakeCodeRunnerUrl, MakeCodeRuntimeHost } from './MakeCodeRuntimeHost';
 
 const now = '2026-05-16T05:52:00.000Z';
 
 describe('MakeCodeRuntimeHost', () => {
+  it('builds a dev trace query only for dev runner URLs', () => {
+    expect(buildMakeCodeRunnerUrl('./', true)).toBe('./makecode-patched-runner.html?swarmTrace=1');
+    expect(buildMakeCodeRunnerUrl('./', false)).toBe('./makecode-patched-runner.html');
+    expect(buildMakeCodeRunnerUrl('/swarm/', true)).toBe('/swarm/makecode-patched-runner.html?swarmTrace=1');
+  });
+
   it('renders one MakeCode runtime host card and prepares assigned runtimes', async () => {
     const flashed: RuntimeProgram[] = [];
     render(
@@ -448,14 +455,18 @@ describe('MakeCodeRuntimeHost', () => {
     expect(displayChanges).toEqual(['device-alpha:9000000000000000000000000']);
   });
 
-  it('syncs engine-derived light and sound levels into prepared adapters', async () => {
+  it('syncs engine-derived light, sound, and magnetic levels into prepared adapters', async () => {
     const sensorValues: string[] = [];
     const project = makeProject();
     const { rerender } = render(
       <MakeCodeRuntimeHost
         project={project}
         selectedDeviceId="device-alpha"
-        deviceRuntimeStates={makeDeviceRuntimeStates(17, 23)}
+        deviceRuntimeStates={makeDeviceRuntimeStates(17, 23, undefined, {
+          x: 12,
+          y: -34,
+          z: 56,
+        })}
         onRadioPacket={() => []}
         onRuntimeLog={() => {}}
         loadPrograms={loadTargetProjectDevices}
@@ -474,13 +485,19 @@ describe('MakeCodeRuntimeHost', () => {
     await markRunnerReady('Alpha');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare runtime' })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
-    await waitFor(() => expect(sensorValues).toEqual(['lightLevel:17', 'soundLevel:23']));
+    await waitFor(() =>
+      expect(sensorValues).toEqual(expectedSyncedSensors(17, 23, { x: 12, y: -34, z: 56 })),
+    );
 
     rerender(
       <MakeCodeRuntimeHost
         project={project}
         selectedDeviceId="device-alpha"
-        deviceRuntimeStates={makeDeviceRuntimeStates(81, 5)}
+        deviceRuntimeStates={makeDeviceRuntimeStates(81, 5, undefined, {
+          x: -400,
+          y: 200,
+          z: 1,
+        })}
         onRadioPacket={() => []}
         onRuntimeLog={() => {}}
         loadPrograms={loadTargetProjectDevices}
@@ -497,7 +514,10 @@ describe('MakeCodeRuntimeHost', () => {
     );
 
     await waitFor(() =>
-      expect(sensorValues).toEqual(['lightLevel:17', 'soundLevel:23', 'lightLevel:81', 'soundLevel:5']),
+      expect(sensorValues).toEqual([
+        ...expectedSyncedSensors(17, 23, { x: 12, y: -34, z: 56 }),
+        ...expectedSyncedSensors(81, 5, { x: -400, y: 200, z: 1 }),
+      ]),
     );
   });
 
@@ -619,7 +639,9 @@ describe('MakeCodeRuntimeHost', () => {
     await markRunnerReady('Alpha');
     await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare runtime' })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
-    await waitFor(() => expect(sensorValues).toEqual(['lightLevel:0', 'soundLevel:0']));
+    await waitFor(() =>
+      expect(sensorValues).toEqual(expectedSyncedSensors(0, 0, { x: 0, y: 45, z: 0 })),
+    );
 
     rerender(
       <MakeCodeRuntimeHost
@@ -646,7 +668,10 @@ describe('MakeCodeRuntimeHost', () => {
     );
 
     await waitFor(() =>
-      expect(sensorValues).toEqual(['lightLevel:0', 'soundLevel:0', 'lightLevel:0', 'soundLevel:0']),
+      expect(sensorValues).toEqual([
+        ...expectedSyncedSensors(0, 0, { x: 0, y: 45, z: 0 }),
+        ...expectedSyncedSensors(0, 0, { x: 0, y: 45, z: 0 }),
+      ]),
     );
     expect(resets).toEqual(['reset']);
   });
@@ -890,7 +915,7 @@ function makeProject(options: { assignGammaMakeCode?: boolean } = {}): SwarmProj
 function makeEventAdapter(
   subscribe: (listener: (event: RuntimeAdapterEvent) => void) => void,
   onSetButton?: (button: 'A' | 'B', pressed: boolean) => void,
-  onSetSensor?: (sensor: 'lightLevel' | 'soundLevel', value: number) => void,
+  onSetSensor?: (sensor: RuntimeSensorId, value: number) => void,
   onReset?: () => void,
   onPulseButtonAB?: () => void,
 ) {
@@ -916,7 +941,7 @@ function makeEventAdapter(
     pulseButtonAB: async () => {
       onPulseButtonAB?.();
     },
-    setSensor: async (sensor: 'lightLevel' | 'soundLevel', value: number) => {
+    setSensor: async (sensor: RuntimeSensorId, value: number) => {
       onSetSensor?.(sensor, value);
     },
     sendRadio: async () => {},
@@ -931,7 +956,11 @@ function makeDeviceRuntimeStates(
   lightLevel: number,
   soundLevel: number,
   buttons: DeviceRuntimeState['buttons'] = { A: false, B: false },
+  magnetic: { x: number; y: number; z: number } = { x: 0, y: 45, z: 0 },
 ): Record<string, DeviceRuntimeState> {
+  const magneticFieldStrength = Math.round(
+    Math.hypot(magnetic.x, magnetic.y, magnetic.z),
+  );
   return {
     'device-alpha': {
       deviceId: 'device-alpha',
@@ -939,9 +968,38 @@ function makeDeviceRuntimeStates(
       position: { x: 100, y: 100 },
       radio: { group: 0, channel: 7, rangeRadius: 160 },
       buttons,
-      sensors: { lightLevel, soundLevel },
+      sensors: {
+        lightLevel,
+        soundLevel,
+        magneticForceX: magnetic.x,
+        magneticForceY: magnetic.y,
+        magneticForceZ: magnetic.z,
+        magneticFieldStrength,
+      },
     },
   };
+}
+
+function expectedSyncedSensors(
+  lightLevel: number,
+  soundLevel: number,
+  magnetic: { x: number; y: number; z: number },
+): string[] {
+  const values: string[] = [];
+  if (FEATURE_FLAGS.light) {
+    values.push(`lightLevel:${lightLevel}`);
+  }
+  if (FEATURE_FLAGS.sound) {
+    values.push(`soundLevel:${soundLevel}`);
+  }
+  if (FEATURE_FLAGS.magnet) {
+    values.push(
+      `magneticForceX:${magnetic.x}`,
+      `magneticForceY:${magnetic.y}`,
+      `magneticForceZ:${magnetic.z}`,
+    );
+  }
+  return values;
 }
 
 async function loadTargetProjectDevices(

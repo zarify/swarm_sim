@@ -36,6 +36,13 @@ export interface RuntimeRadioConfig {
   signalStrength?: number;
 }
 
+export type RuntimeSensorId =
+  | 'lightLevel'
+  | 'soundLevel'
+  | 'magneticForceX'
+  | 'magneticForceY'
+  | 'magneticForceZ';
+
 export interface RuntimeDataLogEntry {
   headings?: string[];
   data?: string[];
@@ -65,7 +72,7 @@ export interface MicrobitRuntimeAdapter {
   stop(): Promise<void>;
   setButton(button: 'A' | 'B', pressed: boolean): Promise<void>;
   pulseButtonAB?(): Promise<void>;
-  setSensor(sensor: 'lightLevel' | 'soundLevel', value: number): Promise<void>;
+  setSensor(sensor: RuntimeSensorId, value: number): Promise<void>;
   sendRadio(packet: RuntimeRadioPacket): Promise<void>;
   onEvent(listener: (event: RuntimeAdapterEvent) => void): RuntimeAdapterUnsubscribe;
 }

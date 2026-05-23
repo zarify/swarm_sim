@@ -38,7 +38,7 @@ function parseSerializedProject(value: unknown): SwarmProject {
   const project = expectRecord(value, 'project');
   const schemaVersion = expectNumber(project.schemaVersion, 'schemaVersion');
 
-  if (schemaVersion !== PROJECT_SCHEMA_VERSION) {
+  if (schemaVersion !== 1 && schemaVersion !== PROJECT_SCHEMA_VERSION) {
     throw new Error(`Unsupported project schema version: ${schemaVersion}`);
   }
 
@@ -50,8 +50,8 @@ function parseSerializedProject(value: unknown): SwarmProject {
     updatedAt: expectString(project.updatedAt, 'updatedAt'),
     devices: expectArray(project.devices, 'devices').map(parseDevice),
     artifacts: expectArray(project.artifacts, 'artifacts').map(parseArtifact),
-    environmentSources: expectArray(project.environmentSources, 'environmentSources').map(
-      parseEnvironmentSource,
+    environmentSources: expectArray(project.environmentSources, 'environmentSources').map((source) =>
+      parseEnvironmentSource(source, schemaVersion),
     ),
   };
 }
@@ -83,24 +83,43 @@ function parseDevice(value: unknown): VirtualDevice {
   };
 }
 
-function parseEnvironmentSource(value: unknown): EnvironmentSource {
+function parseEnvironmentSource(value: unknown, schemaVersion: number): EnvironmentSource {
   const source = expectRecord(value, 'environmentSource');
   const id = expectString(source.id, 'environmentSource.id');
   const type = expectString(source.type, 'environmentSource.type');
 
-  if (type !== 'light' && type !== 'sound') {
+  if (type !== 'light' && type !== 'sound' && type !== 'magnet') {
     throw new Error(`Invalid environment source type: ${type}`);
   }
+  if (schemaVersion === 1 && type === 'magnet') {
+    throw new Error(`Invalid environment source type for schema v1: ${type}`);
+  }
 
-  return {
+  const base = {
     id,
-    type,
     name:
       typeof source.name === 'string' && source.name.trim() !== ''
         ? source.name
         : defaultEnvironmentSourceName({ id, type }),
     position: parsePoint(source.position, 'environmentSource.position'),
     radius: expectNumber(source.radius, 'environmentSource.radius'),
+  };
+
+  if (type === 'magnet') {
+    return {
+      ...base,
+      type,
+      angleDeg: expectNumber(source.angleDeg, 'environmentSource.angleDeg'),
+      strengthMicroTesla: expectNumber(
+        source.strengthMicroTesla,
+        'environmentSource.strengthMicroTesla',
+      ),
+    };
+  }
+
+  return {
+    ...base,
+    type,
     intensity: expectNumber(source.intensity, 'environmentSource.intensity'),
   };
 }
