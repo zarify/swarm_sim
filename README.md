@@ -5,7 +5,7 @@ and sensor behaviour using either of those simulators:
 - Sliders aren't that intuitive for things like light and sound
 - Makecode radio simulation requires that the same code exists on both sender and receiver. This confuses students **a lot**.
 
-So I decided I'd fire up the trusty agent to make something to fill the gaps.
+So I decided I'd fire up the trusty (YMMV) agent to make something to fill the gaps.
 
 ## What swarm is
 
