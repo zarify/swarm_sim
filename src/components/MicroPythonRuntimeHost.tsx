@@ -24,11 +24,11 @@ import type {
 import type { DeviceRuntimeState } from '../simulation/simulationEngine';
 import { isRuntimeSensorEnabled } from '../runtime/featureFlags';
 
-export const MICRO_PYTHON_SIMULATOR_URL =
-  new URL(
-    '/micropython-patched-simulator.html?color=%23b7ff4a',
-    globalThis.location?.origin ?? 'http://localhost',
-  ).toString();
+const MICRO_PYTHON_SIMULATOR_PATH = `${import.meta.env.BASE_URL}micropython-patched-simulator.html?color=%23b7ff4a`;
+export const MICRO_PYTHON_SIMULATOR_URL = new URL(
+  MICRO_PYTHON_SIMULATOR_PATH,
+  globalThis.location?.href ?? 'http://localhost/',
+).toString();
 const MICRO_PYTHON_SIMULATOR_ORIGIN = new URL(MICRO_PYTHON_SIMULATOR_URL).origin;
 const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
 const MICRO_PYTHON_DISPLAY_COALESCE_WINDOW_MS = 24;

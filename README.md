@@ -40,11 +40,15 @@ When magnet is disabled, magnet sources are preserved in project data but hidden
 ## Static hosting notes
 
 - The app is static-hostable (`npm run build` + serve `dist/` from any HTTP server).
+- Production builds emit relative `./assets/...` URLs so `dist/` can be hosted from a subpath (for example inside a larger website) without root `/assets` collisions.
+- Runtime iframes resolve patched simulator pages from the active base path (`makecode-patched-runner.html`, `makecode-patched-simulator.html`, `micropython-patched-simulator.html`), so `/swarm/` deployments can still prepare/run device runtimes.
+- The MakeCode patched runner rewrites root-relative `/api/...` config requests to the runner's own base path (for example `/swarm/api/...`) so subpath deployments do not escape their mount point.
+- The build now includes a local MakeCode runtime snapshot (`dist/makecode-local`, `dist/cdn.makecode.com`) and a local target-config endpoint (`dist/api/config/microbit/targetconfig/v8.0.22`) for offline/self-hosted execution.
 - GitHub Pages is the baseline hosting target. The repo does not require custom response headers because GitHub Pages does not support project-defined headers.
 - A versioned release zip can be created with `npm run release:zip` (output: `release/microbit-swarm-simulator-v<version>.zip`).
 - Runtime debug traces (`[swarm-radio-debug]`) are development-only and intentionally suppressed in production bundles.
 - Browser warnings about iframe sandbox flags (`allow-scripts` + `allow-same-origin`) are expected with the current simulator embedding strategy.
-- The MakeCode runner and simulator scripts use Subresource Integrity hashes. If MakeCode updates those upstream assets, refresh the URLs/hashes together and validate MakeCode runtime smoke tests.
+- MakeCode runtime compatibility now depends on the vendored snapshot in `public/makecode-local` and `public/cdn.makecode.com`; when upgrading MakeCode, refresh the mirrored files together and rerun runtime smoke tests.
 - Self-hosters on platforms such as Netlify, Cloudflare Pages, Vercel, or a school server can add optional security headers, but CSP is not a universal default for this project: a strict policy can break MakeCode assets, local WASM, or LMS/Moodle embedding. If you opt in, test runtime loading before sharing with students.
 - New devices now spawn within default radio range of the first node, so two-node MicroPython smoke tests produce received packets without manual repositioning.
 

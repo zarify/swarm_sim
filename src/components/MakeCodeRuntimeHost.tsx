@@ -44,7 +44,18 @@ function sensorSyncValues(runtime: DeviceRuntimeState): Array<[RuntimeSensorId, 
   });
 }
 
-const MAKECODE_SIMULATOR_RUNNER_URL = '/makecode-patched-runner.html';
+const MAKECODE_SIMULATOR_RUNNER_PATH = 'makecode-patched-runner.html';
+const MAKECODE_TRACE_QUERY_PARAM = 'swarmTrace';
+
+export function buildMakeCodeRunnerUrl(baseUrl: string, enableTrace: boolean): string {
+  const runnerUrl = `${baseUrl}${MAKECODE_SIMULATOR_RUNNER_PATH}`;
+  if (!enableTrace) {
+    return runnerUrl;
+  }
+  return `${runnerUrl}?${MAKECODE_TRACE_QUERY_PARAM}=1`;
+}
+
+const MAKECODE_SIMULATOR_RUNNER_URL = buildMakeCodeRunnerUrl(import.meta.env.BASE_URL, import.meta.env.DEV);
 const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
 const RUNTIME_SENSOR_ORDER: RuntimeSensorId[] = [
   'lightLevel',

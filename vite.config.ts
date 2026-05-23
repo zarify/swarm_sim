@@ -6,6 +6,8 @@ import { resolveBuildFeatureFlags } from './featureFlags.config';
 const featureFlags = resolveBuildFeatureFlags();
 
 export default defineConfig({
+  // Emit relative asset URLs so dist/ can be mounted under any site path.
+  base: './',
   plugins: [react()],
   define: {
     __APP_VERSION__: JSON.stringify(packageJson.version),

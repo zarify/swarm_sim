@@ -20,11 +20,7 @@
         height: 100%;
       }
     </style>
-    <script
-      src="https://makecode.microbit.org/---embed"
-      integrity="sha384-7fiMitW4hGxoiCw9oFIYXp/QFqjs1gCxtLnEjueizZhBkCEBjn+eDUtAix2n8wsy"
-      crossorigin="anonymous"
-    ></script>
+    <script src="./makecode-local/embed.js"></script>
   </head>
   <body>
     <div id="simulators"></div>
@@ -37,11 +33,20 @@
         window[RUNNER_INIT_FLAG] = true;
 
         const HOST_ORIGIN = window.location.origin;
-        const PATCHED_SIMULATOR_URL = `${HOST_ORIGIN}/makecode-patched-simulator.html`;
+        const TRACE_QUERY_PARAM = 'swarmTrace';
+        const TRACE_ENABLED = new URLSearchParams(window.location.search).get(TRACE_QUERY_PARAM) === '1';
+        const PATCHED_SIMULATOR_URL = (() => {
+          const simulatorUrl = new URL('makecode-patched-simulator.html', window.location.href);
+          if (TRACE_ENABLED) {
+            simulatorUrl.searchParams.set(TRACE_QUERY_PARAM, '1');
+          }
+          return simulatorUrl.toString();
+        })();
+        const RUNNER_BASE_PATH = resolveRunnerBasePath();
         const simulators = document.getElementById('simulators');
         const encoder = new TextEncoder();
-        const TRACE_RADIO = window.location.hostname === 'localhost';
-        const TRACE_SOUND = window.location.hostname === 'localhost';
+        const TRACE_RADIO = TRACE_ENABLED;
+        const TRACE_SOUND = TRACE_ENABLED;
         const state = {
           runnerReady: false,
           activeSimulatorWindow: null,
@@ -60,6 +65,8 @@
           rejectSimulatorReady: null,
         };
 
+        installMakeCodeApiRewrites();
+
         window.addEventListener('message', (event) => {
           if (event.source === window.parent) {
             handleHostMessage(event);
@@ -76,6 +83,7 @@
             try {
               if (window.pxt?.webConfig) {
                 window.pxt.webConfig.simUrl = PATCHED_SIMULATOR_URL;
+                rewriteRelativeWebConfigUrls(window.pxt.webConfig);
               }
               if (window.pxt?.appTarget?.simulator) {
                 window.pxt.appTarget.simulator.simUrl = PATCHED_SIMULATOR_URL;
@@ -237,6 +245,70 @@
               }
             }, 5000);
           });
+        }
+
+        function installMakeCodeApiRewrites() {
+          const originalFetch = typeof window.fetch === 'function' ? window.fetch.bind(window) : null;
+          if (originalFetch) {
+            window.fetch = (input, init) => {
+              if (typeof input === 'string') {
+                return originalFetch(rewriteMakeCodeApiUrl(input), init);
+              }
+              if (input instanceof Request) {
+                const rewrittenUrl = rewriteMakeCodeApiUrl(input.url);
+                if (rewrittenUrl !== input.url) {
+                  return originalFetch(new Request(rewrittenUrl, input), init);
+                }
+              }
+              return originalFetch(input, init);
+            };
+          }
+
+          const originalXhrOpen = XMLHttpRequest.prototype.open;
+          XMLHttpRequest.prototype.open = function open(method, url, ...rest) {
+            const rewrittenUrl =
+              typeof url === 'string' ? rewriteMakeCodeApiUrl(url) : url;
+            return originalXhrOpen.call(this, method, rewrittenUrl, ...rest);
+          };
+        }
+
+        function rewriteRelativeWebConfigUrls(webConfig) {
+          for (const [key, value] of Object.entries(webConfig)) {
+            if (typeof value !== 'string') {
+              continue;
+            }
+            webConfig[key] = rewriteMakeCodeApiUrl(value);
+          }
+        }
+
+        function rewriteMakeCodeApiUrl(rawUrl) {
+          if (typeof rawUrl !== 'string') {
+            return rawUrl;
+          }
+          if (rawUrl.startsWith('/api/')) {
+            return `${RUNNER_BASE_PATH}${rawUrl.slice(1)}`;
+          }
+          if (!rawUrl.includes('/api/')) {
+            return rawUrl;
+          }
+          try {
+            const parsed = new URL(rawUrl, window.location.href);
+            if (parsed.origin === HOST_ORIGIN && parsed.pathname.startsWith('/api/')) {
+              return `${RUNNER_BASE_PATH}${parsed.pathname.slice(1)}${parsed.search}${parsed.hash}`;
+            }
+          } catch (error) {
+            return rawUrl;
+          }
+          return rawUrl;
+        }
+
+        function resolveRunnerBasePath() {
+          const pathname = window.location.pathname || '/';
+          const slashIndex = pathname.lastIndexOf('/');
+          if (slashIndex < 0) {
+            return '/';
+          }
+          return pathname.slice(0, slashIndex + 1);
         }
 
         function handleSimulatorMessage(data) {

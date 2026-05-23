@@ -2809,7 +2809,7 @@
     return Object.entries(fileSystem).every(([k, v]) => typeof k === "string" && v instanceof Uint8Array);
   }
   var fetchWasm = async () => {
-    const response = await fetch("/micropython-patched/build/firmware.wasm");
+    const response = await fetch("./micropython-patched/build/firmware.wasm");
     if (!response.ok) {
       throw new Error(response.statusText);
     }

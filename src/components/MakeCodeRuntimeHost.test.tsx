@@ -8,11 +8,17 @@ import type {
 import { registerRuntimeRadioSink } from '../runtime/radioDeliveryRegistry';
 import type { RuntimeAdapterEvent, RuntimeProgram, RuntimeSensorId } from '../runtime/runtimeAdapter';
 import type { DeviceRuntimeState } from '../simulation/simulationEngine';
-import { MakeCodeRuntimeHost } from './MakeCodeRuntimeHost';
+import { buildMakeCodeRunnerUrl, MakeCodeRuntimeHost } from './MakeCodeRuntimeHost';
 
 const now = '2026-05-16T05:52:00.000Z';
 
 describe('MakeCodeRuntimeHost', () => {
+  it('builds a dev trace query only for dev runner URLs', () => {
+    expect(buildMakeCodeRunnerUrl('./', true)).toBe('./makecode-patched-runner.html?swarmTrace=1');
+    expect(buildMakeCodeRunnerUrl('./', false)).toBe('./makecode-patched-runner.html');
+    expect(buildMakeCodeRunnerUrl('/swarm/', true)).toBe('/swarm/makecode-patched-runner.html?swarmTrace=1');
+  });
+
   it('renders one MakeCode runtime host card and prepares assigned runtimes', async () => {
     const flashed: RuntimeProgram[] = [];
     render(

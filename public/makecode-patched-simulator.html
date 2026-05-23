@@ -14,16 +14,8 @@
         background: transparent;
       }
     </style>
-    <script
-      src="https://cdn.makecode.com/blob/5d475bb1e350ee095419e8757b8e3cd6a09b1291/pxtsim.js"
-      integrity="sha384-BuPNYaTeBCumzPgicNViEd8EYO/IScrK47bBYarG20ntZWBmC4JyjwmObbgs1B7H"
-      crossorigin="anonymous"
-    ></script>
-    <script
-      src="https://cdn.makecode.com/blob/9d07f74640d92282a192245b78ab9f27865735de/sim.js"
-      integrity="sha384-efc8oZRKc7hVXh33zMC/pGNWHR6tsG8tATGIB92rib3PSFlaTf4sfnqtiVFomm5K"
-      crossorigin="anonymous"
-    ></script>
+    <script src="./makecode-local/pxtsim.js"></script>
+    <script src="./makecode-local/sim.js"></script>
   </head>
   <body>
     <script>
@@ -59,8 +51,10 @@
           'setOutputLevel',
           'setLevel',
         ];
-        const TRACE_RADIO = window.location.hostname === 'localhost';
-        const TRACE_SOUND = window.location.hostname === 'localhost';
+        const TRACE_QUERY_PARAM = 'swarmTrace';
+        const TRACE_ENABLED = new URLSearchParams(window.location.search).get(TRACE_QUERY_PARAM) === '1';
+        const TRACE_RADIO = TRACE_ENABLED;
+        const TRACE_SOUND = TRACE_ENABLED;
         const desiredSensors = {
           lightLevel: 0,
           soundLevel: 0,

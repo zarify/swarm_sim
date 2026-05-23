@@ -7,6 +7,12 @@ const microPythonDataLogFixture = path.resolve(process.cwd(), 'hex_files/mp_data
 const makeCodeBeaconFixture = path.resolve(process.cwd(), 'hex_files/mc_beacon.hex');
 const makeCodeDataLogFixture = path.resolve(process.cwd(), 'hex_files/mc_datalog.hex');
 const featureFlags = resolveBuildFeatureFlags(process.env);
+const makeCodeUpstreamHosts = new Set([
+  'makecode.microbit.org',
+  'cdn.makecode.com',
+  'trg-microbit.userpxt.io',
+  'gc.zgo.at',
+]);
 
 async function gotoCanvas(page: Page) {
   await page.goto('/');
@@ -190,6 +196,40 @@ test.describe('core canvas workflows', () => {
     expect(boostedReadings.strength).toBeGreaterThan(0);
     expect(boostedReadings.strength).toBeGreaterThanOrEqual(Math.abs(boostedReadings.x));
     expect(boostedReadings.strength).toBeGreaterThanOrEqual(Math.abs(boostedReadings.y));
+  });
+
+  test('loads MakeCode runtime without upstream network requests', async ({ page }) => {
+    const upstreamRequests = new Set<string>();
+    page.on('request', (request) => {
+      const requestUrl = request.url();
+      let hostname = '';
+      try {
+        hostname = new URL(requestUrl).hostname;
+      } catch {
+        return;
+      }
+      if (makeCodeUpstreamHosts.has(hostname)) {
+        upstreamRequests.add(requestUrl);
+      }
+    });
+
+    await gotoCanvas(page);
+    await page.locator('.microbit-node').first().click();
+
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')))
+      .toBe(true);
+
+    expect([...upstreamRequests]).toEqual([]);
   });
 
   test('keeps telemetry behind the debug modal until opened', async ({ page }) => {
