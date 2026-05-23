@@ -337,7 +337,15 @@ describe('MicroPythonRuntimeHost', () => {
     dispatchReadyFor('MicroPython simulator for Alpha');
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
 
-    await waitFor(() => expect(sensorValues).toEqual(['lightLevel:17', 'soundLevel:23']));
+    await waitFor(() =>
+      expect(sensorValues).toEqual([
+        'lightLevel:17',
+        'soundLevel:23',
+        'magneticForceX:0',
+        'magneticForceY:45',
+        'magneticForceZ:0',
+      ]),
+    );
 
     rerender(
       <MicroPythonRuntimeHost
@@ -352,7 +360,18 @@ describe('MicroPythonRuntimeHost', () => {
     );
 
     await waitFor(() =>
-      expect(sensorValues).toEqual(['lightLevel:17', 'soundLevel:23', 'lightLevel:81', 'soundLevel:5']),
+      expect(sensorValues).toEqual([
+        'lightLevel:17',
+        'soundLevel:23',
+        'magneticForceX:0',
+        'magneticForceY:45',
+        'magneticForceZ:0',
+        'lightLevel:81',
+        'soundLevel:5',
+        'magneticForceX:0',
+        'magneticForceY:45',
+        'magneticForceZ:0',
+      ]),
     );
   });
 
@@ -1163,7 +1182,14 @@ function makeDeviceRuntimeStates(lightLevel: number, soundLevel: number): Record
       position: { x: 100, y: 100 },
       radio: { group: 0, channel: 7, rangeRadius: 160 },
       buttons: { A: false, B: false },
-      sensors: { lightLevel, soundLevel },
+      sensors: {
+        lightLevel,
+        soundLevel,
+        magneticForceX: 0,
+        magneticForceY: 45,
+        magneticForceZ: 0,
+        magneticFieldStrength: 45,
+      },
     },
   };
 }

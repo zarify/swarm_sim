@@ -90,6 +90,18 @@ describe('SwarmCanvasPanel', () => {
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(3);
   });
 
+  it('adds magnet sources with field controls on the canvas', () => {
+    const { container } = render(<SwarmCanvasPanel />);
+
+    openSwarmTools();
+    fireEvent.click(screen.getByRole('button', { name: 'Add magnet' }));
+
+    expect(container.querySelectorAll('.source-node--magnet')).toHaveLength(1);
+    expect(screen.getByText('Magnet source')).toBeInTheDocument();
+    expect(screen.getByLabelText('Angle')).toBeInTheDocument();
+    expect(screen.getByLabelText('Strength (µT)')).toBeInTheDocument();
+  });
+
   it('renames selected devices from the side panel and truncates long names for display', () => {
     const { container } = render(<SwarmCanvasPanel />);
     const longName = 'Extremely descriptive node name that exceeds display limits';

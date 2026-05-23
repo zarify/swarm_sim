@@ -26,6 +26,10 @@ export interface DeviceRadioState {
 export interface EnvironmentSensorState {
   lightLevel: number;
   soundLevel: number;
+  magneticForceX: number;
+  magneticForceY: number;
+  magneticForceZ: number;
+  magneticFieldStrength: number;
 }
 
 export interface DeviceButtonState {
@@ -120,6 +124,9 @@ const DEFAULT_OPTIONS: Required<SimulationOptions> = {
 const DEFAULT_RADIO_GROUP = 0;
 const DEFAULT_RADIO_CHANNEL = 7;
 const SENSOR_MAX_LEVEL = MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel.max;
+const AMBIENT_MAGNETIC_FIELD_MICROTESLA = { x: 0, y: 45 };
+const MAGNET_REFERENCE_DISTANCE_PX = 80;
+const MAGNET_SOFTENING_DISTANCE_PX = 24;
 const RSSI_AT_CLOSE_RANGE = -45;
 const RSSI_AT_RANGE_LIMIT = -75;
 const DEVICE_TOUCH_DISTANCE = 84;
@@ -431,19 +438,42 @@ export function calculateEnvironmentSensors(
   assertPoint(position, 'position');
   let lightLevel = 0;
   let soundLevel = 0;
+  let magneticForceX = AMBIENT_MAGNETIC_FIELD_MICROTESLA.x;
+  let magneticForceY = AMBIENT_MAGNETIC_FIELD_MICROTESLA.y;
 
   for (const source of environmentSources) {
-    const contribution = calculateSourceContribution(position, source);
     if (source.type === 'light') {
+      const contribution = calculateSourceContribution(position, source);
       lightLevel = Math.max(lightLevel, contribution);
-    } else {
+    } else if (source.type === 'sound') {
+      const contribution = calculateSourceContribution(position, source);
       soundLevel = Math.max(soundLevel, contribution);
+    } else if (source.type === 'magnet') {
+      const contribution = calculateMagnetContribution(position, source);
+      magneticForceX += contribution.x;
+      magneticForceY += contribution.y;
     }
   }
+  const magneticForceZ = 0;
+  const clampedMagneticForceX = clampMicrobitNumericSensor('magneticForceX', magneticForceX);
+  const clampedMagneticForceY = clampMicrobitNumericSensor('magneticForceY', magneticForceY);
+  const clampedMagneticForceZ = clampMicrobitNumericSensor('magneticForceZ', magneticForceZ);
+  const magneticFieldStrength = Math.hypot(
+    clampedMagneticForceX,
+    clampedMagneticForceY,
+    clampedMagneticForceZ,
+  );
 
   return {
     lightLevel: clampMicrobitNumericSensor('lightLevel', lightLevel),
     soundLevel: clampMicrobitNumericSensor('soundLevel', soundLevel),
+    magneticForceX: clampedMagneticForceX,
+    magneticForceY: clampedMagneticForceY,
+    magneticForceZ: clampedMagneticForceZ,
+    magneticFieldStrength: clampMicrobitNumericSensor(
+      'magneticFieldStrength',
+      magneticFieldStrength,
+    ),
   };
 }
 
@@ -609,7 +639,10 @@ function normalizeRadioConfig(
   return radio;
 }
 
-function calculateSourceContribution(position: Point, source: EnvironmentSource): number {
+function calculateSourceContribution(
+  position: Point,
+  source: Extract<EnvironmentSource, { type: 'light' | 'sound' }>,
+): number {
   assertPoint(source.position, `environment source ${source.id} position`);
 
   if (!Number.isFinite(source.radius) || source.radius <= 0) {
@@ -627,6 +660,52 @@ function calculateSourceContribution(position: Point, source: EnvironmentSource)
 
   const intensity = clamp(source.intensity, 0, 1);
   return (1 - distance / source.radius) * intensity * SENSOR_MAX_LEVEL;
+}
+
+function calculateMagnetContribution(
+  position: Point,
+  source: Extract<EnvironmentSource, { type: 'magnet' }>,
+): Point {
+  assertPoint(source.position, `environment source ${source.id} position`);
+
+  if (!Number.isFinite(source.radius) || source.radius <= 0) {
+    return { x: 0, y: 0 };
+  }
+  if (!Number.isFinite(source.strengthMicroTesla)) {
+    throw new Error(`environment source ${source.id} strength must be a finite number`);
+  }
+  if (!Number.isFinite(source.angleDeg)) {
+    throw new Error(`environment source ${source.id} angle must be a finite number`);
+  }
+
+  const dx = position.x - source.position.x;
+  const dy = position.y - source.position.y;
+  const distance = Math.hypot(dx, dy);
+  if (distance > source.radius) {
+    return { x: 0, y: 0 };
+  }
+
+  const angleRad = (source.angleDeg * Math.PI) / 180;
+  const magnetAxis = {
+    x: Math.cos(angleRad),
+    y: Math.sin(angleRad),
+  };
+  const direction =
+    distance === 0
+      ? magnetAxis
+      : {
+          x: dx / distance,
+          y: dy / distance,
+        };
+  const softenedDistance = Math.max(distance, MAGNET_SOFTENING_DISTANCE_PX);
+  const falloff = (MAGNET_REFERENCE_DISTANCE_PX / softenedDistance) ** 3;
+  const scale = (source.strengthMicroTesla / 2) * falloff;
+  const alignment = magnetAxis.x * direction.x + magnetAxis.y * direction.y;
+
+  return {
+    x: scale * (3 * alignment * direction.x - magnetAxis.x),
+    y: scale * (3 * alignment * direction.y - magnetAxis.y),
+  };
 }
 
 function resolveOptions(options: SimulationOptions): Required<SimulationOptions> {

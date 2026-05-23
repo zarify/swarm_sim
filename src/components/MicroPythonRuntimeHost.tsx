@@ -221,7 +221,13 @@ export function MicroPythonRuntimeHost({
         continue;
       }
 
-      const sensorKey = `${runtime.sensors.lightLevel}:${runtime.sensors.soundLevel}`;
+      const sensorKey = [
+        runtime.sensors.lightLevel,
+        runtime.sensors.soundLevel,
+        runtime.sensors.magneticForceX,
+        runtime.sensors.magneticForceY,
+        runtime.sensors.magneticForceZ,
+      ].join(':');
       if (lastSensorValues.current.get(deviceId) === sensorKey) {
         continue;
       }
@@ -230,6 +236,9 @@ export function MicroPythonRuntimeHost({
       void Promise.all([
         adapter.setSensor('lightLevel', runtime.sensors.lightLevel),
         adapter.setSensor('soundLevel', runtime.sensors.soundLevel),
+        adapter.setSensor('magneticForceX', runtime.sensors.magneticForceX),
+        adapter.setSensor('magneticForceY', runtime.sensors.magneticForceY),
+        adapter.setSensor('magneticForceZ', runtime.sensors.magneticForceZ),
       ]).catch((error: unknown) => {
         callbacks.current.onRuntimeLog(
           deviceId,

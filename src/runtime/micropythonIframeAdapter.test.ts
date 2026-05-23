@@ -135,6 +135,9 @@ display.show(Image.ARROW_N)`),
     await adapter.setButton('B', false);
     await adapter.setSensor('lightLevel', 200);
     await adapter.setSensor('soundLevel', 64);
+    await adapter.setSensor('magneticForceX', -12);
+    await adapter.setSensor('magneticForceY', 45);
+    await adapter.setSensor('magneticForceZ', 0);
     await adapter.sendRadio({ data: radioData, signalStrength: -63 });
     await adapter.reset();
     await adapter.stop();
@@ -144,6 +147,9 @@ display.show(Image.ARROW_N)`),
       { message: { kind: 'set_value', id: 'buttonB', value: 0 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'lightLevel', value: 200 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'soundLevel', value: 64 }, targetOrigin: 'https://python-simulator.usermbit.org' },
+      { message: { kind: 'set_value', id: 'compassX', value: -12000 }, targetOrigin: 'https://python-simulator.usermbit.org' },
+      { message: { kind: 'set_value', id: 'compassY', value: 45000 }, targetOrigin: 'https://python-simulator.usermbit.org' },
+      { message: { kind: 'set_value', id: 'compassZ', value: 0 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       {
         message: { kind: 'radio_input', data: new TextEncoder().encode('ping'), rssi: 63 },
         targetOrigin: 'https://python-simulator.usermbit.org',
@@ -502,7 +508,7 @@ display.show(Image.ARROW_N)`),
       'MicroPython iframe adapter cannot flash makecode-pxt programs',
     );
     await expect(adapter.setSensor('lightLevel', 300)).rejects.toThrow(
-      'MicroPython simulator sensor value must be 0-255',
+      'MicroPython simulator sensor value for lightLevel must be 0-255',
     );
     expect(targetWindow.messages).toEqual([]);
   });

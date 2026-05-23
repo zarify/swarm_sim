@@ -8,7 +8,7 @@ describe('project serialization', () => {
     const project = createBlankProject({ id: 'project-1', name: 'Radio swarm', now });
 
     expect(project).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: 'project-1',
       name: 'Radio swarm',
       createdAt: now,
@@ -28,7 +28,7 @@ describe('project serialization', () => {
   });
 
   it('rejects unsupported schema versions', () => {
-    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 1', '"schemaVersion": 99');
+    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 2', '"schemaVersion": 99');
 
     expect(() => deserializeProject(serialized)).toThrow('Unsupported project schema version: 99');
   });
@@ -47,6 +47,34 @@ describe('project serialization', () => {
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
     expect(deserialized.environmentSources[0]?.name).toBe('Light 1');
+  });
+
+  it('migrates schema v1 projects to the current schema version', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as Record<string, unknown>;
+    parsed.schemaVersion = 1;
+
+    const deserialized = deserializeProject(JSON.stringify(parsed));
+    expect(deserialized.schemaVersion).toBe(2);
+    expect(deserialized.environmentSources[0]?.type).toBe('light');
+  });
+
+  it('round-trips magnet sources in schema v2 projects', () => {
+    const project: SwarmProject = {
+      ...makeProject(),
+      environmentSources: [
+        {
+          id: 'magnet-1',
+          type: 'magnet',
+          name: 'Magnet 1',
+          position: { x: 20, y: 30 },
+          radius: 200,
+          angleDeg: 90,
+          strengthMicroTesla: 180,
+        },
+      ],
+    };
+
+    expect(deserializeProject(serializeProject(project))).toEqual(project);
   });
 
   it('rejects malformed project JSON shape', () => {

@@ -168,13 +168,22 @@ export function MakeCodeRuntimeHost({
     force = false,
   ): Promise<void> {
     const tasks: Promise<void>[] = [];
-    const sensorKey = `${runtime.sensors.lightLevel}:${runtime.sensors.soundLevel}`;
+    const sensorKey = [
+      runtime.sensors.lightLevel,
+      runtime.sensors.soundLevel,
+      runtime.sensors.magneticForceX,
+      runtime.sensors.magneticForceY,
+      runtime.sensors.magneticForceZ,
+    ].join(':');
     if (force || lastSensorValues.current.get(deviceId) !== sensorKey) {
       lastSensorValues.current.set(deviceId, sensorKey);
       tasks.push(
         Promise.all([
           adapter.setSensor('lightLevel', runtime.sensors.lightLevel),
           adapter.setSensor('soundLevel', runtime.sensors.soundLevel),
+          adapter.setSensor('magneticForceX', runtime.sensors.magneticForceX),
+          adapter.setSensor('magneticForceY', runtime.sensors.magneticForceY),
+          adapter.setSensor('magneticForceZ', runtime.sensors.magneticForceZ),
         ]).then(() => undefined),
       );
     }

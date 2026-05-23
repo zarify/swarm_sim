@@ -6,6 +6,7 @@ import type {
   RuntimeAdapterUnsubscribe,
   RuntimeProgram,
   RuntimeRadioPacket,
+  RuntimeSensorId,
 } from './runtimeAdapter';
 import type { RuntimeReadiness } from './types';
 
@@ -33,7 +34,7 @@ interface ParsedButtonAction {
   emitsSound: boolean;
 }
 
-type SensorName = 'lightLevel' | 'soundLevel';
+type SensorName = RuntimeSensorId;
 
 export interface MakeCodeRuntimeAdapterOptions {
   name?: string;
@@ -53,7 +54,7 @@ export class MakeCodeRuntimeAdapter implements MicrobitRuntimeAdapter {
   private parsedProgram?: ParsedMakeCodeProgram;
   private lastProgram?: MakeCodeRuntimeProgram;
   private buttonState: Record<'A' | 'B', boolean> = { A: false, B: false };
-  private sensors: Record<SensorName, number> = { lightLevel: 0, soundLevel: 0 };
+  private sensors: Record<SensorName, number> = makeDefaultSensorValues();
   private displayHoldUntilMs = 0;
 
   constructor(options: MakeCodeRuntimeAdapterOptions = {}) {
@@ -70,7 +71,7 @@ export class MakeCodeRuntimeAdapter implements MicrobitRuntimeAdapter {
     this.lastProgram = program;
     this.parsedProgram = parseMakeCodeProgram(program);
     this.buttonState = { A: false, B: false };
-    this.sensors = { lightLevel: 0, soundLevel: 0 };
+    this.sensors = makeDefaultSensorValues();
     this.displayHoldUntilMs = 0;
     this.stopTicker();
     this.emitInitialDisplay();
@@ -112,11 +113,13 @@ export class MakeCodeRuntimeAdapter implements MicrobitRuntimeAdapter {
     }
   }
 
-  async setSensor(sensor: 'lightLevel' | 'soundLevel', value: number): Promise<void> {
+  async setSensor(sensor: RuntimeSensorId, value: number): Promise<void> {
     if (!Number.isFinite(value)) {
       return;
     }
-    this.sensors[sensor] = Math.max(0, Math.min(255, Math.round(value)));
+    const min = sensor === 'magneticForceX' || sensor === 'magneticForceY' || sensor === 'magneticForceZ' ? -2000 : 0;
+    const max = sensor === 'magneticForceX' || sensor === 'magneticForceY' || sensor === 'magneticForceZ' ? 2000 : 255;
+    this.sensors[sensor] = Math.max(min, Math.min(max, Math.round(value)));
   }
 
   async sendRadio(packet: RuntimeRadioPacket): Promise<void> {
@@ -318,6 +321,16 @@ export function encodeMakeCodeRadioString(value: string): Uint8Array {
 
 export function decodeMakeCodeRadioString(data: Uint8Array): string {
   return new TextDecoder().decode(data);
+}
+
+function makeDefaultSensorValues(): Record<SensorName, number> {
+  return {
+    lightLevel: 0,
+    soundLevel: 0,
+    magneticForceX: 0,
+    magneticForceY: 45,
+    magneticForceZ: 0,
+  };
 }
 
 function assertMakeCodeProgram(program: RuntimeProgram): asserts program is MakeCodeRuntimeProgram {

@@ -1,5 +1,6 @@
 import { evaluateArtifactRuntimeReadiness } from './artifactReadiness';
 import { normalizeRuntimeDisplayPixels } from './displayPixels';
+import { MICROBIT_BUILTIN_SENSOR_DOMAINS } from './microbitSensorDomains';
 import type {
   MicrobitRuntimeAdapter,
   MicroPythonRuntimeProgram,
@@ -8,11 +9,12 @@ import type {
   RuntimeDataLogEntry,
   RuntimeProgram,
   RuntimeRadioPacket,
+  RuntimeSensorId,
 } from './runtimeAdapter';
 import type { RuntimeReadiness } from './types';
 
 type ButtonId = 'buttonA' | 'buttonB';
-type SensorId = 'lightLevel' | 'soundLevel';
+type SimulatorSensorId = 'lightLevel' | 'soundLevel' | 'compassX' | 'compassY' | 'compassZ';
 
 interface PostMessageTarget {
   postMessage(message: unknown, targetOrigin: string): void;
@@ -105,12 +107,15 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     this.postSetValue(button === 'A' ? 'buttonA' : 'buttonB', pressed ? 1 : 0);
   }
 
-  async setSensor(sensor: 'lightLevel' | 'soundLevel', value: number): Promise<void> {
-    if (!Number.isFinite(value) || value < 0 || value > 255) {
-      throw new Error(`MicroPython simulator sensor value must be 0-255: ${value}`);
+  async setSensor(sensor: RuntimeSensorId, value: number): Promise<void> {
+    const domain = MICROBIT_BUILTIN_SENSOR_DOMAINS[sensor];
+    if (!Number.isFinite(value) || value < domain.min || value > domain.max) {
+      throw new Error(
+        `MicroPython simulator sensor value for ${sensor} must be ${domain.min}-${domain.max}: ${value}`,
+      );
     }
 
-    this.postSetValue(sensor, value);
+    this.postSetValue(toMicroPythonSimulatorSensorId(sensor), toMicroPythonSimulatorSensorValue(sensor, value));
   }
 
   async sendRadio(packet: RuntimeRadioPacket): Promise<void> {
@@ -144,7 +149,7 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     debugMicroPythonRuntimeSound('post-mute-command', {});
   }
 
-  private postSetValue(id: ButtonId | SensorId, value: number): void {
+  private postSetValue(id: ButtonId | SimulatorSensorId, value: number): void {
     this.post({ kind: 'set_value', id, value });
   }
 
@@ -969,6 +974,26 @@ function toSimulatorRadioRssi(value: number | undefined): number | undefined {
     return undefined;
   }
   return Math.max(0, Math.min(255, Math.round(Math.abs(value))));
+}
+
+function toMicroPythonSimulatorSensorId(sensor: RuntimeSensorId): SimulatorSensorId {
+  switch (sensor) {
+    case 'magneticForceX':
+      return 'compassX';
+    case 'magneticForceY':
+      return 'compassY';
+    case 'magneticForceZ':
+      return 'compassZ';
+    default:
+      return sensor;
+  }
+}
+
+function toMicroPythonSimulatorSensorValue(sensor: RuntimeSensorId, value: number): number {
+  if (sensor === 'magneticForceX' || sensor === 'magneticForceY' || sensor === 'magneticForceZ') {
+    return Math.round(value * 1000);
+  }
+  return Math.round(value);
 }
 
 function readDisplayPixelsFromStateChange(change: unknown): number[] | undefined {

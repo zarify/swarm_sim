@@ -27,6 +27,11 @@ async function addLightFromSwarmTools(page: Page) {
   await page.getByRole('button', { name: 'Add light' }).click();
 }
 
+async function addMagnetFromSwarmTools(page: Page) {
+  await openSwarmTools(page);
+  await page.getByRole('button', { name: 'Add magnet' }).click();
+}
+
 async function dismissSplash(page: Page) {
   const splash = page.getByRole('dialog', { name: 'Simulator instructions' });
   await expect(splash).toBeVisible();
@@ -52,6 +57,21 @@ test.describe('core canvas workflows', () => {
     await addDeviceFromSwarmTools(page);
 
     await expect(page.locator('.microbit-node')).toHaveCount(2);
+  });
+
+  test('adds a magnet source and shows magnetic readings on devices', async ({ page }) => {
+    await gotoCanvas(page);
+
+    await addMagnetFromSwarmTools(page);
+
+    await expect(page.locator('.source-node--magnet')).toHaveCount(1);
+    await expect(page.getByText('Magnet source')).toBeVisible();
+    await expect(page.getByLabel('Angle')).toBeVisible();
+    await expect(page.getByLabel('Strength (µT)')).toBeVisible();
+
+    await page.locator('.microbit-node').first().click();
+    await expect(page.getByText('Mag strength')).toBeVisible();
+    await expect(page.getByText(/µT/).first()).toBeVisible();
   });
 
   test('keeps telemetry behind the debug modal until opened', async ({ page }) => {

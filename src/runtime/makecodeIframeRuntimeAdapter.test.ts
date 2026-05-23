@@ -184,6 +184,7 @@ describe('MakeCode iframe runtime adapter', () => {
     });
 
     await expect(adapter.setSensor('lightLevel', 999)).rejects.toThrow(/0-255/);
+    await expect(adapter.setSensor('magneticForceX', -2500)).rejects.toThrow(/-2000-2000/);
   });
 
   it('posts a dedicated AB pulse message', async () => {

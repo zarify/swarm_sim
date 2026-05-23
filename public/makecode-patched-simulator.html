@@ -64,6 +64,9 @@
         const desiredSensors = {
           lightLevel: 0,
           soundLevel: 0,
+          magneticForceX: 0,
+          magneticForceY: 45,
+          magneticForceZ: 0,
         };
         const patchedRadioStates = new WeakSet();
         const patchedSoundStates = new WeakSet();
@@ -148,11 +151,16 @@
 
         function updateDesiredSensor(message) {
           const sensor = message.sensor;
-          const value = clampByte(Number(message.value));
           if (sensor === 'lightLevel') {
-            desiredSensors.lightLevel = value;
+            desiredSensors.lightLevel = clampByte(Number(message.value));
           } else if (sensor === 'soundLevel') {
-            desiredSensors.soundLevel = value;
+            desiredSensors.soundLevel = clampByte(Number(message.value));
+          } else if (sensor === 'magneticForceX') {
+            desiredSensors.magneticForceX = clampMagneticForce(Number(message.value));
+          } else if (sensor === 'magneticForceY') {
+            desiredSensors.magneticForceY = clampMagneticForce(Number(message.value));
+          } else if (sensor === 'magneticForceZ') {
+            desiredSensors.magneticForceZ = clampMagneticForce(Number(message.value));
           }
         }
 
@@ -177,9 +185,62 @@
               changed = true;
             }
           }
+          if (applyDesiredMagneticSensors(board)) {
+            changed = true;
+          }
           if (changed) {
             queueDisplayUpdate();
           }
+        }
+
+        function applyDesiredMagneticSensors(board) {
+          const compass = [
+            board.compassState,
+            board.compass,
+            board.magnetometerState,
+            board.magnetometer,
+          ].find(isRecord);
+          if (!compass) {
+            return false;
+          }
+          compass.usesMagneticForce = true;
+          compass.usesCompass = true;
+          compass.isCalibrated = true;
+          let changed = false;
+          changed = setCompassAxis(compass, 'x', desiredSensors.magneticForceX) || changed;
+          changed = setCompassAxis(compass, 'y', desiredSensors.magneticForceY) || changed;
+          changed = setCompassAxis(compass, 'z', desiredSensors.magneticForceZ) || changed;
+          const heading = headingFromMagneticForce(desiredSensors.magneticForceX, desiredSensors.magneticForceY);
+          for (const target of [compass, compass.sample, compass.lastSample].filter(isRecord)) {
+            if (target.heading !== heading) {
+              target.heading = heading;
+              changed = true;
+            }
+          }
+          return changed;
+        }
+
+        function setCompassAxis(compass, axis, value) {
+          let changed = false;
+          const names = axis === 'x'
+            ? ['x', 'X', 'compassX', 'magneticForceX']
+            : axis === 'y'
+              ? ['y', 'Y', 'compassY', 'magneticForceY']
+              : ['z', 'Z', 'compassZ', 'magneticForceZ'];
+          for (const target of [compass, compass.sample, compass.lastSample].filter(isRecord)) {
+            for (const name of names) {
+              if (target[name] !== value) {
+                target[name] = value;
+                changed = true;
+              }
+            }
+          }
+          return changed;
+        }
+
+        function headingFromMagneticForce(x, y) {
+          const heading = Math.round((Math.atan2(x, -y) * 180) / Math.PI);
+          return ((heading % 360) + 360) % 360;
         }
 
         function applyButton(board, message) {
@@ -610,6 +671,13 @@
             return 0;
           }
           return Math.max(0, Math.min(255, Math.round(value)));
+        }
+
+        function clampMagneticForce(value) {
+          if (!Number.isFinite(value)) {
+            return 0;
+          }
+          return Math.max(-2000, Math.min(2000, Math.round(value)));
         }
 
         function clampDisplay(raw) {

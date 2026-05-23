@@ -50,6 +50,39 @@ export const MICROBIT_BUILTIN_SENSOR_DOMAINS = {
     unit: 'degrees',
     notes: 'Compass heading in degrees as used by input.compassHeading().',
   },
+  // MakeCode input.magneticForce(Dimension.*): microteslas.
+  magneticForceX: {
+    kind: 'number',
+    min: -2000,
+    max: 2000,
+    defaultValue: 0,
+    unit: 'uT',
+    notes: 'Magnetic field X axis in microteslas as used by input.magneticForce(Dimension.X).',
+  },
+  magneticForceY: {
+    kind: 'number',
+    min: -2000,
+    max: 2000,
+    defaultValue: 45,
+    unit: 'uT',
+    notes: 'Magnetic field Y axis in microteslas as used by input.magneticForce(Dimension.Y).',
+  },
+  magneticForceZ: {
+    kind: 'number',
+    min: -2000,
+    max: 2000,
+    defaultValue: 0,
+    unit: 'uT',
+    notes: 'Magnetic field Z axis in microteslas; the 2D canvas keeps this at zero.',
+  },
+  magneticFieldStrength: {
+    kind: 'number',
+    min: 0,
+    max: 2000,
+    defaultValue: 45,
+    unit: 'uT',
+    notes: 'Magnetic field strength in microteslas.',
+  },
   // MakeCode input.acceleration(Dimension.*): milli-g, ±2g on micro:bit.
   accelerationXMg: {
     kind: 'number',
@@ -95,6 +128,10 @@ export interface MicrobitSensorSnapshot {
   soundLevel: number;
   temperatureC: number;
   compassHeading: number;
+  magneticForceX: number;
+  magneticForceY: number;
+  magneticForceZ: number;
+  magneticFieldStrength: number;
   accelerationXMg: number;
   accelerationYMg: number;
   accelerationZMg: number;
@@ -118,6 +155,10 @@ export function makeDefaultMicrobitSensorSnapshot(): MicrobitSensorSnapshot {
     soundLevel: MICROBIT_BUILTIN_SENSOR_DOMAINS.soundLevel.defaultValue,
     temperatureC: MICROBIT_BUILTIN_SENSOR_DOMAINS.temperatureC.defaultValue,
     compassHeading: MICROBIT_BUILTIN_SENSOR_DOMAINS.compassHeading.defaultValue,
+    magneticForceX: MICROBIT_BUILTIN_SENSOR_DOMAINS.magneticForceX.defaultValue,
+    magneticForceY: MICROBIT_BUILTIN_SENSOR_DOMAINS.magneticForceY.defaultValue,
+    magneticForceZ: MICROBIT_BUILTIN_SENSOR_DOMAINS.magneticForceZ.defaultValue,
+    magneticFieldStrength: MICROBIT_BUILTIN_SENSOR_DOMAINS.magneticFieldStrength.defaultValue,
     accelerationXMg: MICROBIT_BUILTIN_SENSOR_DOMAINS.accelerationXMg.defaultValue,
     accelerationYMg: MICROBIT_BUILTIN_SENSOR_DOMAINS.accelerationYMg.defaultValue,
     accelerationZMg: MICROBIT_BUILTIN_SENSOR_DOMAINS.accelerationZMg.defaultValue,
@@ -136,6 +177,22 @@ export function normalizeMicrobitSensorSnapshot(
     compassHeading: clampMicrobitNumericSensor(
       'compassHeading',
       partial.compassHeading ?? defaults.compassHeading,
+    ),
+    magneticForceX: clampMicrobitNumericSensor(
+      'magneticForceX',
+      partial.magneticForceX ?? defaults.magneticForceX,
+    ),
+    magneticForceY: clampMicrobitNumericSensor(
+      'magneticForceY',
+      partial.magneticForceY ?? defaults.magneticForceY,
+    ),
+    magneticForceZ: clampMicrobitNumericSensor(
+      'magneticForceZ',
+      partial.magneticForceZ ?? defaults.magneticForceZ,
+    ),
+    magneticFieldStrength: clampMicrobitNumericSensor(
+      'magneticFieldStrength',
+      partial.magneticFieldStrength ?? defaults.magneticFieldStrength,
     ),
     accelerationXMg: clampMicrobitNumericSensor(
       'accelerationXMg',

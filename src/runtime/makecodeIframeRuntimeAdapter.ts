@@ -9,6 +9,7 @@ import type {
   RuntimeDataLogEntry,
   RuntimeProgram,
   RuntimeRadioPacket,
+  RuntimeSensorId,
 } from './runtimeAdapter';
 import type { RuntimeReadiness } from './types';
 
@@ -132,7 +133,7 @@ export class MakeCodeIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     this.post({ type: 'swarm-pulse-button-ab' });
   }
 
-  async setSensor(sensor: 'lightLevel' | 'soundLevel', value: number): Promise<void> {
+  async setSensor(sensor: RuntimeSensorId, value: number): Promise<void> {
     const domain = MICROBIT_BUILTIN_SENSOR_DOMAINS[sensor];
     if (!Number.isFinite(value) || value < domain.min || value > domain.max) {
       throw new Error(
