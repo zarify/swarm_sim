@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { createBlankProject, type DeviceId, type SwarmProject } from '../domain/project';
+import { FEATURE_FLAGS } from '../runtime/featureFlags';
 import type {
   DeviceProgramLoadResult,
   LoadProjectRuntimeProgramsOptions,
@@ -479,13 +480,7 @@ describe('MakeCodeRuntimeHost', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare runtime' })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
     await waitFor(() =>
-      expect(sensorValues).toEqual([
-        'lightLevel:17',
-        'soundLevel:23',
-        'magneticForceX:12',
-        'magneticForceY:-34',
-        'magneticForceZ:56',
-      ]),
+      expect(sensorValues).toEqual(expectedSyncedSensors(17, 23, { x: 12, y: -34, z: 56 })),
     );
 
     rerender(
@@ -514,16 +509,8 @@ describe('MakeCodeRuntimeHost', () => {
 
     await waitFor(() =>
       expect(sensorValues).toEqual([
-        'lightLevel:17',
-        'soundLevel:23',
-        'magneticForceX:12',
-        'magneticForceY:-34',
-        'magneticForceZ:56',
-        'lightLevel:81',
-        'soundLevel:5',
-        'magneticForceX:-400',
-        'magneticForceY:200',
-        'magneticForceZ:1',
+        ...expectedSyncedSensors(17, 23, { x: 12, y: -34, z: 56 }),
+        ...expectedSyncedSensors(81, 5, { x: -400, y: 200, z: 1 }),
       ]),
     );
   });
@@ -647,13 +634,7 @@ describe('MakeCodeRuntimeHost', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare runtime' })).not.toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
     await waitFor(() =>
-      expect(sensorValues).toEqual([
-        'lightLevel:0',
-        'soundLevel:0',
-        'magneticForceX:0',
-        'magneticForceY:45',
-        'magneticForceZ:0',
-      ]),
+      expect(sensorValues).toEqual(expectedSyncedSensors(0, 0, { x: 0, y: 45, z: 0 })),
     );
 
     rerender(
@@ -682,16 +663,8 @@ describe('MakeCodeRuntimeHost', () => {
 
     await waitFor(() =>
       expect(sensorValues).toEqual([
-        'lightLevel:0',
-        'soundLevel:0',
-        'magneticForceX:0',
-        'magneticForceY:45',
-        'magneticForceZ:0',
-        'lightLevel:0',
-        'soundLevel:0',
-        'magneticForceX:0',
-        'magneticForceY:45',
-        'magneticForceZ:0',
+        ...expectedSyncedSensors(0, 0, { x: 0, y: 45, z: 0 }),
+        ...expectedSyncedSensors(0, 0, { x: 0, y: 45, z: 0 }),
       ]),
     );
     expect(resets).toEqual(['reset']);
@@ -999,6 +972,28 @@ function makeDeviceRuntimeStates(
       },
     },
   };
+}
+
+function expectedSyncedSensors(
+  lightLevel: number,
+  soundLevel: number,
+  magnetic: { x: number; y: number; z: number },
+): string[] {
+  const values: string[] = [];
+  if (FEATURE_FLAGS.light) {
+    values.push(`lightLevel:${lightLevel}`);
+  }
+  if (FEATURE_FLAGS.sound) {
+    values.push(`soundLevel:${soundLevel}`);
+  }
+  if (FEATURE_FLAGS.magnet) {
+    values.push(
+      `magneticForceX:${magnetic.x}`,
+      `magneticForceY:${magnetic.y}`,
+      `magneticForceZ:${magnetic.z}`,
+    );
+  }
+  return values;
 }
 
 async function loadTargetProjectDevices(

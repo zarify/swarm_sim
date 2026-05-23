@@ -12,6 +12,31 @@ npm run test:e2e
 npm run build
 ```
 
+## Build-time feature flags
+
+Environment-source capabilities are controlled at build time:
+
+- `SWARM_FEATURE_LIGHT` (default: `true`)
+- `SWARM_FEATURE_SOUND` (default: `true`)
+- `SWARM_FEATURE_MAGNET` (default: `false`)
+
+`VITE_SWARM_FEATURE_LIGHT`, `VITE_SWARM_FEATURE_SOUND`, and `VITE_SWARM_FEATURE_MAGNET` are accepted aliases.
+
+Examples:
+
+```bash
+# Default build (light+sound enabled, magnet disabled)
+npm run build
+
+# Build with magnet enabled
+SWARM_FEATURE_MAGNET=1 npm run build
+
+# Build without sound
+SWARM_FEATURE_SOUND=0 npm run build
+```
+
+When magnet is disabled, magnet sources are preserved in project data but hidden and ignored by the simulation/runtime UI.
+
 ## Static hosting notes
 
 - The app is static-hostable (`npm run build` + serve `dist/` from any HTTP server).
@@ -25,7 +50,7 @@ npm run build
 
 ## Current implementation
 
-The app now includes the React + TypeScript + Vite shell, schema-versioned project persistence, source extraction for editor-generated HEX files, a runtime program loading pipeline, a MicroPython iframe adapter for the Foundation simulator API, a pure TypeScript swarm simulation engine, and an interactive SVG swarm canvas with selected-device code upload, radio telemetry, compact per-device logs, radio message inspection, per-node runtime activity rings (radio transmit and speaker/sound output), environmental light/sound/magnet sources, and persistent embedded MicroPython simulator frames for assigned devices.
+The app now includes the React + TypeScript + Vite shell, schema-versioned project persistence, source extraction for editor-generated HEX files, a runtime program loading pipeline, a MicroPython iframe adapter for the Foundation simulator API, a pure TypeScript swarm simulation engine, and an interactive SVG swarm canvas with selected-device code upload, radio telemetry, compact per-device logs, radio message inspection, per-node runtime activity rings (radio transmit and speaker/sound output), environmental light/sound sources (plus optional magnet sources via feature flag), and persistent embedded MicroPython simulator frames for assigned devices.
 
 It intentionally does **not** claim full compiled artifact execution yet.
 

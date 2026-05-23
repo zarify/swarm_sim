@@ -3,6 +3,7 @@ import {
   MICROBIT_BUILTIN_SENSOR_DOMAINS,
   clampMicrobitNumericSensor,
 } from '../runtime/microbitSensorDomains';
+import { isEnvironmentSourceTypeEnabled } from '../runtime/featureFlags';
 import type { RuntimeRadioPacket } from '../runtime/runtimeAdapter';
 
 export type SimulationMode = 'idle' | 'running' | 'paused';
@@ -442,6 +443,9 @@ export function calculateEnvironmentSensors(
   let magneticForceY = AMBIENT_MAGNETIC_FIELD_MICROTESLA.y;
 
   for (const source of environmentSources) {
+    if (!isEnvironmentSourceTypeEnabled(source.type)) {
+      continue;
+    }
     if (source.type === 'light') {
       const contribution = calculateSourceContribution(position, source);
       lightLevel = Math.max(lightLevel, contribution);

@@ -19,8 +19,10 @@ import type {
   RuntimeDataLogEvent,
   RuntimeProgram,
   RuntimeRadioPacket,
+  RuntimeSensorId,
 } from '../runtime/runtimeAdapter';
 import type { DeviceRuntimeState } from '../simulation/simulationEngine';
+import { isRuntimeSensorEnabled } from '../runtime/featureFlags';
 
 export const MICRO_PYTHON_SIMULATOR_URL =
   new URL(
@@ -30,6 +32,13 @@ export const MICRO_PYTHON_SIMULATOR_URL =
 const MICRO_PYTHON_SIMULATOR_ORIGIN = new URL(MICRO_PYTHON_SIMULATOR_URL).origin;
 const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
 const MICRO_PYTHON_DISPLAY_COALESCE_WINDOW_MS = 24;
+const RUNTIME_SENSOR_ORDER: RuntimeSensorId[] = [
+  'lightLevel',
+  'soundLevel',
+  'magneticForceX',
+  'magneticForceY',
+  'magneticForceZ',
+];
 
 type RuntimeLoadPrograms = (
   project: SwarmProject,
@@ -38,6 +47,15 @@ type RuntimeLoadPrograms = (
 type RuntimeRadioConfigHint = Partial<
   Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>
 >;
+
+function sensorSyncValues(runtime: DeviceRuntimeState): Array<[RuntimeSensorId, number]> {
+  return RUNTIME_SENSOR_ORDER.flatMap((sensor) => {
+    if (!isRuntimeSensorEnabled(sensor)) {
+      return [];
+    }
+    return [[sensor, runtime.sensors[sensor]]];
+  });
+}
 
 export interface RoutedRadioDelivery {
   recipientId: DeviceId;
@@ -221,25 +239,17 @@ export function MicroPythonRuntimeHost({
         continue;
       }
 
-      const sensorKey = [
-        runtime.sensors.lightLevel,
-        runtime.sensors.soundLevel,
-        runtime.sensors.magneticForceX,
-        runtime.sensors.magneticForceY,
-        runtime.sensors.magneticForceZ,
-      ].join(':');
+      const sensorValues = sensorSyncValues(runtime);
+      const sensorKey = sensorValues.map(([sensor, value]) => `${sensor}:${value}`).join(':');
       if (lastSensorValues.current.get(deviceId) === sensorKey) {
         continue;
       }
 
       lastSensorValues.current.set(deviceId, sensorKey);
-      void Promise.all([
-        adapter.setSensor('lightLevel', runtime.sensors.lightLevel),
-        adapter.setSensor('soundLevel', runtime.sensors.soundLevel),
-        adapter.setSensor('magneticForceX', runtime.sensors.magneticForceX),
-        adapter.setSensor('magneticForceY', runtime.sensors.magneticForceY),
-        adapter.setSensor('magneticForceZ', runtime.sensors.magneticForceZ),
-      ]).catch((error: unknown) => {
+      if (sensorValues.length === 0) {
+        continue;
+      }
+      void Promise.all(sensorValues.map(([sensor, value]) => adapter.setSensor(sensor, value))).catch((error: unknown) => {
         callbacks.current.onRuntimeLog(
           deviceId,
           'internal-error',

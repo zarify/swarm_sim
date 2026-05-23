@@ -19,6 +19,11 @@ import { decompressLzmaSource } from '../runtime/lzmaDecompressor';
 import { normalizeRuntimeDisplayPixels } from '../runtime/displayPixels';
 import { MICROBIT_BUILTIN_SENSOR_DOMAINS } from '../runtime/microbitSensorDomains';
 import {
+  FEATURE_FLAGS,
+  filterEnabledEnvironmentSources,
+  isEnvironmentSourceTypeEnabled,
+} from '../runtime/featureFlags';
+import {
   appendDeviceRuntimeLog,
   moveDevice,
   reconcileSimulationProject,
@@ -164,13 +169,14 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const capturedPointerId = useRef<number | null>(null);
   const browserProjectStore = useRef<BrowserProjectStore | undefined>(undefined);
   const { project, simulationState } = model;
+  const visibleEnvironmentSources = filterEnabledEnvironmentSources(project.environmentSources);
   const selectedDevice =
     selected.type === 'device'
       ? project.devices.find((device) => device.id === selected.id)
       : undefined;
   const selectedSource =
     selected.type === 'source'
-      ? project.environmentSources.find((source) => source.id === selected.id)
+      ? visibleEnvironmentSources.find((source) => source.id === selected.id)
       : undefined;
 
   useEffect(
@@ -416,6 +422,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   }
 
   function addSource(type: EnvironmentSource['type']) {
+    if (!isEnvironmentSourceTypeEnabled(type)) {
+      setCanvasStateMessage(`${type} sources are disabled in this build.`);
+      return;
+    }
     const sourceNumber = Math.max(
       nextSourceNumber.current,
       nextEnvironmentSourceNumber(modelRef.current.project.environmentSources, type),
@@ -1504,15 +1514,21 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               <button type="button" onClick={addDevice}>
                 Add device
               </button>
-              <button type="button" onClick={() => addSource('light')}>
-                Add light
-              </button>
-              <button type="button" onClick={() => addSource('sound')}>
-                Add sound
-              </button>
-              <button type="button" onClick={() => addSource('magnet')}>
-                Add magnet
-              </button>
+              {FEATURE_FLAGS.light ? (
+                <button type="button" onClick={() => addSource('light')}>
+                  Add light
+                </button>
+              ) : null}
+              {FEATURE_FLAGS.sound ? (
+                <button type="button" onClick={() => addSource('sound')}>
+                  Add sound
+                </button>
+              ) : null}
+              {FEATURE_FLAGS.magnet ? (
+                <button type="button" onClick={() => addSource('magnet')}>
+                  Add magnet
+                </button>
+              ) : null}
               <label className="toggle-field canvas-state-toggle">
                 <input
                   type="checkbox"
@@ -1663,7 +1679,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                 );
               })}
 
-            {project.environmentSources.map((source) => (
+            {visibleEnvironmentSources.map((source) => (
               <circle
                 key={`${source.id}-radius`}
                 className={`source-radius source-radius--${source.type}`}
@@ -1685,7 +1701,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                 ))
               : null}
 
-            {project.environmentSources.map((source) => (
+            {visibleEnvironmentSources.map((source) => (
               <g
                 key={source.id}
                 className={`source-node source-node--${source.type}`}
@@ -1868,6 +1884,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                 <DeviceSelection
                   project={project}
                   runtime={simulationState.devices[selectedDevice.id]}
+                  showMagneticReadings={FEATURE_FLAGS.magnet}
                   runtimeLoadResult={selectedRuntimeLoadResult}
                   uploadState={artifactUploadState[selectedDevice.id]}
                   deviceId={selectedDevice.id}
@@ -1994,6 +2011,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
 function DeviceSelection({
   project,
   deviceId,
+  showMagneticReadings,
   runtime,
   runtimeLoadResult,
   uploadState,
@@ -2012,6 +2030,7 @@ function DeviceSelection({
 }: {
   project: SwarmProject;
   deviceId: DeviceId;
+  showMagneticReadings: boolean;
   runtime?: DeviceRuntimeState;
   runtimeLoadResult?: DeviceProgramLoadResult;
   uploadState?: ArtifactUploadState;
@@ -2067,18 +2086,22 @@ function DeviceSelection({
               <dt>Sound</dt>
               <dd>{runtime.sensors.soundLevel}</dd>
             </div>
-            <div>
-              <dt>Mag X</dt>
-              <dd>{runtime.sensors.magneticForceX} µT</dd>
-            </div>
-            <div>
-              <dt>Mag Y</dt>
-              <dd>{runtime.sensors.magneticForceY} µT</dd>
-            </div>
-            <div>
-              <dt>Mag strength</dt>
-              <dd>{runtime.sensors.magneticFieldStrength} µT</dd>
-            </div>
+            {showMagneticReadings ? (
+              <>
+                <div>
+                  <dt>Mag X</dt>
+                  <dd>{runtime.sensors.magneticForceX} µT</dd>
+                </div>
+                <div>
+                  <dt>Mag Y</dt>
+                  <dd>{runtime.sensors.magneticForceY} µT</dd>
+                </div>
+                <div>
+                  <dt>Mag strength</dt>
+                  <dd>{runtime.sensors.magneticFieldStrength} µT</dd>
+                </div>
+              </>
+            ) : null}
           </dl>
         </>
       ) : null}
@@ -2333,7 +2356,9 @@ function pickFallbackSelection(project: SwarmProject): Selection {
   if (firstDevice) {
     return { type: 'device', id: firstDevice.id };
   }
-  const firstSource = project.environmentSources[0];
+  const firstSource = project.environmentSources.find((source) =>
+    isEnvironmentSourceTypeEnabled(source.type),
+  );
   if (firstSource) {
     return { type: 'source', id: firstSource.id };
   }

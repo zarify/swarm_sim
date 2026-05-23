@@ -1,4 +1,5 @@
 import { createBlankProject, type SwarmProject } from '../domain/project';
+import { FEATURE_FLAGS } from '../runtime/featureFlags';
 import {
   appendDeviceRuntimeLog,
   advanceSimulation,
@@ -220,13 +221,24 @@ describe('simulation engine', () => {
       ],
     });
 
+    if (FEATURE_FLAGS.magnet) {
+      expect(state.devices['device-a']?.sensors).toMatchObject({
+        magneticForceX: 100,
+        magneticForceY: 45,
+        magneticForceZ: 0,
+        magneticFieldStrength: 110,
+      });
+      expect(state.devices['device-b']?.sensors.magneticForceX).toBe(-50);
+      return;
+    }
+
     expect(state.devices['device-a']?.sensors).toMatchObject({
-      magneticForceX: 100,
+      magneticForceX: 0,
       magneticForceY: 45,
       magneticForceZ: 0,
-      magneticFieldStrength: 110,
+      magneticFieldStrength: 45,
     });
-    expect(state.devices['device-b']?.sensors.magneticForceX).toBe(-50);
+    expect(state.devices['device-b']?.sensors.magneticForceX).toBe(0);
   });
 
   it('surfaces invalid lifecycle transitions and input values', () => {

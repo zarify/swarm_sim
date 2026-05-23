@@ -20,9 +20,11 @@ import type {
   RuntimeDataLogEvent,
   RuntimeProgram,
   RuntimeRadioPacket,
+  RuntimeSensorId,
 } from '../runtime/runtimeAdapter';
 import type { DeviceRuntimeState } from '../simulation/simulationEngine';
 import type { RoutedRadioDelivery } from './MicroPythonRuntimeHost';
+import { isRuntimeSensorEnabled } from '../runtime/featureFlags';
 
 type RuntimeLoadPrograms = (
   project: SwarmProject,
@@ -33,8 +35,24 @@ type RuntimeRadioConfigHint = Partial<
 >;
 type ABPulseCapableRuntimeAdapter = MicrobitRuntimeAdapter & { pulseButtonAB: () => Promise<void> };
 
+function sensorSyncValues(runtime: DeviceRuntimeState): Array<[RuntimeSensorId, number]> {
+  return RUNTIME_SENSOR_ORDER.flatMap((sensor) => {
+    if (!isRuntimeSensorEnabled(sensor)) {
+      return [];
+    }
+    return [[sensor, runtime.sensors[sensor]]];
+  });
+}
+
 const MAKECODE_SIMULATOR_RUNNER_URL = '/makecode-patched-runner.html';
 const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
+const RUNTIME_SENSOR_ORDER: RuntimeSensorId[] = [
+  'lightLevel',
+  'soundLevel',
+  'magneticForceX',
+  'magneticForceY',
+  'magneticForceZ',
+];
 
 export interface MakeCodeRuntimeHostProps {
   project: SwarmProject;
@@ -168,24 +186,17 @@ export function MakeCodeRuntimeHost({
     force = false,
   ): Promise<void> {
     const tasks: Promise<void>[] = [];
-    const sensorKey = [
-      runtime.sensors.lightLevel,
-      runtime.sensors.soundLevel,
-      runtime.sensors.magneticForceX,
-      runtime.sensors.magneticForceY,
-      runtime.sensors.magneticForceZ,
-    ].join(':');
+    const sensorValues = sensorSyncValues(runtime);
+    const sensorKey = sensorValues.map(([sensor, value]) => `${sensor}:${value}`).join(':');
     if (force || lastSensorValues.current.get(deviceId) !== sensorKey) {
       lastSensorValues.current.set(deviceId, sensorKey);
-      tasks.push(
-        Promise.all([
-          adapter.setSensor('lightLevel', runtime.sensors.lightLevel),
-          adapter.setSensor('soundLevel', runtime.sensors.soundLevel),
-          adapter.setSensor('magneticForceX', runtime.sensors.magneticForceX),
-          adapter.setSensor('magneticForceY', runtime.sensors.magneticForceY),
-          adapter.setSensor('magneticForceZ', runtime.sensors.magneticForceZ),
-        ]).then(() => undefined),
-      );
+      if (sensorValues.length > 0) {
+        tasks.push(
+          Promise.all(sensorValues.map(([sensor, value]) => adapter.setSensor(sensor, value))).then(
+            () => undefined,
+          ),
+        );
+      }
     }
 
     const buttonKey = `${runtime.buttons.A}:${runtime.buttons.B}`;

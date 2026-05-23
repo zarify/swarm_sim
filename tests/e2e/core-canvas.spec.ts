@@ -1,10 +1,12 @@
 import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { resolveBuildFeatureFlags } from '../../featureFlags.config';
 
 const microPythonFixture = path.resolve(process.cwd(), 'hex_files/mp_beacon.hex');
 const microPythonDataLogFixture = path.resolve(process.cwd(), 'hex_files/mp_datalog.hex');
 const makeCodeBeaconFixture = path.resolve(process.cwd(), 'hex_files/mc_beacon.hex');
 const makeCodeDataLogFixture = path.resolve(process.cwd(), 'hex_files/mc_datalog.hex');
+const featureFlags = resolveBuildFeatureFlags(process.env);
 
 async function gotoCanvas(page: Page) {
   await page.goto('/');
@@ -95,6 +97,14 @@ test.describe('core canvas workflows', () => {
   test('adds a magnet source and shows magnetic readings on devices', async ({ page }) => {
     await gotoCanvas(page);
 
+    if (!featureFlags.magnetEnabled) {
+      await openSwarmTools(page);
+      await expect(page.getByRole('button', { name: 'Add magnet' })).toHaveCount(0);
+      await page.locator('.microbit-node').first().click();
+      await expect(page.getByText('Mag strength')).toHaveCount(0);
+      return;
+    }
+
     await addMagnetFromSwarmTools(page);
 
     await expect(page.locator('.source-node--magnet')).toHaveCount(1);
@@ -109,6 +119,11 @@ test.describe('core canvas workflows', () => {
 
   test('updates MakeCode magnetic dimensions when magnet settings change', async ({ page }) => {
     await gotoCanvas(page);
+    if (!featureFlags.magnetEnabled) {
+      await openSwarmTools(page);
+      await expect(page.getByRole('button', { name: 'Add magnet' })).toHaveCount(0);
+      return;
+    }
     await addMagnetFromSwarmTools(page);
     await page.locator('.microbit-node').first().click();
 
