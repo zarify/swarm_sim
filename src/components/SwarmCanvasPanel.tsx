@@ -5,6 +5,7 @@ import {
   createBlankProject,
   defaultDeviceNameForId,
   defaultEnvironmentSourceName,
+  type DeviceEditableProgram,
   type DeviceId,
   type EnvironmentSource,
   type EnvironmentSourceId,
@@ -35,7 +36,12 @@ import {
   type SimulationState,
 } from '../simulation/simulationEngine';
 import type { DeviceProgramLoadResult } from '../runtime/programLoader';
-import type { RuntimeDataLogEntry, RuntimeDataLogEvent, RuntimeRadioPacket } from '../runtime/runtimeAdapter';
+import type {
+  RuntimeDataLogEntry,
+  RuntimeDataLogEvent,
+  RuntimeProgram,
+  RuntimeRadioPacket,
+} from '../runtime/runtimeAdapter';
 import type { RuntimeSource } from '../runtime/types';
 import type { MicroPythonRuntimeHostProps, RoutedRadioDelivery } from './MicroPythonRuntimeHost';
 import type { RuntimeResetRequest } from './runtimeHostControls';
@@ -43,6 +49,12 @@ import type { BrowserProjectStore } from '../domain/browserProjectStore';
 import { createBrowserProjectStore } from '../domain/browserProjectStore';
 import { decodeProjectBundle, encodeProjectBundle } from '../domain/projectBundle';
 import { findReusableArtifact } from '../domain/projectArtifacts';
+import { DeviceCodeEditorModal } from './DeviceCodeEditorModal';
+import {
+  createEditableProgramSnapshot,
+  getActiveEditableProgram,
+  resolveDeviceRuntimeSource as resolveEditableRuntimeSource,
+} from '../runtime/editableProgram';
 
 type Selection =
   | { type: 'device'; id: DeviceId }
@@ -153,6 +165,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const [isSidebarDragActive, setIsSidebarDragActive] = useState(false);
   const [renameTarget, setRenameTarget] = useState<RenamableSelection | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+  const [editorDeviceId, setEditorDeviceId] = useState<DeviceId | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const modelRef = useRef(model);
   const uploadTokens = useRef(new Map<DeviceId, number>());
@@ -178,6 +191,11 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     selected.type === 'source'
       ? visibleEnvironmentSources.find((source) => source.id === selected.id)
       : undefined;
+  const editorDevice =
+    editorDeviceId === null
+      ? undefined
+      : project.devices.find((device) => device.id === editorDeviceId);
+  const activeEditorProgram = editorDevice ? getActiveEditableProgram(editorDevice) : undefined;
 
   useEffect(
     () => () => {
@@ -242,6 +260,31 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isDebugModalOpen]);
+
+  useEffect(() => {
+    if (!editorDeviceId) {
+      return;
+    }
+    const device = project.devices.find((candidate) => candidate.id === editorDeviceId);
+    if (!device || !getActiveEditableProgram(device)) {
+      setEditorDeviceId(null);
+    }
+  }, [editorDeviceId, project.devices]);
+
+  useEffect(() => {
+    if (!editorDeviceId) {
+      return;
+    }
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      event.preventDefault();
+      setEditorDeviceId(null);
+    }
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [editorDeviceId]);
 
   useEffect(() => {
     if (!renameTarget) {
@@ -672,7 +715,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       if (readiness.artifactKind !== 'hex') {
         throw new Error('Only micro:bit .hex files can be assigned to devices right now');
       }
-      const { runtimeSource, issue } = await resolveRuntimeSource(
+      const { runtimeSource, issue, program } = await resolveRuntimeSource(
         file.name,
         bytes,
         readiness.runtimeSource,
@@ -711,7 +754,15 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           updatedAt: now,
           artifacts: replaceDeviceArtifact(current, deviceId, nextArtifact),
           devices: current.devices.map((device) =>
-            device.id === deviceId ? { ...device, programArtifactId: nextArtifact.id } : device,
+            device.id === deviceId
+              ? {
+                  ...device,
+                  programArtifactId: nextArtifact.id,
+                  ...(program
+                    ? { editableProgram: createEditableProgramSnapshot(nextArtifact.id, program, now) }
+                    : { editableProgram: undefined }),
+                }
+              : device,
           ),
         };
       });
@@ -749,6 +800,47 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       }));
       setArtifactUploadState((current) => ({ ...current, [deviceId]: 'failed' }));
     }
+  }
+
+  function openDeviceEditor(deviceId: DeviceId) {
+    const device = modelRef.current.project.devices.find((candidate) => candidate.id === deviceId);
+    if (!device || !getActiveEditableProgram(device)) {
+      return;
+    }
+    setEditorDeviceId(deviceId);
+  }
+
+  function saveEditedProgram(deviceId: DeviceId, nextProgram: DeviceEditableProgram) {
+    const now = new Date().toISOString();
+    updateProject((current) => ({
+      ...current,
+      updatedAt: now,
+      devices: current.devices.map((device) => {
+        if (device.id !== deviceId || !device.programArtifactId) {
+          return device;
+        }
+        const currentProgram = getActiveEditableProgram(device);
+        const revision = currentProgram ? currentProgram.revision + 1 : 1;
+        return {
+          ...device,
+          editableProgram: {
+            ...nextProgram,
+            baseArtifactId: device.programArtifactId,
+            revision,
+            updatedAt: now,
+          },
+        };
+      }),
+    }));
+    setEditorDeviceId(null);
+    setDisplaySnapshots((current) => removeDisplaySnapshot(current, deviceId));
+    setRuntimeErrorByDevice((current) => {
+      if (!(deviceId in current)) {
+        return current;
+      }
+      const { [deviceId]: _removed, ...rest } = current;
+      return rest;
+    });
   }
 
   function handleRuntimeRadioPacket(deviceId: DeviceId, packet: RuntimeRadioPacket): RoutedRadioDelivery[] {
@@ -1894,6 +1986,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   onResetRuntime={resetSelectedDevice}
                   onDeleteNode={deleteSelectedNode}
                   onArtifactUpload={uploadArtifactForDevice}
+                  onOpenEditor={openDeviceEditor}
                   isRenaming={renameTarget?.type === 'device' && renameTarget.id === selectedDevice.id}
                   renameDraft={renameDraft}
                   onRenameDraftChange={setRenameDraft}
@@ -2004,6 +2097,14 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           />
         </div>
       </div>
+      {editorDevice && activeEditorProgram ? (
+        <DeviceCodeEditorModal
+          deviceName={editorDevice.name}
+          editableProgram={activeEditorProgram}
+          onClose={() => setEditorDeviceId(null)}
+          onSave={(nextProgram) => saveEditedProgram(editorDevice.id, nextProgram)}
+        />
+      ) : null}
     </section>
   );
 }
@@ -2021,6 +2122,7 @@ function DeviceSelection({
   onResetRuntime,
   onDeleteNode,
   onArtifactUpload,
+  onOpenEditor,
   isRenaming,
   renameDraft,
   onRenameDraftChange,
@@ -2040,6 +2142,7 @@ function DeviceSelection({
   onResetRuntime: () => void;
   onDeleteNode: () => void;
   onArtifactUpload: (deviceId: DeviceId, file: File) => void;
+  onOpenEditor: (deviceId: DeviceId) => void;
   isRenaming: boolean;
   renameDraft: string;
   onRenameDraftChange: (next: string) => void;
@@ -2055,6 +2158,7 @@ function DeviceSelection({
   const assignedArtifact = device.programArtifactId
     ? project.artifacts.find((artifact) => artifact.id === device.programArtifactId)
     : undefined;
+  const editableProgram = getActiveEditableProgram(device);
 
   return (
     <>
@@ -2073,6 +2177,9 @@ function DeviceSelection({
         </button>
         <button type="button" onClick={onDeleteNode}>
           <span aria-hidden="true">🗑</span> Delete
+        </button>
+        <button type="button" onClick={() => onOpenEditor(device.id)} disabled={!editableProgram}>
+          <span aria-hidden="true">✎</span> Edit code
         </button>
       </div>
       {runtime ? (
@@ -2143,6 +2250,11 @@ function DeviceSelection({
         </label>
         <p>{device.programArtifactId ? `Assigned: ${artifactName(project, device.programArtifactId)}` : 'No code assigned yet'}</p>
         {assignedArtifact ? <p>Runtime source: {assignedArtifact.runtimeSource}</p> : null}
+        {editableProgram ? (
+          <p>
+            Editable source: <strong>{editableProgram.revision > 0 ? 'saved changes ready' : 'ready to edit'}</strong>
+          </p>
+        ) : null}
         {uploadIssue ? (
           <p className={uploadIssue.severity === 'error' ? 'hint hint--error' : 'hint'}>
             {uploadIssue.message}
@@ -2583,11 +2695,13 @@ function buildRuntimeNodeStates(
 
 function resolveDeviceRuntimeSource(project: SwarmProject, deviceId: DeviceId): RuntimeSource {
   const device = project.devices.find((candidate) => candidate.id === deviceId);
-  if (!device?.programArtifactId) {
+  if (!device) {
     return 'unknown';
   }
-  const artifact = project.artifacts.find((candidate) => candidate.id === device.programArtifactId);
-  return artifact?.runtimeSource ?? 'unknown';
+  const artifact = device.programArtifactId
+    ? project.artifacts.find((candidate) => candidate.id === device.programArtifactId)
+    : undefined;
+  return resolveEditableRuntimeSource(device, artifact);
 }
 
 export function translateRuntimeRadioPacketForRecipient(
@@ -2926,6 +3040,7 @@ async function resolveRuntimeSource(
 ): Promise<{
   runtimeSource: SwarmProject['artifacts'][number]['runtimeSource'];
   issue?: ArtifactUploadIssue;
+  program?: RuntimeProgram;
 }> {
   try {
     const extracted = await extractHexSource(filename, bytes, { decompressLzma: decompressLzmaSource });
@@ -2939,9 +3054,10 @@ async function resolveRuntimeSource(
           severity: 'warning',
           message: `Runtime source corrected from ${heuristicRuntimeSource} to ${extracted.runtimeSource}`,
         },
+        program: extracted.program,
       };
     }
-    return { runtimeSource: extracted.runtimeSource };
+    return { runtimeSource: extracted.runtimeSource, program: extracted.program };
   } catch (error) {
     return {
       runtimeSource: 'unknown',

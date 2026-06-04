@@ -178,6 +178,88 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.queryByText(/Unable to identify this HEX/)).not.toBeInTheDocument();
   }, 30000);
 
+  it('opens a code editor for uploaded MicroPython code and persists saved source edits', async () => {
+    render(<SwarmCanvasPanel />);
+
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+      target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
+    });
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit code' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
+
+    const editor = screen.getByRole('dialog', { name: 'Code editor for Node 1' });
+    expect(editor).toBeInTheDocument();
+    const sourceField = screen.getByLabelText('Editing main.py for Node 1');
+    fireEvent.change(sourceField, { target: { value: 'radio.send("edited")\n' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Code editor for Node 1' })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText(/Editable source:/)).toHaveTextContent('saved changes ready');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
+    expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("edited")\n');
+  });
+
+  it('keeps source edits forked per device when two devices share the same uploaded artifact', async () => {
+    Object.defineProperty(SVGSVGElement.prototype, 'setPointerCapture', {
+      configurable: true,
+      value: () => {},
+    });
+    Object.defineProperty(SVGSVGElement.prototype, 'releasePointerCapture', {
+      configurable: true,
+      value: () => {},
+    });
+    Object.defineProperty(SVGSVGElement.prototype, 'hasPointerCapture', {
+      configurable: true,
+      value: () => false,
+    });
+    const { container } = render(<SwarmCanvasPanel />);
+    addDeviceFromSwarmTools();
+
+    const sharedFile = makeUploadFile('shared.hex', makeMicroPythonHex('radio.send("shared")'));
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
+      target: { files: [sharedFile] },
+    });
+    await waitFor(() => expect(screen.getByText('Assigned: shared.hex')).toBeInTheDocument());
+
+    fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[0]!, {
+      button: 0,
+      pointerId: 1,
+      clientX: 0,
+      clientY: 0,
+    });
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+      target: { files: [sharedFile] },
+    });
+    await waitFor(() => expect(screen.getByText('Assigned: shared.hex')).toBeInTheDocument());
+
+    fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[1]!, {
+      button: 0,
+      pointerId: 2,
+      clientX: 0,
+      clientY: 0,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
+    fireEvent.change(screen.getByLabelText('Editing main.py for Node 2'), {
+      target: { value: 'radio.send("node-1")\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Code editor for Node 2' })).not.toBeInTheDocument());
+
+    fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[0]!, {
+      button: 0,
+      pointerId: 3,
+      clientX: 0,
+      clientY: 0,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
+    expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("shared")');
+  });
+
   it('keeps unextractable HEX assignments as non-executable artifacts', async () => {
     render(<SwarmCanvasPanel />);
 

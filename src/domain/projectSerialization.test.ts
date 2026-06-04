@@ -8,7 +8,7 @@ describe('project serialization', () => {
     const project = createBlankProject({ id: 'project-1', name: 'Radio swarm', now });
 
     expect(project).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       id: 'project-1',
       name: 'Radio swarm',
       createdAt: now,
@@ -28,7 +28,7 @@ describe('project serialization', () => {
   });
 
   it('rejects unsupported schema versions', () => {
-    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 2', '"schemaVersion": 99');
+    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 3', '"schemaVersion": 99');
 
     expect(() => deserializeProject(serialized)).toThrow('Unsupported project schema version: 99');
   });
@@ -54,11 +54,20 @@ describe('project serialization', () => {
     parsed.schemaVersion = 1;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(2);
+    expect(deserialized.schemaVersion).toBe(3);
     expect(deserialized.environmentSources[0]?.type).toBe('light');
   });
 
-  it('round-trips magnet sources in schema v2 projects', () => {
+  it('migrates schema v2 projects to the current schema version', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as Record<string, unknown>;
+    parsed.schemaVersion = 2;
+
+    const deserialized = deserializeProject(JSON.stringify(parsed));
+    expect(deserialized.schemaVersion).toBe(3);
+    expect(deserialized.devices[0]?.editableProgram).toBeDefined();
+  });
+
+  it('round-trips magnet sources and editable programs in schema v3 projects', () => {
     const project: SwarmProject = {
       ...makeProject(),
       environmentSources: [
@@ -104,6 +113,19 @@ function makeProject(): SwarmProject {
         name: 'Beacon A',
         position: { x: 120, y: 80 },
         programArtifactId: 'artifact-1',
+        editableProgram: {
+          runtimeSource: 'makecode-pxt',
+          baseArtifactId: 'artifact-1',
+          revision: 2,
+          updatedAt: '2026-05-16T04:22:00.000Z',
+          sourceFiles: {
+            'main.ts': 'radio.sendString("ping")',
+            'pxt.json': '{"name":"mc_beacon"}',
+          },
+          projectMetadata: {
+            editor: 'tsprj',
+          },
+        },
       },
     ],
     environmentSources: [

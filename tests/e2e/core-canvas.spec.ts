@@ -232,6 +232,28 @@ test.describe('core canvas workflows', () => {
     expect([...upstreamRequests]).toEqual([]);
   });
 
+  test('edits uploaded MicroPython code and keeps the saved source in the editor', async ({ page }) => {
+    await gotoCanvas(page);
+
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('button', { name: 'Edit code' })).toBeEnabled();
+
+    await page.getByRole('button', { name: 'Edit code' }).click();
+    await expect(page.getByRole('dialog', { name: 'Code editor for Node 1' })).toBeVisible();
+    const sourceField = page.getByLabel('Editing main.py for Node 1');
+    await expect(sourceField).toBeVisible();
+    await sourceField.fill('from microbit import *\ndisplay.scroll("edited")\n');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+
+    await expect(page.getByText(/Editable source:/)).toContainText('saved changes ready');
+    await page.getByRole('button', { name: 'Edit code' }).click();
+    await expect(page.getByLabel('Editing main.py for Node 1')).toHaveValue(
+      'from microbit import *\ndisplay.scroll("edited")\n',
+    );
+    await page.getByRole('button', { name: 'Close code editor' }).click();
+  });
+
   test('keeps telemetry behind the debug modal until opened', async ({ page }) => {
     await gotoCanvas(page);
 

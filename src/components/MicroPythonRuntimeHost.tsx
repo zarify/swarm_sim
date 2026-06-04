@@ -12,6 +12,10 @@ import {
   type LoadProjectRuntimeProgramsOptions,
   type PreparedDeviceRuntimeProgram,
 } from '../runtime/programLoader';
+import {
+  deviceProgramVersionKey,
+  resolveDeviceRuntimeSource as resolveEditableRuntimeSource,
+} from '../runtime/editableProgram';
 import type { RuntimeHostState, RuntimeResetRequest } from './runtimeHostControls';
 import type {
   MicrobitRuntimeAdapter,
@@ -177,7 +181,7 @@ export function MicroPythonRuntimeHost({
     () =>
       project.devices.filter((device) => {
         const artifact = project.artifacts.find((candidate) => candidate.id === device.programArtifactId);
-        return artifact?.runtimeSource === 'micropython';
+        return resolveEditableRuntimeSource(device, artifact) === 'micropython';
       }),
     [project],
   );
@@ -198,7 +202,12 @@ export function MicroPythonRuntimeHost({
   useEffect(() => {
     loadRequestId.current += 1;
     setIsLoading(false);
-    const activeArtifactIds = new Map(devices.map((device) => [device.id, device.programArtifactId]));
+    const activeArtifactIds = new Map(
+      devices.flatMap((device) => {
+        const key = deviceProgramVersionKey(device);
+        return key ? [[device.id, key] as const] : [];
+      }),
+    );
     for (const [deviceId, adapter] of adapters.current.entries()) {
       const activeArtifactId = activeArtifactIds.get(deviceId);
       if (!activeArtifactId || adapterArtifactIds.current.get(deviceId) !== activeArtifactId) {
@@ -224,7 +233,11 @@ export function MicroPythonRuntimeHost({
       return next.size === current.size ? current : next;
     });
     setLoadResults((current) =>
-      current.filter((result) => activeArtifactIds.get(result.deviceId) === result.artifactId),
+      current.filter(
+        (result) =>
+          activeArtifactIds.has(result.deviceId) &&
+          devices.find((device) => device.id === result.deviceId)?.programArtifactId === result.artifactId,
+      ),
     );
   }, [devices]);
 
@@ -442,7 +455,10 @@ export function MicroPythonRuntimeHost({
             }
             adapters.current.set(prepared.device.id, adapter);
             requestAdapters.push({ deviceId: prepared.device.id, adapter });
-            adapterArtifactIds.current.set(prepared.device.id, prepared.artifact.id);
+            adapterArtifactIds.current.set(
+              prepared.device.id,
+              deviceProgramVersionKey(prepared.device) ?? prepared.artifact.id,
+            );
             adapterRadioSinkUnsubscribes.current.get(prepared.device.id)?.();
             adapterRadioSinkUnsubscribes.current.set(
               prepared.device.id,
@@ -644,7 +660,7 @@ export function MicroPythonRuntimeHost({
       if (!device.programArtifactId) {
         return false;
       }
-      return adapterArtifactIds.current.get(device.id) !== device.programArtifactId;
+      return adapterArtifactIds.current.get(device.id) !== deviceProgramVersionKey(device);
     });
     if (!needsPrepare) {
       return;

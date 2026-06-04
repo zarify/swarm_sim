@@ -1,6 +1,7 @@
 import {
   defaultEnvironmentSourceName,
   PROJECT_SCHEMA_VERSION,
+  type DeviceEditableProgram,
   type EnvironmentSource,
   type ProgramArtifact,
   type SwarmProject,
@@ -38,7 +39,7 @@ function parseSerializedProject(value: unknown): SwarmProject {
   const project = expectRecord(value, 'project');
   const schemaVersion = expectNumber(project.schemaVersion, 'schemaVersion');
 
-  if (schemaVersion !== 1 && schemaVersion !== PROJECT_SCHEMA_VERSION) {
+  if (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== PROJECT_SCHEMA_VERSION) {
     throw new Error(`Unsupported project schema version: ${schemaVersion}`);
   }
 
@@ -72,6 +73,7 @@ function parseArtifact(value: unknown): ProgramArtifact {
 function parseDevice(value: unknown): VirtualDevice {
   const device = expectRecord(value, 'device');
   const programArtifactId = device.programArtifactId;
+  const editableProgram = device.editableProgram;
 
   return {
     id: expectString(device.id, 'device.id'),
@@ -80,6 +82,9 @@ function parseDevice(value: unknown): VirtualDevice {
     ...(programArtifactId === undefined
       ? {}
       : { programArtifactId: expectString(programArtifactId, 'device.programArtifactId') }),
+    ...(editableProgram === undefined
+      ? {}
+      : { editableProgram: parseEditableProgram(editableProgram, 'device.editableProgram') }),
   };
 }
 
@@ -157,6 +162,38 @@ function parseRuntimeSource(value: unknown): RuntimeSource {
   throw new Error(`Invalid runtime source: ${runtimeSource}`);
 }
 
+function parseEditableProgram(value: unknown, label: string): DeviceEditableProgram {
+  const editableProgram = expectRecord(value, label);
+  const runtimeSource = parseRuntimeSource(editableProgram.runtimeSource);
+  if (runtimeSource === 'unknown') {
+    throw new Error(`Invalid editable program runtime source: ${runtimeSource}`);
+  }
+
+  const base = {
+    runtimeSource,
+    baseArtifactId: expectString(editableProgram.baseArtifactId, `${label}.baseArtifactId`),
+    revision: expectNumber(editableProgram.revision, `${label}.revision`),
+    updatedAt: expectString(editableProgram.updatedAt, `${label}.updatedAt`),
+  };
+
+  if (runtimeSource === 'micropython') {
+    return {
+      ...base,
+      runtimeSource,
+      files: parseStringRecord(editableProgram.files, `${label}.files`),
+    };
+  }
+
+  return {
+    ...base,
+    runtimeSource,
+    sourceFiles: parseStringRecord(editableProgram.sourceFiles, `${label}.sourceFiles`),
+    ...(editableProgram.projectMetadata === undefined
+      ? {}
+      : { projectMetadata: expectRecord(editableProgram.projectMetadata, `${label}.projectMetadata`) }),
+  };
+}
+
 function expectRecord(value: unknown, label: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error(`Expected ${label} to be an object`);
@@ -171,6 +208,18 @@ function expectArray(value: unknown, label: string): unknown[] {
   }
 
   return value;
+}
+
+function parseStringRecord(value: unknown, label: string): Record<string, string> {
+  const record = expectRecord(value, label);
+  const parsed: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(record)) {
+    if (typeof entry !== 'string') {
+      throw new Error(`Expected ${label}.${key} to be a string`);
+    }
+    parsed[key] = entry;
+  }
+  return parsed;
 }
 
 function expectString(value: unknown, label: string): string {
