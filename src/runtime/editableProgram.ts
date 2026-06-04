@@ -37,9 +37,9 @@ export function createEditableProgramSnapshot(
 }
 
 export function getActiveEditableProgram(
-  device: Pick<VirtualDevice, 'programArtifactId' | 'editableProgram'>,
+  device: Pick<VirtualDevice, 'locked' | 'programArtifactId' | 'editableProgram'>,
 ): DeviceEditableProgram | undefined {
-  if (!device.programArtifactId) {
+  if (!device.programArtifactId || device.locked) {
     return undefined;
   }
   const editableProgram = device.editableProgram;
@@ -50,14 +50,14 @@ export function getActiveEditableProgram(
 }
 
 export function resolveDeviceRuntimeSource(
-  device: Pick<VirtualDevice, 'programArtifactId' | 'editableProgram'>,
+  device: Pick<VirtualDevice, 'locked' | 'programArtifactId' | 'editableProgram'>,
   artifact?: Pick<ProgramArtifact, 'runtimeSource'>,
 ): RuntimeSource {
   return getActiveEditableProgram(device)?.runtimeSource ?? artifact?.runtimeSource ?? 'unknown';
 }
 
 export function deviceProgramVersionKey(
-  device: Pick<VirtualDevice, 'programArtifactId' | 'editableProgram'>,
+  device: Pick<VirtualDevice, 'locked' | 'programArtifactId' | 'editableProgram'>,
 ): string | undefined {
   if (!device.programArtifactId) {
     return undefined;

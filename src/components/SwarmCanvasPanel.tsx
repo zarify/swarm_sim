@@ -12,6 +12,7 @@ import {
   type Point,
   type ProjectSummary,
   type SwarmProject,
+  type VirtualDevice,
 } from '../domain/project';
 import { SwarmRuntimeHosts } from './SwarmRuntimeHosts';
 import { evaluateArtifactRuntimeReadiness } from '../runtime/artifactReadiness';
@@ -443,7 +444,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }
   }
 
-  function addDevice() {
+  function addDevice(options: { locked: boolean } = { locked: false }) {
     const deviceNumber = nextDeviceNumber.current;
     nextDeviceNumber.current += 1;
     const id = `device-${deviceNumber}`;
@@ -456,6 +457,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           {
             id,
             name: `Node ${deviceNumber}`,
+            ...(options.locked ? { locked: true } : {}),
             position: defaultNewDevicePosition(current.devices),
           },
         ],
@@ -680,6 +682,16 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     if (!device) {
       return;
     }
+    if (!canAssignDeviceCode(device, artifactUploadState[deviceId])) {
+      setArtifactUploadIssues((current) => ({
+        ...current,
+        [deviceId]: {
+          severity: 'warning',
+          message: `${device.name} is locked after its first successful code upload.`,
+        },
+      }));
+      return;
+    }
     const assignedArtifact = device.programArtifactId
       ? modelRef.current.project.artifacts.find((artifact) => artifact.id === device.programArtifactId)
       : undefined;
@@ -758,7 +770,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               ? {
                   ...device,
                   programArtifactId: nextArtifact.id,
-                  ...(program
+                  ...(program && !device.locked
                     ? { editableProgram: createEditableProgramSnapshot(nextArtifact.id, program, now) }
                     : { editableProgram: undefined }),
                 }
@@ -816,7 +828,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       ...current,
       updatedAt: now,
       devices: current.devices.map((device) => {
-        if (device.id !== deviceId || !device.programArtifactId) {
+        if (device.id !== deviceId || !device.programArtifactId || device.locked) {
           return device;
         }
         const currentProgram = getActiveEditableProgram(device);
@@ -1290,7 +1302,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           result.artifactId === selectedDevice.programArtifactId,
       )
     : undefined;
-  const canDropHexToSidebar = Boolean(selectedDevice);
+  const canDropHexToSidebar = Boolean(
+    selectedDevice && canAssignDeviceCode(selectedDevice, artifactUploadState[selectedDevice.id]),
+  );
 
   function handleSidebarDragOver(event: DragEvent<HTMLElement>) {
     if (!canDropHexToSidebar || !event.dataTransfer.types.includes('Files')) {
@@ -1603,8 +1617,11 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           <div className="canvas-state-panel__section">
             <span className="metric-label">Swarm tools</span>
             <div className="canvas-state-panel__actions">
-              <button type="button" onClick={addDevice}>
+              <button type="button" onClick={() => addDevice()}>
                 Add device
+              </button>
+              <button type="button" onClick={() => addDevice({ locked: true })}>
+                Add locked device
               </button>
               {FEATURE_FLAGS.light ? (
                 <button type="button" onClick={() => addSource('light')}>
@@ -1987,6 +2004,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   onDeleteNode={deleteSelectedNode}
                   onArtifactUpload={uploadArtifactForDevice}
                   onOpenEditor={openDeviceEditor}
+                  canAssignCode={canAssignDeviceCode(selectedDevice, artifactUploadState[selectedDevice.id])}
                   isRenaming={renameTarget?.type === 'device' && renameTarget.id === selectedDevice.id}
                   renameDraft={renameDraft}
                   onRenameDraftChange={setRenameDraft}
@@ -2123,6 +2141,7 @@ function DeviceSelection({
   onDeleteNode,
   onArtifactUpload,
   onOpenEditor,
+  canAssignCode,
   isRenaming,
   renameDraft,
   onRenameDraftChange,
@@ -2143,6 +2162,7 @@ function DeviceSelection({
   onDeleteNode: () => void;
   onArtifactUpload: (deviceId: DeviceId, file: File) => void;
   onOpenEditor: (deviceId: DeviceId) => void;
+  canAssignCode: boolean;
   isRenaming: boolean;
   renameDraft: string;
   onRenameDraftChange: (next: string) => void;
@@ -2159,11 +2179,19 @@ function DeviceSelection({
     ? project.artifacts.find((artifact) => artifact.id === device.programArtifactId)
     : undefined;
   const editableProgram = getActiveEditableProgram(device);
+  const locked = device.locked === true;
 
   return (
     <>
       <SelectionNameEditor
         displayName={device.name}
+        badge={
+          locked ? (
+            <span className="selection-name-badge" aria-label="Locked device">
+              <span aria-hidden="true">🔒</span> Locked
+            </span>
+          ) : undefined
+        }
         isRenaming={isRenaming}
         renameDraft={renameDraft}
         onRenameDraftChange={onRenameDraftChange}
@@ -2178,9 +2206,11 @@ function DeviceSelection({
         <button type="button" onClick={onDeleteNode}>
           <span aria-hidden="true">🗑</span> Delete
         </button>
-        <button type="button" onClick={() => onOpenEditor(device.id)} disabled={!editableProgram}>
-          <span aria-hidden="true">✎</span> Edit code
-        </button>
+        {!locked ? (
+          <button type="button" onClick={() => onOpenEditor(device.id)} disabled={!editableProgram}>
+            <span aria-hidden="true">✎</span> Edit code
+          </button>
+        ) : null}
       </div>
       {runtime ? (
         <>
@@ -2234,20 +2264,32 @@ function DeviceSelection({
         </div>
       </details>
       <div className="selection-artifact-block">
-        <label className="artifact-field artifact-field--compact">
-          Load code onto {device.name}
-          <input
-            type="file"
-            accept=".hex"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) {
-                void onArtifactUpload(device.id, file);
-              }
-              event.currentTarget.value = '';
-            }}
-          />
-        </label>
+        {locked ? (
+          <p>
+            <strong>Locked device.</strong>{' '}
+            {device.programArtifactId
+              ? 'Source is hidden and this device cannot be overwritten.'
+              : 'The first successful code upload will be its only assignment.'}
+          </p>
+        ) : null}
+        {canAssignCode ? (
+          <label className="artifact-field artifact-field--compact">
+            Load code onto {device.name}
+            <input
+              type="file"
+              accept=".hex"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  void onArtifactUpload(device.id, file);
+                }
+                event.currentTarget.value = '';
+              }}
+            />
+          </label>
+        ) : locked && uploadState !== 'uploading' ? (
+          <p>Locked after first code upload.</p>
+        ) : null}
         <p>{device.programArtifactId ? `Assigned: ${artifactName(project, device.programArtifactId)}` : 'No code assigned yet'}</p>
         {assignedArtifact ? <p>Runtime source: {assignedArtifact.runtimeSource}</p> : null}
         {editableProgram ? (
@@ -2387,6 +2429,7 @@ function SourceSelection({
 
 function SelectionNameEditor({
   displayName,
+  badge,
   isRenaming,
   renameDraft,
   onRenameDraftChange,
@@ -2395,6 +2438,7 @@ function SelectionNameEditor({
   onCancelRename,
 }: {
   displayName: string;
+  badge?: ReactElement;
   isRenaming: boolean;
   renameDraft: string;
   onRenameDraftChange: (next: string) => void;
@@ -2433,11 +2477,25 @@ function SelectionNameEditor({
       <strong className="selection-name" title={displayName}>
         {sidebarName}
       </strong>
+      {badge}
       <button type="button" className="selection-name-edit" aria-label="Rename selected node" onClick={onBeginRename}>
         ✎
       </button>
     </div>
   );
+}
+
+function canAssignDeviceCode(
+  device: Pick<VirtualDevice, 'locked' | 'programArtifactId'>,
+  uploadState?: ArtifactUploadState,
+): boolean {
+  if (!device.locked) {
+    return true;
+  }
+  if (uploadState === 'uploading') {
+    return false;
+  }
+  return !device.programArtifactId;
 }
 
 function createDemoProject(): SwarmProject {

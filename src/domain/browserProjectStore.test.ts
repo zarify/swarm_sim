@@ -25,6 +25,26 @@ describe('browserProjectStore fallback', () => {
     await store.remove('layout-1');
     expect(await store.list()).toEqual([]);
   });
+
+  it('preserves locked devices without editable source through storage fallback', async () => {
+    const store = createBrowserProjectStore({
+      indexedDbFactory: undefined,
+      storage: createMemoryStorage(),
+    });
+    const project = makeProject('layout-locked', 'Locked layout', '2026-05-18T01:10:00.000Z', true);
+
+    await store.save(project);
+
+    await expect(store.load('layout-locked')).resolves.toMatchObject({
+      devices: [
+        {
+          id: 'layout-locked-device',
+          locked: true,
+          programArtifactId: 'layout-locked-artifact',
+        },
+      ],
+    });
+  });
 });
 
 function createMemoryStorage(): Storage {
@@ -45,7 +65,7 @@ function createMemoryStorage(): Storage {
   };
 }
 
-function makeProject(id: string, name: string, now: string): SwarmProject {
+function makeProject(id: string, name: string, now: string, locked = false): SwarmProject {
   return {
     ...createBlankProject({ id, name, now }),
     artifacts: [
@@ -62,6 +82,7 @@ function makeProject(id: string, name: string, now: string): SwarmProject {
       {
         id: `${id}-device`,
         name: 'Node',
+        ...(locked ? { locked: true } : {}),
         position: { x: 20, y: 30 },
         programArtifactId: `${id}-artifact`,
       },

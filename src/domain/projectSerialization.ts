@@ -39,7 +39,12 @@ function parseSerializedProject(value: unknown): SwarmProject {
   const project = expectRecord(value, 'project');
   const schemaVersion = expectNumber(project.schemaVersion, 'schemaVersion');
 
-  if (schemaVersion !== 1 && schemaVersion !== 2 && schemaVersion !== PROJECT_SCHEMA_VERSION) {
+  if (
+    schemaVersion !== 1 &&
+    schemaVersion !== 2 &&
+    schemaVersion !== 3 &&
+    schemaVersion !== PROJECT_SCHEMA_VERSION
+  ) {
     throw new Error(`Unsupported project schema version: ${schemaVersion}`);
   }
 
@@ -74,15 +79,19 @@ function parseDevice(value: unknown): VirtualDevice {
   const device = expectRecord(value, 'device');
   const programArtifactId = device.programArtifactId;
   const editableProgram = device.editableProgram;
+  const locked = expectOptionalBoolean(device.locked, 'device.locked') ?? false;
+  const parsedProgramArtifactId =
+    programArtifactId === undefined
+      ? undefined
+      : expectString(programArtifactId, 'device.programArtifactId');
 
   return {
     id: expectString(device.id, 'device.id'),
     name: expectString(device.name, 'device.name'),
     position: parsePoint(device.position, 'device.position'),
-    ...(programArtifactId === undefined
-      ? {}
-      : { programArtifactId: expectString(programArtifactId, 'device.programArtifactId') }),
-    ...(editableProgram === undefined
+    ...(locked ? { locked: true } : {}),
+    ...(parsedProgramArtifactId === undefined ? {} : { programArtifactId: parsedProgramArtifactId }),
+    ...(locked || editableProgram === undefined
       ? {}
       : { editableProgram: parseEditableProgram(editableProgram, 'device.editableProgram') }),
   };
@@ -225,6 +234,17 @@ function parseStringRecord(value: unknown, label: string): Record<string, string
 function expectString(value: unknown, label: string): string {
   if (typeof value !== 'string' || value.length === 0) {
     throw new Error(`Expected ${label} to be a non-empty string`);
+  }
+
+  return value;
+}
+
+function expectOptionalBoolean(value: unknown, label: string): boolean | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'boolean') {
+    throw new Error(`Expected ${label} to be a boolean`);
   }
 
   return value;

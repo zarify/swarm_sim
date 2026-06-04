@@ -135,6 +135,40 @@ describe('project runtime program loading', () => {
     }
     expect(new TextDecoder().decode(microPython.filesystem['main.py'])).toContain('edited');
   });
+
+  it('ignores persisted editable source for locked devices and reloads from the assigned HEX', async () => {
+    const flashed: RuntimeProgram[] = [];
+    const project = makeProject();
+    project.devices[0] = {
+      ...project.devices[0]!,
+      locked: true,
+      editableProgram: {
+        runtimeSource: 'makecode-pxt',
+        baseArtifactId: 'artifact-mc',
+        revision: 1,
+        updatedAt: now,
+        sourceFiles: {
+          'main.ts': 'radio.sendString("edited")',
+        },
+      },
+    };
+
+    const results = await loadProjectRuntimePrograms(project, {
+      createAdapter: ({ runtimeSource }) => makeAdapter(runtimeSource, flashed),
+    });
+
+    expect(results[0]).toMatchObject({
+      status: 'loaded',
+      runtimeSource: 'makecode-pxt',
+    });
+    const makeCode = flashed[0];
+    expect(makeCode?.source).toBe('makecode-pxt');
+    if (makeCode?.source !== 'makecode-pxt') {
+      throw new Error('Expected MakeCode program');
+    }
+    expect(makeCode.sourceFiles?.['main.ts']).toContain('ping');
+    expect(makeCode.sourceFiles?.['main.ts']).not.toContain('edited');
+  });
 });
 
 function makeProject(): SwarmProject {

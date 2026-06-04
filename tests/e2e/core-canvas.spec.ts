@@ -30,6 +30,11 @@ async function addDeviceFromSwarmTools(page: Page) {
   await page.getByRole('button', { name: 'Add device' }).click();
 }
 
+async function addLockedDeviceFromSwarmTools(page: Page) {
+  await openSwarmTools(page);
+  await page.getByRole('button', { name: 'Add locked device' }).click();
+}
+
 async function addLightFromSwarmTools(page: Page) {
   await openSwarmTools(page);
   await page.getByRole('button', { name: 'Add light' }).click();
@@ -98,6 +103,24 @@ test.describe('core canvas workflows', () => {
     await addDeviceFromSwarmTools(page);
 
     await expect(page.locator('.microbit-node')).toHaveCount(2);
+  });
+
+  test('creates a locked device that hides code inspection and further uploads after first assignment', async ({ page }) => {
+    await gotoCanvas(page);
+
+    await addLockedDeviceFromSwarmTools(page);
+    await expect(page.locator('.selection-name-badge')).toContainText('Locked');
+    await expect(
+      page.getByText('The first successful code upload will be its only assignment.'),
+    ).toBeVisible();
+
+    await page.getByLabel(/Load code onto Node 2/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Locked after first code upload.')).toBeVisible();
+    await expect(page.getByText('Source is hidden and this device cannot be overwritten.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Edit code' })).toHaveCount(0);
+    await expect(page.getByLabel(/Load code onto Node 2/)).toHaveCount(0);
   });
 
   test('adds a magnet source and shows magnetic readings on devices', async ({ page }) => {

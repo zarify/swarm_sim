@@ -1,6 +1,6 @@
 import type { ArtifactKind, RuntimeSource } from '../runtime/types';
 
-export const PROJECT_SCHEMA_VERSION = 3;
+export const PROJECT_SCHEMA_VERSION = 4;
 
 export type ProjectId = string;
 export type DeviceId = string;
@@ -47,6 +47,7 @@ export interface VirtualDevice {
   id: DeviceId;
   name: string;
   position: Point;
+  locked?: boolean;
   programArtifactId?: ArtifactId;
   editableProgram?: DeviceEditableProgram;
 }

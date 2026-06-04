@@ -26,6 +26,11 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
   }
 
+  function addLockedDeviceFromSwarmTools() {
+    openSwarmTools();
+    fireEvent.click(screen.getByRole('button', { name: 'Add locked device' }));
+  }
+
   it('renders the spatial canvas with reset-only runtime controls', () => {
     const { container } = render(<SwarmCanvasPanel />);
 
@@ -89,6 +94,16 @@ describe('SwarmCanvasPanel', () => {
 
     expect(screen.getAllByText('Node 3').length).toBeGreaterThan(0);
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(3);
+  });
+
+  it('adds locked devices with a visible lock badge in the selection card', () => {
+    const { container } = render(<SwarmCanvasPanel />);
+
+    addLockedDeviceFromSwarmTools();
+
+    expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
+    expect(screen.getByText('Locked', { selector: '.selection-name-badge' })).toBeInTheDocument();
+    expect(screen.getByText('The first successful code upload will be its only assignment.')).toBeInTheDocument();
   });
 
   it('handles magnet source controls according to feature flags', () => {
@@ -318,6 +333,45 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument();
     expect(screen.queryByText('Assigned: second.hex')).not.toBeInTheDocument();
     confirmSpy.mockRestore();
+  });
+
+  it('allows one successful upload to a locked device, then hides code inspection and overwrite UI', async () => {
+    render(<SwarmCanvasPanel />);
+
+    addLockedDeviceFromSwarmTools();
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
+      target: { files: [makeUploadFile('mystery.hex', makeMicroPythonHex('radio.send("mystery")'))] },
+    });
+
+    await waitFor(() => expect(screen.getByText('Assigned: mystery.hex')).toBeInTheDocument());
+    expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Edit code' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Load code onto Node 2/)).not.toBeInTheDocument();
+    expect(screen.getByText('Locked after first code upload.')).toBeInTheDocument();
+    expect(screen.getByText('Source is hidden and this device cannot be overwritten.')).toBeInTheDocument();
+  });
+
+  it('blocks later overwrite attempts on locked devices through sidebar drop', async () => {
+    render(<SwarmCanvasPanel />);
+
+    addLockedDeviceFromSwarmTools();
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
+      target: { files: [makeUploadFile('first.hex', makeMicroPythonHex('radio.send("one")'))] },
+    });
+    await waitFor(() => expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument());
+
+    fireEvent.drop(screen.getByLabelText('Canvas controls and selection details'), {
+      dataTransfer: {
+        files: [makeUploadFile('second.hex', makeMicroPythonHex('radio.send("two")'))],
+        types: ['Files'],
+      },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText('Node 2 is locked after its first successful code upload.')).toBeInTheDocument(),
+    );
+    expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument();
+    expect(screen.queryByText('Assigned: second.hex')).not.toBeInTheDocument();
   });
 
   it('deletes the selected device node from the canvas', () => {

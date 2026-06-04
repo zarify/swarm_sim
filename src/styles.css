@@ -974,6 +974,7 @@ button:disabled {
 .selection-name-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
 }
@@ -1012,6 +1013,19 @@ button:disabled {
 .selection-name-input:focus {
   outline: 1px solid rgba(105, 247, 255, 0.65);
   outline-offset: 1px;
+}
+
+.selection-name-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(255, 191, 71, 0.45);
+  padding: 3px 8px;
+  color: var(--amber);
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .selection-card p,
