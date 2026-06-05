@@ -42,15 +42,34 @@ export function deduplicateProjectArtifacts(project: SwarmProject): SwarmProject
   }
 
   const devices = project.devices.map((device) => {
+    const nextEditableProgram =
+      device.editableProgram &&
+      remappedArtifactIds.has(device.editableProgram.baseArtifactId) &&
+      remappedArtifactIds.get(device.editableProgram.baseArtifactId) !== device.editableProgram.baseArtifactId
+        ? {
+            ...device.editableProgram,
+            baseArtifactId:
+              remappedArtifactIds.get(device.editableProgram.baseArtifactId) ??
+              device.editableProgram.baseArtifactId,
+          }
+        : device.editableProgram;
     if (!device.programArtifactId) {
-      return device;
+      if (nextEditableProgram === device.editableProgram) {
+        return device;
+      }
+      devicesChanged = true;
+      return { ...device, editableProgram: nextEditableProgram };
     }
     const mappedId = remappedArtifactIds.get(device.programArtifactId) ?? device.programArtifactId;
-    if (mappedId === device.programArtifactId) {
+    if (mappedId === device.programArtifactId && nextEditableProgram === device.editableProgram) {
       return device;
     }
     devicesChanged = true;
-    return { ...device, programArtifactId: mappedId };
+    return {
+      ...device,
+      programArtifactId: mappedId,
+      ...(nextEditableProgram === undefined ? {} : { editableProgram: nextEditableProgram }),
+    };
   });
 
   const referencedArtifactIds = new Set(

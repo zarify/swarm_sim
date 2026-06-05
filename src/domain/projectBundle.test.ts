@@ -38,6 +38,40 @@ describe('project bundle codec', () => {
     expect([...artifactsById.get('artifact-mc')!.bytes]).toEqual([...encoder.encode(':10000000MAKECODE')]);
     expect([...artifactsById.get('artifact-mp')!.bytes]).toEqual([...encoder.encode(':10000000MICROPY')]);
   });
+
+  it('round-trips locked devices without restoring editable source', async () => {
+    const project: SwarmProject = {
+      ...createBlankProject({ id: 'project-3', name: 'Locked bundle', now }),
+      artifacts: [
+        {
+          id: 'artifact-locked',
+          name: 'locked.hex',
+          artifactKind: 'hex',
+          runtimeSource: 'micropython',
+          bytes: encoder.encode(':10000000LOCKED'),
+          createdAt: now,
+        },
+      ],
+      devices: [
+        {
+          id: 'device-locked',
+          name: 'Mystery node',
+          locked: true,
+          position: { x: 120, y: 80 },
+          programArtifactId: 'artifact-locked',
+        },
+      ],
+    };
+
+    const reopened = await decodeProjectBundle(await encodeProjectBundle(project));
+
+    expect(reopened.devices[0]).toMatchObject({
+      id: 'device-locked',
+      locked: true,
+      programArtifactId: 'artifact-locked',
+    });
+    expect(reopened.devices[0]?.editableProgram).toBeUndefined();
+  });
 });
 
 function makeProjectWithDuplicateArtifacts(): SwarmProject {

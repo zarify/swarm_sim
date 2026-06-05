@@ -86,6 +86,89 @@ describe('project runtime program loading', () => {
       diagnostic: 'MakeCode adapter unavailable',
     });
   });
+
+  it('prefers persisted editable device programs over re-extracting artifact bytes', async () => {
+    const flashed: RuntimeProgram[] = [];
+    const project = makeProject();
+    project.devices[0] = {
+      ...project.devices[0]!,
+      editableProgram: {
+        runtimeSource: 'makecode-pxt',
+        baseArtifactId: 'artifact-mc',
+        revision: 1,
+        updatedAt: now,
+        sourceFiles: {
+          'main.ts': 'radio.sendString("edited")',
+          'pxt.json': '{"name":"edited"}',
+        },
+      },
+    };
+    project.devices[1] = {
+      ...project.devices[1]!,
+      editableProgram: {
+        runtimeSource: 'micropython',
+        baseArtifactId: 'artifact-mp',
+        revision: 3,
+        updatedAt: now,
+        files: {
+          'main.py': 'radio.send("edited")',
+        },
+      },
+    };
+
+    const results = await loadProjectRuntimePrograms(project, {
+      createAdapter: ({ runtimeSource }) => makeAdapter(runtimeSource, flashed),
+    });
+
+    expect(results.map((result) => result.status)).toEqual(['loaded', 'loaded', 'skipped']);
+    const makeCode = flashed[0];
+    expect(makeCode?.source).toBe('makecode-pxt');
+    if (makeCode?.source !== 'makecode-pxt') {
+      throw new Error('Expected edited MakeCode program');
+    }
+    expect(makeCode.sourceFiles?.['main.ts']).toContain('edited');
+
+    const microPython = flashed[1];
+    expect(microPython?.source).toBe('micropython');
+    if (microPython?.source !== 'micropython') {
+      throw new Error('Expected edited MicroPython program');
+    }
+    expect(new TextDecoder().decode(microPython.filesystem['main.py'])).toContain('edited');
+  });
+
+  it('ignores persisted editable source for locked devices and reloads from the assigned HEX', async () => {
+    const flashed: RuntimeProgram[] = [];
+    const project = makeProject();
+    project.devices[0] = {
+      ...project.devices[0]!,
+      locked: true,
+      editableProgram: {
+        runtimeSource: 'makecode-pxt',
+        baseArtifactId: 'artifact-mc',
+        revision: 1,
+        updatedAt: now,
+        sourceFiles: {
+          'main.ts': 'radio.sendString("edited")',
+        },
+      },
+    };
+
+    const results = await loadProjectRuntimePrograms(project, {
+      createAdapter: ({ runtimeSource }) => makeAdapter(runtimeSource, flashed),
+    });
+
+    expect(results[0]).toMatchObject({
+      status: 'loaded',
+      runtimeSource: 'makecode-pxt',
+    });
+    const makeCode = flashed[0];
+    expect(makeCode?.source).toBe('makecode-pxt');
+    if (makeCode?.source !== 'makecode-pxt') {
+      throw new Error('Expected MakeCode program');
+    }
+    expect(makeCode.sourceFiles?.['main.ts']).toContain('ping');
+    expect(makeCode.sourceFiles?.['main.ts']).not.toContain('edited');
+  });
 });
 
 function makeProject(): SwarmProject {

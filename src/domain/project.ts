@@ -1,6 +1,6 @@
 import type { ArtifactKind, RuntimeSource } from '../runtime/types';
 
-export const PROJECT_SCHEMA_VERSION = 2;
+export const PROJECT_SCHEMA_VERSION = 4;
 
 export type ProjectId = string;
 export type DeviceId = string;
@@ -21,11 +21,35 @@ export interface ProgramArtifact {
   createdAt: string;
 }
 
+interface DeviceEditableProgramBase {
+  runtimeSource: Exclude<RuntimeSource, 'unknown'>;
+  baseArtifactId: ArtifactId;
+  revision: number;
+  updatedAt: string;
+}
+
+export interface MicroPythonDeviceEditableProgram extends DeviceEditableProgramBase {
+  runtimeSource: 'micropython';
+  files: Record<string, string>;
+}
+
+export interface MakeCodeDeviceEditableProgram extends DeviceEditableProgramBase {
+  runtimeSource: 'makecode-pxt';
+  sourceFiles: Record<string, string>;
+  projectMetadata?: Record<string, unknown>;
+}
+
+export type DeviceEditableProgram =
+  | MicroPythonDeviceEditableProgram
+  | MakeCodeDeviceEditableProgram;
+
 export interface VirtualDevice {
   id: DeviceId;
   name: string;
   position: Point;
+  locked?: boolean;
   programArtifactId?: ArtifactId;
+  editableProgram?: DeviceEditableProgram;
 }
 
 interface EnvironmentSourceBase {

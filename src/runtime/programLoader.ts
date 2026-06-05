@@ -1,4 +1,8 @@
 import type { DeviceId, ProgramArtifact, SwarmProject, VirtualDevice } from '../domain/project';
+import {
+  buildRuntimeProgramFromEditableProgram,
+  getActiveEditableProgram,
+} from './editableProgram';
 import { extractHexSource, type ExtractHexSourceOptions } from './sourceExtraction';
 import type { MicrobitRuntimeAdapter, RuntimeProgram } from './runtimeAdapter';
 import type { RuntimeSource } from './types';
@@ -52,6 +56,16 @@ export async function prepareDeviceRuntimeProgram(
   }
 
   try {
+    const editableProgram = getActiveEditableProgram(device);
+    if (editableProgram) {
+      return {
+        device,
+        artifact,
+        program: buildRuntimeProgramFromEditableProgram(editableProgram, artifact),
+        runtimeSource: editableProgram.runtimeSource,
+      };
+    }
+
     const extracted = await extractHexSource(artifact.name, artifact.bytes, options);
 
     if (artifact.runtimeSource !== 'unknown' && artifact.runtimeSource !== extracted.runtimeSource) {
