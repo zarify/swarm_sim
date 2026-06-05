@@ -292,6 +292,7 @@ test.describe('core canvas workflows', () => {
     const saveName = 'E2E Layout One';
     await page.addInitScript((layoutName) => {
       window.prompt = () => layoutName;
+      window.confirm = () => true;
     }, saveName);
 
     await gotoCanvas(page);
@@ -310,6 +311,44 @@ test.describe('core canvas workflows', () => {
 
     await loadLayoutButton.click();
     await expect(page.locator('.microbit-node')).toHaveCount(1);
+  });
+
+  test('restores the explicitly saved current canvas after a page reload', async ({ page }) => {
+    await gotoCanvas(page);
+
+    await addDeviceFromSwarmTools(page);
+    await expect(page.locator('.microbit-node')).toHaveCount(2);
+
+    await page.getByRole('button', { name: 'Save current canvas' }).click();
+    await expect(page.getByRole('status', { name: 'Current canvas status' })).toContainText(
+      'Saved for next session',
+    );
+
+    await page.reload();
+
+    await expect(page.locator('.microbit-node')).toHaveCount(2);
+    await expect(page.getByRole('status', { name: 'Current canvas status' })).toContainText(
+      'Saved for next session',
+    );
+  });
+
+  test('saves the current canvas after code is loaded and restores it after reload', async ({ page }) => {
+    await gotoCanvas(page);
+
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Save current canvas' }).click();
+    await expect(page.getByRole('status', { name: 'Current canvas status' })).toContainText(
+      'Saved for next session',
+    );
+
+    await page.reload();
+
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole('status', { name: 'Current canvas status' })).toContainText(
+      'Saved for next session',
+    );
   });
 
   test('deletes an individual saved layout from browser state', async ({ page }) => {
@@ -805,6 +844,7 @@ test.describe('core canvas workflows', () => {
     const saveName = 'MicroPython Persisted Layout';
     await page.addInitScript((layoutName) => {
       window.prompt = () => layoutName;
+      window.confirm = () => true;
     }, saveName);
 
     await gotoCanvas(page);

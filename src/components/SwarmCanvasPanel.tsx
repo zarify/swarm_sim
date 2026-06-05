@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type ChangeEvent, type DragEvent, type ReactElement } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type ReactElement,
+} from 'react';
 import { flushSync } from 'react-dom';
 import { zipSync } from 'fflate';
 import {
@@ -48,6 +55,8 @@ import type { MicroPythonRuntimeHostProps, RoutedRadioDelivery } from './MicroPy
 import type { RuntimeResetRequest } from './runtimeHostControls';
 import type { BrowserProjectStore } from '../domain/browserProjectStore';
 import { createBrowserProjectStore } from '../domain/browserProjectStore';
+import type { BrowserWorkingCopyStore } from '../domain/browserWorkingCopyStore';
+import { createBrowserWorkingCopyStore } from '../domain/browserWorkingCopyStore';
 import { decodeProjectBundle, encodeProjectBundle } from '../domain/projectBundle';
 import { findReusableArtifact } from '../domain/projectArtifacts';
 import { DeviceCodeEditorModal } from './DeviceCodeEditorModal';
@@ -167,7 +176,11 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const [renameTarget, setRenameTarget] = useState<RenamableSelection | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [editorDeviceId, setEditorDeviceId] = useState<DeviceId | null>(null);
+  const [hasUnsavedCanvasChanges, setHasUnsavedCanvasChanges] = useState(false);
+  const [hasSavedWorkingCopy, setHasSavedWorkingCopy] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const sidebarRef = useRef<HTMLElement | null>(null);
+  const bundleDropAreaRef = useRef<HTMLDivElement | null>(null);
   const modelRef = useRef(model);
   const uploadTokens = useRef(new Map<DeviceId, number>());
   const runtimeActivityTimers = useRef(new Map<string, number>());
@@ -182,6 +195,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const nextSourceNumber = useRef(nextEnvironmentSourceNumber(model.project.environmentSources));
   const capturedPointerId = useRef<number | null>(null);
   const browserProjectStore = useRef<BrowserProjectStore | undefined>(undefined);
+  const browserWorkingCopyStore = useRef<BrowserWorkingCopyStore | undefined>(undefined);
+  const hasHydratedWorkingCopy = useRef(false);
+  const hasPendingCanvasEditsBeforeHydration = useRef(false);
+  const hasUnsavedCanvasChangesRef = useRef(false);
   const { project, simulationState } = model;
   const visibleEnvironmentSources = filterEnabledEnvironmentSources(project.environmentSources);
   const selectedDevice =
@@ -213,16 +230,54 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   }, [model]);
 
   useEffect(() => {
-    if (browserProjectStore.current) {
+    if (hasHydratedWorkingCopy.current) {
       return;
     }
+    let cancelled = false;
     try {
-      browserProjectStore.current = createBrowserProjectStore();
+      browserProjectStore.current ??= createBrowserProjectStore();
+      browserWorkingCopyStore.current ??= createBrowserWorkingCopyStore();
+      void (async () => {
+        try {
+          const savedWorkingCopy = await browserWorkingCopyStore.current?.load();
+          if (cancelled) {
+            return;
+          }
+          hasHydratedWorkingCopy.current = true;
+          setHasSavedWorkingCopy(Boolean(savedWorkingCopy));
+          if (!savedWorkingCopy || hasPendingCanvasEditsBeforeHydration.current) {
+            return;
+          }
+          replaceScenarioProject(savedWorkingCopy, {
+            hasUnsavedChanges: false,
+            recordUserInteraction: false,
+          });
+          setCanvasStateMessage(`Restored current canvas "${savedWorkingCopy.name}"`);
+        } catch (error) {
+          try {
+            await browserWorkingCopyStore.current?.clear();
+          } catch {
+            // Keep the original restore error surfaced below.
+          }
+          if (cancelled) {
+            return;
+          }
+          hasHydratedWorkingCopy.current = true;
+          setHasSavedWorkingCopy(false);
+          setCanvasStateMessage(
+            error instanceof Error ? error.message : 'Unable to restore saved current canvas',
+          );
+        }
+      })();
     } catch (error) {
+      hasHydratedWorkingCopy.current = true;
       setCanvasStateMessage(
         error instanceof Error ? error.message : 'Browser storage is not available',
       );
     }
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -231,6 +286,40 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }
     void refreshSavedProjects();
   }, [isCanvasStateMenuOpen]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !hasUnsavedCanvasChanges) {
+      return;
+    }
+    function handleBeforeUnload(event: BeforeUnloadEvent) {
+      event.preventDefault();
+      event.returnValue = '';
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedCanvasChanges]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    function handleWindowFileDrag(event: globalThis.DragEvent) {
+      if (
+        shouldGuardGlobalFileDrop(event, [
+          sidebarRef.current,
+          bundleDropAreaRef.current,
+        ])
+      ) {
+        event.preventDefault();
+      }
+    }
+    window.addEventListener('dragover', handleWindowFileDrag, true);
+    window.addEventListener('drop', handleWindowFileDrag, true);
+    return () => {
+      window.removeEventListener('dragover', handleWindowFileDrag, true);
+      window.removeEventListener('drop', handleWindowFileDrag, true);
+    };
+  }, []);
 
   useEffect(() => {
     if (!isSplashOpen) {
@@ -628,6 +717,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     if (selected.type === 'none') {
       return;
     }
+    recordCanvasUserInteraction();
 
     if (selected.type === 'device') {
       const deletingId = selected.id;
@@ -649,7 +739,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         return rest;
       });
       setModel((current) => {
-        const nextProject = removeDeviceFromProject(current.project, deletingId);
+        const nextProject = touchProjectUpdatedAt(
+          current.project,
+          removeDeviceFromProject(current.project, deletingId),
+        );
         const next = {
           project: nextProject,
           simulationState: reconcileSimulationProject(current.simulationState, nextProject),
@@ -663,10 +756,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
 
     const deletingId = selected.id;
     setModel((current) => {
-      const nextProject = {
+      const nextProject = touchProjectUpdatedAt(current.project, {
         ...current.project,
         environmentSources: current.project.environmentSources.filter((source) => source.id !== deletingId),
-      };
+      });
       const next = {
         project: nextProject,
         simulationState: reconcileSimulationProject(current.simulationState, nextProject),
@@ -1247,32 +1340,37 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       return;
     }
 
+    recordCanvasUserInteraction();
     const position = clientPointToCanvasPoint(svgRef.current, clientX, clientY);
     const nextPosition = clampPoint(position);
     const target = dragTarget;
-    setModel((current) => ({
-      project: moveProjectObject(current.project, target, nextPosition),
-      simulationState:
-        target.type === 'device'
-          ? moveDevice(current.simulationState, target.id, nextPosition)
-          : reconcileSimulationProject(
-              current.simulationState,
-              moveProjectObject(current.project, target, nextPosition),
-            ),
-    }));
+    setModel((current) => {
+      const nextProject = touchProjectUpdatedAt(
+        current.project,
+        moveProjectObject(current.project, target, nextPosition),
+      );
+      const next = {
+        project: nextProject,
+        simulationState:
+          target.type === 'device'
+            ? moveDevice(current.simulationState, target.id, nextPosition)
+            : reconcileSimulationProject(current.simulationState, nextProject),
+      };
+      modelRef.current = next;
+      return next;
+    });
   }
 
   function updateProject(updater: (current: SwarmProject) => SwarmProject) {
+    recordCanvasUserInteraction();
     setModel((current) => {
-      const nextProject = updater(current.project);
-      const project =
-        nextProject.updatedAt === current.project.updatedAt
-          ? { ...nextProject, updatedAt: new Date().toISOString() }
-          : nextProject;
-      return {
+      const project = touchProjectUpdatedAt(current.project, updater(current.project));
+      const next = {
         project,
         simulationState: reconcileSimulationProject(current.simulationState, project),
       };
+      modelRef.current = next;
+      return next;
     });
   }
 
@@ -1344,7 +1442,31 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     void uploadArtifactForDevice(selectedDevice.id, file);
   }
 
-  function replaceScenarioProject(nextProject: SwarmProject) {
+  function setCanvasDirtyState(nextDirtyState: boolean) {
+    if (hasUnsavedCanvasChangesRef.current === nextDirtyState) {
+      return;
+    }
+    hasUnsavedCanvasChangesRef.current = nextDirtyState;
+    setHasUnsavedCanvasChanges(nextDirtyState);
+  }
+
+  function recordCanvasUserInteraction() {
+    if (!hasHydratedWorkingCopy.current) {
+      hasPendingCanvasEditsBeforeHydration.current = true;
+    }
+    setCanvasDirtyState(true);
+  }
+
+  function replaceScenarioProject(
+    nextProject: SwarmProject,
+    options: {
+      hasUnsavedChanges?: boolean;
+      recordUserInteraction?: boolean;
+    } = {},
+  ) {
+    if (options.recordUserInteraction ?? true) {
+      recordCanvasUserInteraction();
+    }
     releaseCanvasPointer();
     setDragTarget(null);
     setIsSidebarDragActive(false);
@@ -1369,10 +1491,28 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     };
     modelRef.current = next;
     setModel(next);
+    setCanvasDirtyState(options.hasUnsavedChanges ?? false);
     setSelected(pickFallbackSelection(nextProject));
     nextDeviceNumber.current = nextProject.devices.length + 1;
     nextSourceNumber.current = nextEnvironmentSourceNumber(nextProject.environmentSources);
     setScenarioResetSignal((current) => current + 1);
+  }
+
+  async function saveCurrentCanvasToBrowser() {
+    if (!browserWorkingCopyStore.current) {
+      setCanvasStateMessage('Browser storage is not available');
+      return;
+    }
+    try {
+      await browserWorkingCopyStore.current.save(project);
+      setCanvasDirtyState(false);
+      setHasSavedWorkingCopy(true);
+      setCanvasStateMessage(`Saved current canvas "${project.name}"`);
+    } catch (error) {
+      setCanvasStateMessage(
+        error instanceof Error ? error.message : 'Unable to save current canvas',
+      );
+    }
   }
 
   async function saveCurrentLayoutToBrowser() {
@@ -1406,9 +1546,22 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }
   }
 
+  function confirmReplacingCurrentCanvas(actionLabel: string): boolean {
+    if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+      return true;
+    }
+    const unsavedSuffix = hasUnsavedCanvasChanges
+      ? ' This will also discard unsaved layout or code changes.'
+      : '';
+    return window.confirm(`${actionLabel} will replace the current canvas.${unsavedSuffix} Continue?`);
+  }
+
   async function loadSavedLayout(projectId: string) {
     if (!browserProjectStore.current) {
       setCanvasStateMessage('Browser storage is not available');
+      return;
+    }
+    if (!confirmReplacingCurrentCanvas('Loading this saved layout')) {
       return;
     }
     try {
@@ -1495,12 +1648,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   }
 
   async function importCanvasBundle(file: File) {
-    if (
-      isProjectPopulated(project) &&
-      typeof window !== 'undefined' &&
-      typeof window.confirm === 'function' &&
-      !window.confirm('Importing a bundle will overwrite the current layout. Continue?')
-    ) {
+    if (!confirmReplacingCurrentCanvas('Importing a bundle')) {
       return;
     }
 
@@ -1516,11 +1664,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   }
 
   function clearCanvasLayout() {
-    if (
-      typeof window !== 'undefined' &&
-      typeof window.confirm === 'function' &&
-      !window.confirm('Clear all devices, code artifacts, and sources from this canvas?')
-    ) {
+    if (!confirmReplacingCurrentCanvas('Clearing the canvas')) {
       return;
     }
     const now = new Date().toISOString();
@@ -1599,6 +1743,30 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           </a>
         </div>
         <div className="control-stack" aria-label="Simulation controls">
+          <div
+            className={
+              hasUnsavedCanvasChanges
+                ? 'working-copy-status working-copy-status--dirty'
+                : hasSavedWorkingCopy
+                  ? 'working-copy-status working-copy-status--saved'
+                  : 'working-copy-status'
+            }
+            role="status"
+            aria-live="polite"
+            aria-label="Current canvas status"
+          >
+            <span className="metric-label">Current canvas</span>
+            <strong>
+              {hasUnsavedCanvasChanges
+                ? 'Unsaved changes'
+                : hasSavedWorkingCopy
+                  ? 'Saved for next session'
+                  : 'Not yet saved'}
+            </strong>
+          </div>
+          <button type="button" onClick={() => void saveCurrentCanvasToBrowser()}>
+            Save current canvas
+          </button>
           <button type="button" onClick={resetAllDevices}>
             Reset all
           </button>
@@ -1678,6 +1846,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
             </div>
           </div>
           <div
+            ref={bundleDropAreaRef}
             className={isBundleDropActive ? 'canvas-state-drop canvas-state-drop--active' : 'canvas-state-drop'}
             onDragOver={handleBundleDropAreaDragOver}
             onDragLeave={handleBundleDropAreaDragLeave}
@@ -1971,6 +2140,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
         </div>
 
         <aside
+          ref={sidebarRef}
           className={`swarm-sidebar ${canDropHexToSidebar ? 'swarm-sidebar--drop-enabled' : ''} ${isSidebarDragActive ? 'swarm-sidebar--drag-over' : ''}`}
           aria-label="Canvas controls and selection details"
           onDragOver={handleSidebarDragOver}
@@ -2554,6 +2724,12 @@ function removeDeviceFromProject(project: SwarmProject, deviceId: DeviceId): Swa
   };
 }
 
+function touchProjectUpdatedAt(currentProject: SwarmProject, nextProject: SwarmProject): SwarmProject {
+  return nextProject.updatedAt === currentProject.updatedAt
+    ? { ...nextProject, updatedAt: new Date().toISOString() }
+    : nextProject;
+}
+
 function pickFirstHexFile(dataTransfer: DataTransfer): File | undefined {
   const files = [...dataTransfer.files];
   return files.find((file) => file.name.toLowerCase().endsWith('.hex'));
@@ -2699,12 +2875,37 @@ function escapeHtml(value: string): string {
     .replaceAll("'", '&#39;');
 }
 
-function isProjectPopulated(project: SwarmProject): boolean {
-  return (
-    project.devices.length > 0 ||
-    project.artifacts.length > 0 ||
-    project.environmentSources.length > 0
-  );
+export function shouldGuardGlobalFileDrop(
+  event: Pick<globalThis.DragEvent, 'dataTransfer' | 'target' | 'composedPath'>,
+  allowedRoots: ReadonlyArray<HTMLElement | null>,
+): boolean {
+  const transferTypes = event.dataTransfer?.types;
+  if (!transferTypes || !transferTypes.includes('Files')) {
+    return false;
+  }
+  const activeAllowedRoots = allowedRoots.filter((root): root is HTMLElement => Boolean(root));
+  if (activeAllowedRoots.length === 0) {
+    return true;
+  }
+  const eventPath = typeof event.composedPath === 'function' ? event.composedPath() : [];
+  const pathTargets =
+    eventPath.length > 0
+      ? eventPath
+      : event.target instanceof Node
+        ? collectNodePath(event.target)
+        : [];
+  return !activeAllowedRoots.some((root) =>
+    pathTargets.some((target) => target instanceof Node && root.contains(target)));
+}
+
+function collectNodePath(target: Node): Node[] {
+  const path: Node[] = [];
+  let current: Node | null = target;
+  while (current) {
+    path.push(current);
+    current = current.parentNode;
+  }
+  return path;
 }
 
 function buildRuntimeNodeStates(

@@ -3,7 +3,41 @@ import { unzipSync } from 'fflate';
 import { useEffect, useRef } from 'react';
 import { vi } from 'vitest';
 import type { MicroPythonRuntimeHostProps, RoutedRadioDelivery } from './MicroPythonRuntimeHost';
-import { SwarmCanvasPanel, translateRuntimeRadioPacketForRecipient } from './SwarmCanvasPanel';
+const workingCopyStorageState = vi.hoisted(() => ({
+  items: new Map<string, string>(),
+}));
+
+vi.mock('../domain/browserWorkingCopyStore', async () => {
+  const actual =
+    await vi.importActual<typeof import('../domain/browserWorkingCopyStore')>(
+      '../domain/browserWorkingCopyStore'
+    );
+  const storage: Storage = {
+    get length() {
+      return workingCopyStorageState.items.size;
+    },
+    clear: () => workingCopyStorageState.items.clear(),
+    getItem: (key) => workingCopyStorageState.items.get(key) ?? null,
+    key: (index) => [...workingCopyStorageState.items.keys()][index] ?? null,
+    removeItem: (key) => {
+      workingCopyStorageState.items.delete(key);
+    },
+    setItem: (key, value) => {
+      workingCopyStorageState.items.set(key, value);
+    },
+  };
+  return {
+    ...actual,
+    createBrowserWorkingCopyStore: () =>
+      actual.createBrowserWorkingCopyStore({ indexedDbFactory: undefined, storage }),
+  };
+});
+
+import {
+  SwarmCanvasPanel,
+  shouldGuardGlobalFileDrop,
+  translateRuntimeRadioPacketForRecipient,
+} from './SwarmCanvasPanel';
 import { FEATURE_FLAGS } from '../runtime/featureFlags';
 import makeCodeBeaconHex from '../../hex_files/mc_beacon.hex?raw';
 
@@ -12,6 +46,7 @@ describe('SwarmCanvasPanel', () => {
     if (typeof window.localStorage?.clear === 'function') {
       window.localStorage.clear();
     }
+    workingCopyStorageState.items.clear();
     vi.restoreAllMocks();
   });
 
@@ -690,6 +725,7 @@ describe('SwarmCanvasPanel', () => {
     const { container } = render(<SwarmCanvasPanel />);
 
     const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('Layout one');
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(screen.getByRole('button', { name: 'Swarm tools' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save to browser' }));
 
@@ -701,7 +737,66 @@ describe('SwarmCanvasPanel', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Load Layout one' }));
 
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
     await waitFor(() => expect(container.querySelectorAll('.microbit-node')).toHaveLength(1));
+  });
+
+  it('saves the current canvas for the next browser session and restores it on remount', async () => {
+    const { container, unmount } = render(<SwarmCanvasPanel />);
+
+    addDeviceFromSwarmTools();
+    expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Save current canvas' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('status', { name: 'Current canvas status' })).toHaveTextContent(
+        'Saved for next session',
+      ),
+    );
+
+    unmount();
+
+    const rerendered = render(<SwarmCanvasPanel />);
+    await waitFor(() => expect(rerendered.container.querySelectorAll('.microbit-node')).toHaveLength(2));
+    await waitFor(() =>
+      expect(screen.getByRole('status', { name: 'Current canvas status' })).toHaveTextContent(
+        'Saved for next session',
+      ),
+    );
+  });
+
+  it('saves the current canvas after code is loaded onto a device', async () => {
+    render(<SwarmCanvasPanel />);
+
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+      target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("persist")'))] },
+    });
+
+    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Save current canvas' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('status', { name: 'Current canvas status' })).toHaveTextContent(
+        'Saved for next session',
+      ),
+    );
+  });
+
+  it('keeps runtime-only reset actions from marking the canvas dirty', async () => {
+    render(<SwarmCanvasPanel />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save current canvas' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status', { name: 'Current canvas status' })).toHaveTextContent(
+        'Saved for next session',
+      ),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset all' }));
+
+    expect(screen.getByRole('status', { name: 'Current canvas status' })).toHaveTextContent(
+      'Saved for next session',
+    );
   });
 
   it('deletes individual saved layouts from the canvas-state menu', async () => {
@@ -805,6 +900,46 @@ describe('SwarmCanvasPanel', () => {
 
     expect(renameInput.selectionStart).toBe(0);
     expect(renameInput.selectionEnd).toBe(renameInput.value.length);
+  });
+
+  it('guards global file drops outside allowed targets', () => {
+    const allowedRoot = document.createElement('div');
+    const allowedChild = document.createElement('button');
+    allowedRoot.append(allowedChild);
+    const outsideTarget = document.createElement('div');
+
+    expect(
+      shouldGuardGlobalFileDrop(
+        {
+          dataTransfer: { types: ['Files'] } as unknown as DataTransfer,
+          target: allowedChild,
+          composedPath: () => [allowedChild, allowedRoot],
+        },
+        [allowedRoot],
+      ),
+    ).toBe(false);
+
+    expect(
+      shouldGuardGlobalFileDrop(
+        {
+          dataTransfer: { types: ['Files'] } as unknown as DataTransfer,
+          target: outsideTarget,
+          composedPath: () => [outsideTarget],
+        },
+        [allowedRoot],
+      ),
+    ).toBe(true);
+
+    expect(
+      shouldGuardGlobalFileDrop(
+        {
+          dataTransfer: { types: ['text/plain'] } as unknown as DataTransfer,
+          target: outsideTarget,
+          composedPath: () => [outsideTarget],
+        },
+        [allowedRoot],
+      ),
+    ).toBe(false);
   });
 
 });

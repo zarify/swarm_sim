@@ -540,6 +540,39 @@ h2 {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  align-items: stretch;
+}
+
+.working-copy-status {
+  min-width: 182px;
+  border: 1px solid rgba(147, 169, 134, 0.32);
+  padding: 8px 12px;
+  background: rgba(147, 169, 134, 0.08);
+}
+
+.working-copy-status strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink);
+  font-size: 0.9rem;
+}
+
+.working-copy-status--saved {
+  border-color: rgba(183, 255, 74, 0.4);
+  background: rgba(183, 255, 74, 0.08);
+}
+
+.working-copy-status--saved strong {
+  color: var(--phosphor);
+}
+
+.working-copy-status--dirty {
+  border-color: rgba(255, 176, 46, 0.42);
+  background: rgba(255, 176, 46, 0.09);
+}
+
+.working-copy-status--dirty strong {
+  color: var(--amber);
 }
 
 .canvas-state-panel {
