@@ -23,6 +23,9 @@ It supports:
 - Serial output
 - Data logging (download a zip bundle of data log files via the Swarm tools)
 - Light and sound sensors
+- Lightweight code editing (text only) of `main.py` and `main.ts` depending on source language for testing and prototyping (requires code to be loaded first)
+- Saving and loading of canvas setup with device code and positions both in your browser (IDB) or external files. Use these with your own projects or share them with students
+- Locked micro:bit devices that don't have code editing and only support a single program load. Use these for mysteries students need to investigate.
 
 ## What swarm isn't
 
