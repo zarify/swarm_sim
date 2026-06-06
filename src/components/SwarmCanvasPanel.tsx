@@ -230,6 +230,21 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const activeEditorProgram = editorDevice ? getActiveEditableProgram(editorDevice) : undefined;
   const customInstructionsMarkdown = project.instructionsMarkdown;
   const hasCustomInstructions = Boolean(customInstructionsMarkdown);
+  const canvasSaveStatus = hasUnsavedCanvasChanges
+    ? 'Unsaved'
+    : hasSavedWorkingCopy
+      ? 'Saved'
+      : 'Not saved';
+  const canvasSaveButtonTitle = hasUnsavedCanvasChanges
+    ? 'Save current canvas for the next browser session'
+    : hasSavedWorkingCopy
+      ? 'Current canvas is already saved for the next browser session'
+      : 'Save current canvas for the next browser session';
+  const canvasSaveButtonAriaLabel = hasUnsavedCanvasChanges
+    ? 'Save canvas - unsaved changes'
+    : hasSavedWorkingCopy
+      ? 'Save canvas - saved for next session'
+      : 'Save canvas - not yet saved';
 
   useEffect(
     () => () => {
@@ -1839,27 +1854,24 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           </a>
         </div>
         <div className="control-stack" aria-label="Simulation controls">
-          <div
+          <button
+            type="button"
             className={
               hasUnsavedCanvasChanges
-                ? 'working-copy-status working-copy-status--dirty'
+                ? 'canvas-save-button canvas-save-button--dirty'
                 : hasSavedWorkingCopy
-                  ? 'working-copy-status working-copy-status--saved'
-                  : 'working-copy-status'
+                  ? 'canvas-save-button canvas-save-button--saved'
+                  : 'canvas-save-button'
             }
-            role="status"
-            aria-live="polite"
-            aria-label="Current canvas status"
+            aria-label={canvasSaveButtonAriaLabel}
+            title={canvasSaveButtonTitle}
+            onClick={() => void saveCurrentCanvasToBrowser()}
           >
-            <span className="metric-label">Current canvas</span>
-            <strong>
-              {hasUnsavedCanvasChanges
-                ? 'Unsaved changes'
-                : hasSavedWorkingCopy
-                  ? 'Saved for next session'
-                  : 'Not yet saved'}
-            </strong>
-          </div>
+            <strong>Save canvas</strong>
+            <span className="canvas-save-button__status" aria-live="polite">
+              {canvasSaveStatus}
+            </span>
+          </button>
           {hasCustomInstructions ? (
             <button
               type="button"
@@ -1868,21 +1880,28 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               title="Show instructions"
               onClick={() => setIsSplashOpen(true)}
             >
-              i
+              <span aria-hidden="true">ⓘ</span>
             </button>
           ) : null}
-          <button type="button" onClick={() => void saveCurrentCanvasToBrowser()}>
-            Save current canvas
-          </button>
-          <button type="button" onClick={resetAllDevices}>
-            Reset all
+          <button
+            type="button"
+            className="button-with-icon"
+            onClick={resetAllDevices}
+            title="Reset all devices and runtimes"
+          >
+            <span aria-hidden="true">↺</span> Reset
           </button>
           <button
             type="button"
+            className="button-with-icon"
             aria-expanded={isCanvasStateMenuOpen}
             aria-controls="canvas-state-panel"
+            title="Open swarm tools"
             onClick={() => setIsCanvasStateMenuOpen((current) => !current)}
           >
+            <span className="button-icon button-icon--toolbar" aria-hidden="true">
+              ⚙
+            </span>
             Swarm tools
           </button>
         </div>
@@ -1892,24 +1911,24 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           <div className="canvas-state-panel__section">
             <span className="metric-label">Swarm tools</span>
             <div className="canvas-state-panel__actions">
-              <button type="button" onClick={() => addDevice()}>
+              <button type="button" onClick={() => addDevice()} title="Add device">
                 Add device
               </button>
-              <button type="button" onClick={() => addDevice({ locked: true })}>
+              <button type="button" onClick={() => addDevice({ locked: true })} title="Add locked device">
                 Add locked device
               </button>
               {FEATURE_FLAGS.light ? (
-                <button type="button" onClick={() => addSource('light')}>
+                <button type="button" onClick={() => addSource('light')} title="Add light source">
                   Add light
                 </button>
               ) : null}
               {FEATURE_FLAGS.sound ? (
-                <button type="button" onClick={() => addSource('sound')}>
+                <button type="button" onClick={() => addSource('sound')} title="Add sound source">
                   Add sound
                 </button>
               ) : null}
               {FEATURE_FLAGS.magnet ? (
-                <button type="button" onClick={() => addSource('magnet')}>
+                <button type="button" onClick={() => addSource('magnet')} title="Add magnet source">
                   Add magnet
                 </button>
               ) : null}
@@ -1926,31 +1945,48 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           <div className="canvas-state-panel__section">
             <span className="metric-label">Canvas state</span>
             <div className="canvas-state-panel__actions">
-              <button type="button" onClick={() => setIsInstructionsEditorOpen(true)}>
+              <button
+                type="button"
+                onClick={() => setIsInstructionsEditorOpen(true)}
+                title="Edit canvas instructions"
+              >
                 Edit instructions
               </button>
-              <button type="button" onClick={() => void saveCurrentLayoutToBrowser()}>
+              <button type="button" onClick={() => void saveCurrentLayoutToBrowser()} title="Save layout to browser">
                 Save to browser
-              </button>
-              <button type="button" onClick={() => void downloadCanvasBundle()}>
-                Download bundle
               </button>
               <button
                 type="button"
-                onClick={() => void downloadRuntimeDataLogs()}
-                disabled={!hasRuntimeDataLogFiles}
+                className="button-with-icon"
+                onClick={() => void downloadCanvasBundle()}
+                title="Download canvas bundle"
               >
-                Download log files
+                <span className="button-icon button-icon--bundle" aria-hidden="true">
+                  ⬇
+                </span>
+                Download bundle
               </button>
-              <label className="canvas-state-upload">
+              <label className="canvas-state-upload" title="Upload canvas bundle">
+                <span className="button-icon button-icon--bundle" aria-hidden="true">
+                  ⬆
+                </span>
                 Upload bundle
                 <input
                   type="file"
                   accept=".swarm"
+                  aria-label="Upload bundle"
                   onChange={handleBundleFileInput}
                 />
               </label>
-              <button type="button" onClick={clearCanvasLayout}>
+              <button
+                type="button"
+                onClick={() => void downloadRuntimeDataLogs()}
+                disabled={!hasRuntimeDataLogFiles}
+                title="Download runtime log files"
+              >
+                Download log files
+              </button>
+              <button type="button" onClick={clearCanvasLayout} title="Clear canvas">
                 Clear canvas
               </button>
             </div>
@@ -1976,6 +2012,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                     type="button"
                     onClick={() => void loadSavedLayout(summary.id)}
                     className="canvas-state-saved__item"
+                    title={`Load ${summary.name}`}
                   >
                     Load {summary.name}
                   </button>
@@ -1983,8 +2020,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                     type="button"
                     onClick={() => void deleteSavedLayout(summary.id, summary.name)}
                     className="canvas-state-saved__delete"
+                    aria-label={`Delete ${summary.name}`}
+                    title={`Delete ${summary.name}`}
                   >
-                    Delete {summary.name}
+                    <span aria-hidden="true">🗑</span>
                   </button>
                 </div>
               ))
@@ -2279,9 +2318,6 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           onDragLeave={handleSidebarDragLeave}
           onDrop={handleSidebarDrop}
         >
-          {canDropHexToSidebar ? (
-            <p className="dropzone-hint">Drop a .hex file anywhere in this panel to load onto {selectedDevice?.name}.</p>
-          ) : null}
           {isSidebarDragActive && canDropHexToSidebar ? (
             <div className="swarm-sidebar-drop-overlay">
               Drop .hex to load onto <strong>{selectedDevice?.name}</strong>

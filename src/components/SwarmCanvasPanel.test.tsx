@@ -41,7 +41,6 @@ import {
 import { createBlankProject, type SwarmProject } from '../domain/project';
 import { serializeProject } from '../domain/projectSerialization';
 import { FEATURE_FLAGS } from '../runtime/featureFlags';
-import makeCodeBeaconHex from '../../hex_files/mc_beacon.hex?raw';
 
 describe('SwarmCanvasPanel', () => {
   beforeEach(() => {
@@ -56,6 +55,10 @@ describe('SwarmCanvasPanel', () => {
     if (!screen.queryByRole('button', { name: 'Save to browser' })) {
       fireEvent.click(screen.getByRole('button', { name: 'Swarm tools' }));
     }
+  }
+
+  function getSaveCanvasButton() {
+    return screen.getByRole('button', { name: /Save canvas/i });
   }
 
   function addDeviceFromSwarmTools() {
@@ -106,8 +109,24 @@ describe('SwarmCanvasPanel', () => {
 
     expect(screen.queryByRole('button', { name: 'Run' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Pause' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Reset all' })[0]!);
+    fireEvent.click(screen.getAllByRole('button', { name: /^Reset$/ })[0]!);
     expect(screen.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeInTheDocument();
+  });
+
+  it('uses compact glyph controls with tooltips in the header and canvas-state menu', () => {
+    render(<SwarmCanvasPanel />);
+
+    const saveButton = getSaveCanvasButton();
+    expect(saveButton).toHaveAttribute('title', 'Save current canvas for the next browser session');
+    expect(saveButton).toHaveTextContent('Not saved');
+
+    const swarmToolsButton = screen.getByRole('button', { name: 'Swarm tools' });
+    expect(swarmToolsButton).toHaveAttribute('title', 'Open swarm tools');
+
+    fireEvent.click(swarmToolsButton);
+    const actions = screen.getAllByRole('button').map((button) => button.textContent?.replace(/\s+/g, ' ').trim());
+    expect(actions.indexOf('⬇ Download bundle')).toBeLessThan(actions.indexOf('Download log files'));
+    expect(screen.getByLabelText('Upload bundle').closest('label')).toHaveAttribute('title', 'Upload canvas bundle');
   });
 
   it('shows and dismisses the startup instructions with Escape', async () => {
@@ -289,13 +308,13 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
     expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('MakeCode runtime host')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^Reset$/ })).toBeEnabled();
+    expect(screen.getAllByRole('button', { name: /^Reset$/ })[0]!).toBeEnabled();
   });
 
   it('assigns MakeCode fixture HEX files and classifies their runtime source', async () => {
     render(<SwarmCanvasPanel />);
 
-    const file = makeUploadFile('mc_beacon.hex', makeCodeBeaconHex);
+    const file = makeUploadFile('mc_beacon.hex', makeMakeCodeHex({ 'main.ts': 'radio.sendString("ping")' }));
     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [file] },
     });
@@ -306,7 +325,7 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('MakeCode simulator for Node 1')).not.toBeInTheDocument();
     expect(screen.queryByText(/Unable to identify this HEX/)).not.toBeInTheDocument();
-  }, 30000);
+  });
 
   it('opens a code editor for uploaded MicroPython code and persists saved source edits', async () => {
     render(<SwarmCanvasPanel />);
@@ -545,7 +564,7 @@ describe('SwarmCanvasPanel', () => {
 
     addDeviceFromSwarmTools();
     fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
-      target: { files: [makeUploadFile('mc_beacon.hex', makeCodeBeaconHex)] },
+      target: { files: [makeUploadFile('mc_beacon.hex', makeMakeCodeHex({ 'main.ts': 'radio.sendString("ping")' }))] },
     });
     await waitFor(() => expect(screen.getByText('Runtime source: makecode-pxt')).toBeInTheDocument(), {
       timeout: 12000,
@@ -782,7 +801,7 @@ describe('SwarmCanvasPanel', () => {
 
     addDeviceFromSwarmTools();
     fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
-      target: { files: [makeUploadFile('mc_beacon.hex', makeCodeBeaconHex)] },
+      target: { files: [makeUploadFile('mc_beacon.hex', makeMakeCodeHex({ 'main.ts': 'radio.sendString("ping")' }))] },
     });
     await waitFor(() => expect(screen.getByText('Runtime source: makecode-pxt')).toBeInTheDocument(), {
       timeout: 12000,
@@ -824,7 +843,7 @@ describe('SwarmCanvasPanel', () => {
     );
     expect(screen.getByText(/something went wrong/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Reset$/ }));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Reset$/ })[0]!);
     await waitFor(() =>
       expect(container.querySelector('[data-runtime-state="device-1:error"]')).not.toBeInTheDocument(),
     );
@@ -878,12 +897,10 @@ describe('SwarmCanvasPanel', () => {
 
     addDeviceFromSwarmTools();
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
-    fireEvent.click(screen.getByRole('button', { name: 'Save current canvas' }));
+    fireEvent.click(getSaveCanvasButton());
 
     await waitFor(() =>
-      expect(screen.getByRole('status', { name: 'Current canvas status' })).toHaveTextContent(
-        'Saved for next session',
-      ),
+      expect(getSaveCanvasButton()).toHaveTextContent('Saved'),
     );
 
     unmount();
@@ -891,9 +908,7 @@ describe('SwarmCanvasPanel', () => {
     const rerendered = render(<SwarmCanvasPanel />);
     await waitFor(() => expect(rerendered.container.querySelectorAll('.microbit-node')).toHaveLength(2));
     await waitFor(() =>
-      expect(screen.getByRole('status', { name: 'Current canvas status' })).toHaveTextContent(
-        'Saved for next session',
-      ),
+      expect(getSaveCanvasButton()).toHaveTextContent('Saved'),
     );
   });
 
@@ -908,12 +923,10 @@ describe('SwarmCanvasPanel', () => {
       target: { value: '# Welcome back\n\n- Resume from node 2' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save instructions' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Save current canvas' }));
+    fireEvent.click(getSaveCanvasButton());
 
     await waitFor(() =>
-      expect(screen.getByRole('status', { name: 'Current canvas status' })).toHaveTextContent(
-        'Saved for next session',
-      ),
+      expect(getSaveCanvasButton()).toHaveTextContent('Saved'),
     );
 
     unmount();
@@ -970,30 +983,24 @@ describe('SwarmCanvasPanel', () => {
     });
 
     await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: 'Save current canvas' }));
+    fireEvent.click(getSaveCanvasButton());
 
     await waitFor(() =>
-      expect(screen.getByRole('status', { name: 'Current canvas status' })).toHaveTextContent(
-        'Saved for next session',
-      ),
+      expect(getSaveCanvasButton()).toHaveTextContent('Saved'),
     );
   });
 
   it('keeps runtime-only reset actions from marking the canvas dirty', async () => {
     render(<SwarmCanvasPanel />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save current canvas' }));
+    fireEvent.click(getSaveCanvasButton());
     await waitFor(() =>
-      expect(screen.getByRole('status', { name: 'Current canvas status' })).toHaveTextContent(
-        'Saved for next session',
-      ),
+      expect(getSaveCanvasButton()).toHaveTextContent('Saved'),
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reset all' }));
+    fireEvent.click(screen.getAllByRole('button', { name: /^Reset$/ })[0]!);
 
-    expect(screen.getByRole('status', { name: 'Current canvas status' })).toHaveTextContent(
-      'Saved for next session',
-    );
+    expect(getSaveCanvasButton()).toHaveTextContent('Saved');
   });
 
   it('deletes individual saved layouts from the canvas-state menu', async () => {
@@ -1099,7 +1106,7 @@ describe('SwarmCanvasPanel', () => {
     });
 
     await waitFor(() => expect(screen.getByRole('dialog', { name: 'Simulator instructions' })).toBeInTheDocument());
-    expect(screen.getByRole('heading', { name: 'Imported lesson' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Imported lesson' })).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Show instructions' })).toBeInTheDocument();
   });
 
@@ -1427,6 +1434,24 @@ function makeHexWithAscii(value: string): string {
   return `${makeHexRecord(0, 0, bytes)}\n${makeHexRecord(0, 1, [])}`;
 }
 
+function makeMakeCodeHex(sourceFiles: Record<string, string>): string {
+  const encoder = new TextEncoder();
+  const metadata = encoder.encode('{}');
+  const sourceText = encoder.encode(JSON.stringify(sourceFiles));
+  const header = new Uint8Array(16);
+  header.set([0x41, 0x14, 0x0e, 0x2f, 0xb8, 0x2f, 0xa2, 0xbb]);
+  writeUInt16LE(header, 8, metadata.length);
+  writeUInt32LE(header, 10, sourceText.length);
+
+  return [
+    makeHexRecord(0x0000, 0x0e, [...header]),
+    ...chunkBytes(new Uint8Array([...metadata, ...sourceText]), 16).map((chunk, index) =>
+      makeHexRecord(0x0010 + index * 16, 0x0e, [...chunk]),
+    ),
+    makeHexRecord(0x0000, 0x01, []),
+  ].join('\n');
+}
+
 function makeMicroPythonHex(mainPy: string): string {
   const encoder = new TextEncoder();
   const filename = encoder.encode('main.py');
@@ -1451,6 +1476,18 @@ function chunkBytes(bytes: Uint8Array, size: number): Uint8Array[] {
     chunks.push(bytes.subarray(offset, offset + size));
   }
   return chunks;
+}
+
+function writeUInt16LE(bytes: Uint8Array, offset: number, value: number) {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >> 8) & 0xff;
+}
+
+function writeUInt32LE(bytes: Uint8Array, offset: number, value: number) {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >> 8) & 0xff;
+  bytes[offset + 2] = (value >> 16) & 0xff;
+  bytes[offset + 3] = (value >> 24) & 0xff;
 }
 
 function makeUploadFile(name: string, contents: string): File {

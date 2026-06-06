@@ -15,6 +15,8 @@ import { decompress } from 'lzma';
 
 const now = '2026-05-16T04:20:00.000Z';
 const encoder = new TextEncoder();
+const makeCodeBeaconBytes = encoder.encode(makeCodeBeaconHex);
+const microPythonBeaconBytes = encoder.encode(microPythonBeaconHex);
 
 describe('MVP acceptance coverage', () => {
   it('exports and imports a portable project containing both provided HEX artifacts', async () => {
@@ -32,9 +34,8 @@ describe('MVP acceptance coverage', () => {
       'makecode-pxt',
       'micropython',
     ]);
-    expect(reopened.artifacts.map((artifact) => [...artifact.bytes])).toEqual(
-      project.artifacts.map((artifact) => [...artifact.bytes]),
-    );
+    expect(equalBytes(reopened.artifacts[0]?.bytes, project.artifacts[0]?.bytes)).toBe(true);
+    expect(equalBytes(reopened.artifacts[1]?.bytes, project.artifacts[1]?.bytes)).toBe(true);
   });
 
   it('routes radio across 10 devices and immediately reflects movement out of range', () => {
@@ -136,7 +137,7 @@ function makeTenDeviceProject(): SwarmProject {
         name: 'mc_beacon.hex',
         artifactKind: 'hex',
         runtimeSource: 'makecode-pxt',
-        bytes: encoder.encode(makeCodeBeaconHex),
+        bytes: makeCodeBeaconBytes,
         createdAt: now,
       },
       {
@@ -144,7 +145,7 @@ function makeTenDeviceProject(): SwarmProject {
         name: 'mp_beacon.hex',
         artifactKind: 'hex',
         runtimeSource: 'micropython',
-        bytes: encoder.encode(microPythonBeaconHex),
+        bytes: microPythonBeaconBytes,
         createdAt: now,
       },
     ],
@@ -187,7 +188,7 @@ function makeTwoDeviceProject(): SwarmProject {
         name: 'mc_beacon.hex',
         artifactKind: 'hex',
         runtimeSource: 'makecode-pxt',
-        bytes: encoder.encode(makeCodeBeaconHex),
+        bytes: makeCodeBeaconBytes,
         createdAt: now,
       },
       {
@@ -195,7 +196,7 @@ function makeTwoDeviceProject(): SwarmProject {
         name: 'mp_beacon.hex',
         artifactKind: 'hex',
         runtimeSource: 'micropython',
-        bytes: encoder.encode(microPythonBeaconHex),
+        bytes: microPythonBeaconBytes,
         createdAt: now,
       },
     ],
@@ -215,4 +216,18 @@ function makeTwoDeviceProject(): SwarmProject {
     ],
     environmentSources: [],
   };
+}
+
+function equalBytes(left: Uint8Array | undefined, right: Uint8Array | undefined): boolean {
+  if (!left || !right || left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+
+  return true;
 }

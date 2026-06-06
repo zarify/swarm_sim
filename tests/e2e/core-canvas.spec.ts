@@ -47,6 +47,10 @@ async function addMagnetFromSwarmTools(page: Page) {
   await page.getByRole('button', { name: 'Add magnet' }).click();
 }
 
+function getSaveCanvasButton(page: Page) {
+  return page.getByRole('button', { name: /Save canvas/i });
+}
+
 async function readMakeCodeMagneticReadings(page: Page): Promise<{
   x: number;
   y: number;
@@ -156,6 +160,26 @@ test.describe('core canvas workflows', () => {
     await expect(
       page.getByText('This device is locked in place on the canvas and cannot be moved or unlocked.'),
     ).toBeVisible();
+  });
+
+  test('keeps the canvas size stable when switching between locked and unlocked devices', async ({ page }) => {
+    await gotoCanvas(page);
+
+    await addLockedDeviceFromSwarmTools(page);
+    const canvas = page.locator('.swarm-canvas');
+    const initialBox = await canvas.boundingBox();
+    expect(initialBox).not.toBeNull();
+
+    await page.locator('.microbit-node').first().click();
+    const unlockedBox = await canvas.boundingBox();
+
+    await page.locator('.microbit-node').nth(1).click();
+    const lockedBox = await canvas.boundingBox();
+
+    expect(unlockedBox?.width).toBe(initialBox?.width);
+    expect(unlockedBox?.height).toBe(initialBox?.height);
+    expect(lockedBox?.width).toBe(initialBox?.width);
+    expect(lockedBox?.height).toBe(initialBox?.height);
   });
 
   test('adds a magnet source and shows magnetic readings on devices', async ({ page }) => {
@@ -354,17 +378,13 @@ test.describe('core canvas workflows', () => {
     await addDeviceFromSwarmTools(page);
     await expect(page.locator('.microbit-node')).toHaveCount(2);
 
-    await page.getByRole('button', { name: 'Save current canvas' }).click();
-    await expect(page.getByRole('status', { name: 'Current canvas status' })).toContainText(
-      'Saved for next session',
-    );
+    await getSaveCanvasButton(page).click();
+    await expect(getSaveCanvasButton(page)).toContainText('Saved');
 
     await page.reload();
 
     await expect(page.locator('.microbit-node')).toHaveCount(2);
-    await expect(page.getByRole('status', { name: 'Current canvas status' })).toContainText(
-      'Saved for next session',
-    );
+    await expect(getSaveCanvasButton(page)).toContainText('Saved');
   });
 
   test('shows saved custom instructions again after reload and exposes the header info button', async ({ page }) => {
@@ -378,10 +398,8 @@ test.describe('core canvas workflows', () => {
     await page.getByRole('button', { name: 'Save instructions' }).click();
     await expect(page.getByRole('button', { name: 'Show instructions' })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Save current canvas' }).click();
-    await expect(page.getByRole('status', { name: 'Current canvas status' })).toContainText(
-      'Saved for next session',
-    );
+    await getSaveCanvasButton(page).click();
+    await expect(getSaveCanvasButton(page)).toContainText('Saved');
     await page.reload();
 
     const splash = page.getByRole('dialog', { name: 'Simulator instructions' });
@@ -398,17 +416,13 @@ test.describe('core canvas workflows', () => {
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
 
-    await page.getByRole('button', { name: 'Save current canvas' }).click();
-    await expect(page.getByRole('status', { name: 'Current canvas status' })).toContainText(
-      'Saved for next session',
-    );
+    await getSaveCanvasButton(page).click();
+    await expect(getSaveCanvasButton(page)).toContainText('Saved');
 
     await page.reload();
 
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole('status', { name: 'Current canvas status' })).toContainText(
-      'Saved for next session',
-    );
+    await expect(getSaveCanvasButton(page)).toContainText('Saved');
   });
 
   test('deletes an individual saved layout from browser state', async ({ page }) => {
@@ -690,7 +704,7 @@ test.describe('core canvas workflows', () => {
       (window as unknown as { __swarmInboundRadioGroups?: number[] }).__swarmInboundRadioGroups = [];
     });
 
-    await page.getByRole('button', { name: 'Reset all', exact: true }).click();
+    await page.getByRole('button', { name: 'Reset', exact: true }).first().click();
     await microPythonSimulator!.evaluate(() => {
       const payload = Array.from(new TextEncoder().encode('light:77'));
       window.parent.postMessage(
@@ -914,7 +928,7 @@ test.describe('core canvas workflows', () => {
 
     await expect(page.locator('[data-runtime-state="device-1:error"]')).toBeVisible({ timeout: 5_000 });
 
-    await page.getByRole('button', { name: /^Reset$/ }).click();
+    await page.getByRole('button', { name: /^Reset$/ }).first().click();
     await expect(page.locator('[data-runtime-state="device-1:error"]')).toHaveCount(0);
   });
 

@@ -627,35 +627,45 @@ h2 {
   align-items: stretch;
 }
 
-.working-copy-status {
+.canvas-save-button {
   min-width: 182px;
   border: 1px solid rgba(147, 169, 134, 0.32);
   padding: 8px 12px;
   background: rgba(147, 169, 134, 0.08);
+  text-align: left;
 }
 
-.working-copy-status strong {
+.canvas-save-button strong {
   display: block;
-  margin-top: 4px;
   color: var(--ink);
   font-size: 0.9rem;
 }
 
-.working-copy-status--saved {
+.canvas-save-button__status {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+}
+
+.canvas-save-button--saved {
   border-color: rgba(183, 255, 74, 0.4);
   background: rgba(183, 255, 74, 0.08);
 }
 
-.working-copy-status--saved strong {
+.canvas-save-button--saved strong,
+.canvas-save-button--saved .canvas-save-button__status {
   color: var(--phosphor);
 }
 
-.working-copy-status--dirty {
+.canvas-save-button--dirty {
   border-color: rgba(255, 176, 46, 0.42);
   background: rgba(255, 176, 46, 0.09);
 }
 
-.working-copy-status--dirty strong {
+.canvas-save-button--dirty strong,
+.canvas-save-button--dirty .canvas-save-button__status {
   color: var(--amber);
 }
 
@@ -700,6 +710,9 @@ h2 {
 }
 
 .canvas-state-upload {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   border: 1px solid rgba(105, 247, 255, 0.38);
   padding: 10px 13px;
   color: var(--ink);
@@ -713,6 +726,28 @@ h2 {
 
 .canvas-state-upload input {
   display: none;
+}
+
+.button-with-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.button-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.button-icon--toolbar {
+  font-size: 1.2rem;
+}
+
+.button-icon--bundle {
+  min-width: 1.15em;
+  font-size: 1.08rem;
 }
 
 .canvas-state-drop {
@@ -746,6 +781,8 @@ h2 {
 
 .canvas-state-saved__delete {
   flex: 0 0 auto;
+  min-width: 44px;
+  padding-inline: 12px;
 }
 
 .instructions-markdown {
@@ -1097,17 +1134,6 @@ button:disabled {
 
 .swarm-sidebar--drag-over {
   outline-color: rgba(105, 247, 255, 0.62);
-}
-
-.dropzone-hint {
-  margin: 0;
-  padding: 10px 12px;
-  border: 1px dashed rgba(105, 247, 255, 0.28);
-  color: var(--cyan);
-  font-size: 0.72rem;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .swarm-sidebar-drop-overlay {
