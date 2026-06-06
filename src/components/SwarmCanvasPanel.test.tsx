@@ -41,6 +41,7 @@ import {
 import { createBlankProject, type SwarmProject } from '../domain/project';
 import { serializeProject } from '../domain/projectSerialization';
 import { FEATURE_FLAGS } from '../runtime/featureFlags';
+import { encodeMicroPythonRadioString } from '../runtime/micropythonIframeAdapter';
 
 describe('SwarmCanvasPanel', () => {
   beforeEach(() => {
@@ -769,20 +770,74 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getAllByText('Received radio packet from Node 1')).toHaveLength(1);
   });
 
-  it('translates mixed-runtime radio packets between MakeCode and MicroPython devices', async () => {
-    const mcToMp = translateRuntimeRadioPacketForRecipient(
-      { data: makeMakeCodeValuePacket('light', 76) },
-      'makecode-pxt',
-      'micropython',
-    );
-    expect(new TextDecoder().decode(mcToMp.data)).toBe('light:76');
+  it('translates MakeCode packets into simplified MicroPython byte payloads', async () => {
+    const cases = [
+      { name: 'number packets', input: makeMakeCodeNumberPacket(123), expected: '123' },
+      { name: 'value packets', input: makeMakeCodeValuePacket('light', 76), expected: 'light:76' },
+      { name: 'string packets', input: makeMakeCodeStringPacket('ping'), expected: 'ping' },
+      { name: 'double packets', input: makeMakeCodeDoublePacket(12.5), expected: '12.5' },
+      { name: 'double value packets', input: makeMakeCodeDoubleValuePacket('temp', 23.75), expected: 'temp:23.75' },
+      { name: 'ascii buffer packets', input: makeMakeCodeBufferPacket([...'pong'].map((char) => char.charCodeAt(0))), expected: 'pong' },
+    ];
 
+    for (const testCase of cases) {
+      const translated = translateRuntimeRadioPacketForRecipient(
+        { data: testCase.input },
+        'makecode-pxt',
+        'micropython',
+      );
+      expect(new TextDecoder().decode(translated.data), testCase.name).toBe(testCase.expected);
+    }
+  });
+
+  it('translates MicroPython text payloads into MakeCode packets when possible', async () => {
+    const cases = [
+      { name: 'prefixed MicroPython strings', input: encodeMicroPythonRadioString('ping'), expected: 'string:ping' },
+      { name: 'plain numeric bytes', input: new TextEncoder().encode('123'), expected: 'number:123' },
+      { name: 'plain key/value bytes', input: new TextEncoder().encode('sound:13'), expected: 'value:sound:13' },
+      { name: 'plain floating-point bytes', input: new TextEncoder().encode('12.5'), expected: 'double:12.5' },
+      { name: 'plain floating-point key/value bytes', input: new TextEncoder().encode('temp:23.75'), expected: 'double-value:temp:23.75' },
+      {
+        name: 'long key/value bytes fall back to string packets',
+        input: new TextEncoder().encode('very_long_name:23'),
+        expected: 'string:very_long_name:23',
+      },
+    ];
+
+    for (const testCase of cases) {
+      const translated = translateRuntimeRadioPacketForRecipient(
+        { data: testCase.input },
+        'micropython',
+        'makecode-pxt',
+      );
+      expect(describeMakeCodePacket(translated.data), testCase.name).toBe(testCase.expected);
+    }
+  });
+
+  it('passes through unsupported cross-platform radio payloads unchanged', async () => {
+    const makeCodeBinary = makeMakeCodeBufferPacket([0xff, 0x00, 0x01]);
+    const mcToMp = translateRuntimeRadioPacketForRecipient(
+      { data: makeCodeBinary },
+      'makecode-pxt',
+      'micropython',
+    );
+    expect([...mcToMp.data]).toEqual([...makeCodeBinary]);
+
+    const microPythonBinary = new Uint8Array([0xff, 0x00, 0x01]);
     const mpToMc = translateRuntimeRadioPacketForRecipient(
-      { data: new TextEncoder().encode('sound:13') },
+      { data: microPythonBinary },
       'micropython',
       'makecode-pxt',
     );
-    expect(describeMakeCodeValuePacket(mpToMc.data)).toBe('value:sound:13');
+    expect([...mpToMc.data]).toEqual([...microPythonBinary]);
+
+    const alreadyTypedMakeCodePacket = makeMakeCodeValuePacket('light', 22);
+    const typedPassThrough = translateRuntimeRadioPacketForRecipient(
+      { data: alreadyTypedMakeCodePacket },
+      'micropython',
+      'makecode-pxt',
+    );
+    expect([...typedPassThrough.data]).toEqual([...alreadyTypedMakeCodePacket]);
   });
 
   it('keeps sender runtime group when translating MicroPython text packets for MakeCode recipients', async () => {
@@ -1567,6 +1622,48 @@ function makeMakeCodeValuePacket(name: string, value: number): Uint8Array {
   return bytes;
 }
 
+function makeMakeCodeNumberPacket(value: number): Uint8Array {
+  const bytes = new Uint8Array(32);
+  bytes[0] = 0; // PACKET_TYPE_NUMBER
+  new DataView(bytes.buffer).setInt32(9, value, true);
+  return bytes;
+}
+
+function makeMakeCodeDoublePacket(value: number): Uint8Array {
+  const bytes = new Uint8Array(32);
+  bytes[0] = 4; // PACKET_TYPE_DOUBLE
+  new DataView(bytes.buffer).setFloat64(9, value, true);
+  return bytes;
+}
+
+function makeMakeCodeDoubleValuePacket(name: string, value: number): Uint8Array {
+  const bytes = new Uint8Array(32);
+  bytes[0] = 5; // PACKET_TYPE_DOUBLE_VALUE
+  const view = new DataView(bytes.buffer);
+  view.setFloat64(9, value, true);
+  const encodedName = new TextEncoder().encode(name.slice(0, 8));
+  bytes[17] = encodedName.length;
+  bytes.set(encodedName, 18);
+  return bytes;
+}
+
+function makeMakeCodeStringPacket(value: string): Uint8Array {
+  const bytes = new Uint8Array(32);
+  bytes[0] = 2; // PACKET_TYPE_STRING
+  const encoded = new TextEncoder().encode(value);
+  bytes[9] = Math.min(encoded.length, 19);
+  bytes.set(encoded.slice(0, bytes[9]), 10);
+  return bytes;
+}
+
+function makeMakeCodeBufferPacket(data: number[]): Uint8Array {
+  const bytes = new Uint8Array(32);
+  bytes[0] = 3; // PACKET_TYPE_BUFFER
+  bytes[9] = Math.min(data.length, 19);
+  bytes.set(data.slice(0, bytes[9]), 10);
+  return bytes;
+}
+
 function describeMakeCodeValuePacket(data: Uint8Array): string {
   if (data[0] !== 1 || data.length < 14) {
     return 'none';
@@ -1576,4 +1673,44 @@ function describeMakeCodeValuePacket(data: Uint8Array): string {
   const nameLength = Math.max(0, Math.min(data[13] ?? 0, 8, data.length - 14));
   const name = new TextDecoder().decode(data.slice(14, 14 + nameLength));
   return `value:${name}:${value}`;
+}
+
+function describeMakeCodePacket(data: Uint8Array): string {
+  if (data.length < 10) {
+    return 'raw';
+  }
+
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  switch (data[0]) {
+    case 0:
+      return data.length >= 13 ? `number:${view.getInt32(9, true)}` : 'raw';
+    case 1:
+      return describeMakeCodeValuePacket(data);
+    case 2: {
+      const length = Math.max(0, Math.min(data[9] ?? 0, 19, data.length - 10));
+      return `string:${new TextDecoder().decode(data.slice(10, 10 + length))}`;
+    }
+    case 4:
+      return data.length >= 17 ? `double:${formatMakeCodePacketNumber(view.getFloat64(9, true))}` : 'raw';
+    case 5: {
+      if (data.length < 18) {
+        return 'raw';
+      }
+      const length = Math.max(0, Math.min(data[17] ?? 0, 8, data.length - 18));
+      const name = new TextDecoder().decode(data.slice(18, 18 + length));
+      return `double-value:${name}:${formatMakeCodePacketNumber(view.getFloat64(9, true))}`;
+    }
+    default:
+      return 'raw';
+  }
+}
+
+function formatMakeCodePacketNumber(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '0';
+  }
+  if (Number.isInteger(value)) {
+    return String(value);
+  }
+  return value.toFixed(3).replace(/\.?0+$/, '');
 }

@@ -7,6 +7,14 @@ and sensor behaviour using either of those simulators:
 
 So I decided I'd fire up the trusty (YMMV) agent to make something to fill the gaps.
 
+> [!INFO] I just want to run this, tell me how
+> Either go use it [on my site](https://headtilt.me/swarm/) or:
+> 1. Download the latest release
+> 2. Unzip the contents into a folder on a web server
+> 3. Open the location in your web browser
+>
+> The files need to be served, so if you want to test it locally, spin up a server using something like `python -m http.server 8080`
+
 ## What swarm is
 
 The swarm simulator is a canvas that you can create micro:bit device nodes and some types of environmental
@@ -34,6 +42,18 @@ It supports:
 - You don't create any code here. Write it [elsewhere](https://www.microbit.org/code/) then drop it in.
 - This isn't a physics simulator, it's a "reasonable approximation simulator"
 - This isn't an exact micro:bit simulator. I intentionally left things out (e.g. accelerometer, pins)
+- The radio interaction is made intentionally more compatible than it would be in the Real World. See the radio section for more info.
+
+> [!CAUTION] About the radio
+> Makecode and Micropython handle radio packet format quite differently. This simulator intentionally
+> simplifies it so that you can write radio code in different languages with the same *intent* and have
+> them communicate in the simulator, but this does NOT mean that they will work the same way in the
+> real world.
+>
+> This means that some features aren't supported, such as Makecode's sending of device identifiers.
+> Micropython's use of bytes in `radio.receive_bytes()` and `radio.receive_full()` has been intentionally
+> simplified to make the values easier to work with. If you have strong opinions about this, drop
+> something into the issues.
 
 ## Development
 

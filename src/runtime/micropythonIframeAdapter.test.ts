@@ -159,6 +159,24 @@ display.show(Image.ARROW_N)`),
     ]);
   });
 
+  it('passes outbound raw radio bytes through to the simulator unchanged', async () => {
+    const targetWindow = makeTargetWindow();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+    });
+    const rawBytes = new Uint8Array([0xff, 0x00, 0x81, 0x42]);
+
+    await adapter.sendRadio({ data: rawBytes, signalStrength: -52 });
+
+    expect(targetWindow.messages).toEqual([
+      {
+        message: { kind: 'radio_input', data: rawBytes, rssi: 52 },
+        targetOrigin: 'https://python-simulator.usermbit.org',
+      },
+    ]);
+  });
+
   it('converts simulator radio, serial, and internal-error messages into adapter events', () => {
     const targetWindow = makeTargetWindow();
     const eventTarget = makeMessageEventTarget();
@@ -190,6 +208,30 @@ display.show(Image.ARROW_N)`),
     });
     expect(events[3]).toEqual({ type: 'data-log-delete' });
     expect(events[4]).toMatchObject({ type: 'internal-error', error: new Error('boom') });
+  });
+
+  it('passes inbound raw radio bytes through from the simulator unchanged', () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+    const rawBytes = [0xff, 0x00, 0x81, 0x42];
+
+    const events: RuntimeAdapterEvent[] = [];
+    adapter.onEvent((event) => events.push(event));
+
+    eventTarget.dispatchMessage({ kind: 'radio_output', data: rawBytes });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: 'radio-output' });
+    if (events[0]?.type !== 'radio-output') {
+      throw new Error('Expected radio-output event');
+    }
+    expect([...events[0].packet.data]).toEqual(rawBytes);
   });
 
   it('converts display bridge serial markers into display events without leaking them to user serial logs', () => {
