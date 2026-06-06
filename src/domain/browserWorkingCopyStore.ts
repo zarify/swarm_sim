@@ -1,6 +1,7 @@
 import type { SwarmProject } from './project';
 import { decodeProjectBundle, encodeProjectBundle } from './projectBundle';
 import { deserializeProject, serializeProject } from './projectSerialization';
+import { canonicalizeProjectArtifacts } from './projectArtifacts';
 
 const WORKING_COPY_STORAGE_KEY = 'microbit-swarm:working-copy';
 const DB_NAME = 'microbit-swarm-working-copy';
@@ -75,11 +76,16 @@ function createMemoryStorageFallback(): Storage {
 function createStorageStore(storage: Storage): BrowserWorkingCopyStore {
   return {
     save: async (project) => {
-      storage.setItem(WORKING_COPY_STORAGE_KEY, serializeProject(project));
+      storage.setItem(
+        WORKING_COPY_STORAGE_KEY,
+        serializeProject(await canonicalizeProjectArtifacts(project)),
+      );
     },
     load: async () => {
       const serialized = storage.getItem(WORKING_COPY_STORAGE_KEY);
-      return serialized === null ? undefined : deserializeProject(serialized);
+      return serialized === null
+        ? undefined
+        : canonicalizeProjectArtifacts(deserializeProject(serialized));
     },
     clear: async () => {
       storage.removeItem(WORKING_COPY_STORAGE_KEY);
@@ -114,7 +120,7 @@ function createIndexedDbStore(indexedDbFactory: IDBFactory): BrowserWorkingCopyS
         return decodeProjectBundle(record.bundleBytes);
       }
       if (record.serializedProject) {
-        return deserializeProject(record.serializedProject);
+        return canonicalizeProjectArtifacts(deserializeProject(record.serializedProject));
       }
       throw new Error('Stored working copy is invalid');
     },

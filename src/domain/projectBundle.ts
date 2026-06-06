@@ -1,6 +1,6 @@
 import type { SwarmProject } from './project';
 import { deserializeProject, serializeProject } from './projectSerialization';
-import { deduplicateProjectArtifacts } from './projectArtifacts';
+import { canonicalizeProjectArtifacts, deduplicateProjectArtifacts } from './projectArtifacts';
 
 const BUNDLE_MAGIC = new Uint8Array([0x53, 0x57, 0x41, 0x52, 0x4d]); // SWARM
 const BUNDLE_VERSION = 2;
@@ -13,7 +13,7 @@ const TEXT_ENCODER = new TextEncoder();
 const TEXT_DECODER = new TextDecoder();
 
 export async function encodeProjectBundle(project: SwarmProject): Promise<Uint8Array> {
-  const normalized = deduplicateProjectArtifacts(project);
+  const normalized = deduplicateProjectArtifacts(await canonicalizeProjectArtifacts(project));
   const serializedProject = serializeProject(normalized);
   const payload = TEXT_ENCODER.encode(serializedProject);
   const compressed = await compressPayload(payload);
@@ -45,7 +45,7 @@ export async function decodeProjectBundle(bundleBytes: Uint8Array): Promise<Swar
   }
   const payload = bundleBytes.slice(BUNDLE_HEADER_LENGTH);
   const decompressed = await decompressPayload(payload, method);
-  return deserializeProject(TEXT_DECODER.decode(decompressed));
+  return canonicalizeProjectArtifacts(deserializeProject(TEXT_DECODER.decode(decompressed)));
 }
 
 interface CompressionResult {

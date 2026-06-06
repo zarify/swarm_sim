@@ -169,6 +169,62 @@ describe('project runtime program loading', () => {
     expect(makeCode.sourceFiles?.['main.ts']).toContain('ping');
     expect(makeCode.sourceFiles?.['main.ts']).not.toContain('edited');
   });
+
+  it('loads locked devices from persisted extracted artifact programs without raw HEX bytes', async () => {
+    const flashed: RuntimeProgram[] = [];
+    const project = makeProject();
+    project.artifacts[0] = {
+      id: 'artifact-mc',
+      name: 'mc_beacon.hex',
+      artifactKind: 'hex',
+      runtimeSource: 'makecode-pxt',
+      program: {
+        runtimeSource: 'makecode-pxt',
+        sourceFiles: {
+          'main.ts': 'radio.sendString("persisted")',
+        },
+      },
+      createdAt: now,
+    };
+    project.artifacts[1] = {
+      id: 'artifact-mp',
+      name: 'mp_beacon.hex',
+      artifactKind: 'hex',
+      runtimeSource: 'micropython',
+      program: {
+        runtimeSource: 'micropython',
+        filesystemBase64: {
+          'main.py': btoa('radio.send("persisted")'),
+        },
+      },
+      createdAt: now,
+    };
+    project.devices[0] = {
+      ...project.devices[0]!,
+      locked: true,
+    };
+    project.devices[1] = {
+      ...project.devices[1]!,
+      locked: true,
+    };
+
+    const results = await loadProjectRuntimePrograms(project, {
+      createAdapter: ({ runtimeSource }) => makeAdapter(runtimeSource, flashed),
+    });
+
+    expect(results.map((result) => result.status)).toEqual(['loaded', 'loaded', 'skipped']);
+    expect(flashed[0]).toMatchObject({
+      source: 'makecode-pxt',
+      sourceFiles: {
+        'main.ts': 'radio.sendString("persisted")',
+      },
+    });
+    expect(flashed[1]?.source).toBe('micropython');
+    if (flashed[1]?.source !== 'micropython') {
+      throw new Error('Expected MicroPython program');
+    }
+    expect(new TextDecoder().decode(flashed[1].filesystem['main.py'])).toContain('persisted');
+  });
 });
 
 function makeProject(): SwarmProject {

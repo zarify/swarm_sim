@@ -81,6 +81,10 @@ function createMemoryStorage(): Storage {
   };
 }
 
+function encodeBase64Text(value: string): string {
+  return btoa(value);
+}
+
 function makeProject(id: string, name: string, now: string, locked = false): SwarmProject {
   return {
     ...createBlankProject({ id, name, now }),
@@ -90,7 +94,12 @@ function makeProject(id: string, name: string, now: string, locked = false): Swa
         name: 'sample.hex',
         artifactKind: 'hex',
         runtimeSource: 'micropython',
-        bytes: new Uint8Array([1, 2, 3]),
+        program: {
+          runtimeSource: 'micropython',
+          filesystemBase64: {
+            'main.py': encodeBase64Text('display.scroll("ok")'),
+          },
+        },
         createdAt: now,
       },
     ],

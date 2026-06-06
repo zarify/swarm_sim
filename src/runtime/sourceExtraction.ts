@@ -52,7 +52,7 @@ export async function extractHexSource(
         source: 'makecode-pxt',
         sourceFiles: await decodePxtSourceFiles(pxtSource, options),
         projectMetadata: pxtSource.metadata,
-        artifact: { filename, bytes: artifactBytes },
+        artifact: { filename },
       },
     };
   }
@@ -64,7 +64,7 @@ export async function extractHexSource(
       program: {
         source: 'micropython',
         filesystem: microPythonFiles,
-        artifact: { filename, bytes: artifactBytes },
+        artifact: { filename },
       },
     };
   }

@@ -5,7 +5,7 @@ const now = '2026-05-18T04:20:00.000Z';
 const encoder = new TextEncoder();
 
 describe('project bundle codec', () => {
-  it('round-trips projects and deduplicates repeated artifact bytes', async () => {
+  it('round-trips projects and deduplicates repeated extracted artifact programs', async () => {
     const project = makeProjectWithDuplicateArtifacts();
 
     const reopened = await decodeProjectBundle(await encodeProjectBundle(project));
@@ -14,7 +14,14 @@ describe('project bundle codec', () => {
     expect(reopened.artifacts).toHaveLength(1);
     expect(reopened.artifacts[0]?.id).toBe('artifact-a');
     expect(reopened.artifacts[0]?.runtimeSource).toBe('micropython');
-    expect([...reopened.artifacts[0]!.bytes]).toEqual([...encoder.encode(':10000000ABCDEF')]);
+    expect(reopened.artifacts[0]).toMatchObject({
+      program: {
+        runtimeSource: 'micropython',
+        filesystemBase64: {
+          'main.py': btoa('print("ABCDEF")'),
+        },
+      },
+    });
   });
 
   it('rejects legacy json payloads', async () => {
@@ -35,8 +42,22 @@ describe('project bundle codec', () => {
     ]);
     expect(artifactsById.get('artifact-mc')?.runtimeSource).toBe('makecode-pxt');
     expect(artifactsById.get('artifact-mp')?.runtimeSource).toBe('micropython');
-    expect([...artifactsById.get('artifact-mc')!.bytes]).toEqual([...encoder.encode(':10000000MAKECODE')]);
-    expect([...artifactsById.get('artifact-mp')!.bytes]).toEqual([...encoder.encode(':10000000MICROPY')]);
+    expect(artifactsById.get('artifact-mc')).toMatchObject({
+      program: {
+        runtimeSource: 'makecode-pxt',
+        sourceFiles: {
+          'main.ts': 'basic.showString("MC")',
+        },
+      },
+    });
+    expect(artifactsById.get('artifact-mp')).toMatchObject({
+      program: {
+        runtimeSource: 'micropython',
+        filesystemBase64: {
+          'main.py': btoa('print("MP")'),
+        },
+      },
+    });
   });
 
   it('round-trips custom instructions inside canvas bundles', async () => {
@@ -88,7 +109,7 @@ describe('project bundle codec', () => {
 });
 
 function makeProjectWithDuplicateArtifacts(): SwarmProject {
-  const bytes = encoder.encode(':10000000ABCDEF');
+  const bytes = encoder.encode(makeMicroPythonHex('print("ABCDEF")'));
   return {
     ...createBlankProject({ id: 'project-1', name: 'Bundle test', now }),
     artifacts: [
@@ -135,7 +156,7 @@ function makeMixedRuntimeProject(): SwarmProject {
         name: 'mc.hex',
         artifactKind: 'hex',
         runtimeSource: 'makecode-pxt',
-        bytes: encoder.encode(':10000000MAKECODE'),
+        bytes: encoder.encode(makeMakeCodeHex({ 'main.ts': 'basic.showString("MC")' })),
         createdAt: now,
       },
       {
@@ -143,7 +164,7 @@ function makeMixedRuntimeProject(): SwarmProject {
         name: 'mp.hex',
         artifactKind: 'hex',
         runtimeSource: 'micropython',
-        bytes: encoder.encode(':10000000MICROPY'),
+        bytes: encoder.encode(makeMicroPythonHex('print("MP")')),
         createdAt: now,
       },
     ],
@@ -162,4 +183,71 @@ function makeMixedRuntimeProject(): SwarmProject {
       },
     ],
   };
+}
+
+function makeMakeCodeHex(sourceFiles: Record<string, string>): string {
+  const metadata = encoder.encode('{}');
+  const sourceText = encoder.encode(JSON.stringify(sourceFiles));
+  const header = new Uint8Array(16);
+  header.set([0x41, 0x14, 0x0e, 0x2f, 0xb8, 0x2f, 0xa2, 0xbb]);
+  writeUInt16LE(header, 8, metadata.length);
+  writeUInt32LE(header, 10, sourceText.length);
+
+  return [
+    makeHexRecord(0x0000, 0x0e, [...header]),
+    ...chunkBytes(new Uint8Array([...metadata, ...sourceText]), 16).map((chunk, index) =>
+      makeHexRecord(0x0010 + index * 16, 0x0e, [...chunk]),
+    ),
+    makeHexRecord(0x0000, 0x01, []),
+  ].join('\n');
+}
+
+function makeMicroPythonHex(mainPy: string): string {
+  const filename = encoder.encode('main.py');
+  const source = encoder.encode(mainPy);
+  const chunk = new Uint8Array(128).fill(0xff);
+  const dataStart = 3 + filename.length;
+  chunk[0] = 0xfe;
+  chunk[1] = dataStart + source.length - 1;
+  chunk[2] = filename.length;
+  chunk.set(filename, 3);
+  chunk.set(source, dataStart);
+
+  return [
+    ...chunkBytes(chunk, 16).map((record, index) => makeHexRecord(index * 16, 0x00, [...record])),
+    makeHexRecord(0x0000, 0x01, []),
+  ].join('\n');
+}
+
+function chunkBytes(bytes: Uint8Array, size: number): Uint8Array[] {
+  const chunks: Uint8Array[] = [];
+  for (let offset = 0; offset < bytes.length; offset += size) {
+    chunks.push(bytes.subarray(offset, offset + size));
+  }
+  return chunks;
+}
+
+function writeUInt16LE(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >> 8) & 0xff;
+}
+
+function writeUInt32LE(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >> 8) & 0xff;
+  bytes[offset + 2] = (value >> 16) & 0xff;
+  bytes[offset + 3] = (value >> 24) & 0xff;
+}
+
+function makeHexRecord(address: number, recordType: number, data: number[]): string {
+  const byteCount = data.length;
+  const bytes = [
+    byteCount,
+    (address >> 8) & 0xff,
+    address & 0xff,
+    recordType,
+    ...data,
+  ];
+  const checksum = ((~bytes.reduce((sum, byte) => sum + byte, 0) + 1) & 0xff) >>> 0;
+  return `:${[...bytes, checksum].map((byte) => byte.toString(16).padStart(2, '0')).join('').toUpperCase()}`;
 }

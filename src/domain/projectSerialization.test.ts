@@ -8,7 +8,7 @@ describe('project serialization', () => {
     const project = createBlankProject({ id: 'project-1', name: 'Radio swarm', now });
 
     expect(project).toMatchObject({
-      schemaVersion: 6,
+      schemaVersion: 7,
       id: 'project-1',
       name: 'Radio swarm',
       createdAt: now,
@@ -19,16 +19,60 @@ describe('project serialization', () => {
     });
   });
 
-  it('round-trips a self-contained project with artifact bytes', () => {
+  it('round-trips a self-contained project with persisted extracted artifact programs', () => {
     const project = makeProject();
     const roundTripped = deserializeProject(serializeProject(project));
 
     expect(roundTripped).toEqual(project);
-    expect([...roundTripped.artifacts[0]!.bytes]).toEqual([1, 2, 3, 255]);
+    expect(roundTripped.artifacts[0]).toMatchObject({
+      runtimeSource: 'makecode-pxt',
+      program: {
+        runtimeSource: 'makecode-pxt',
+        sourceFiles: {
+          'main.ts': 'radio.sendString("ping")',
+        },
+      },
+    });
+  });
+
+  it('deserializes legacy byte-backed artifacts from older schema payloads', () => {
+    const legacyProject = {
+      ...makeProject(),
+      schemaVersion: 6,
+      artifacts: [
+        {
+          id: 'artifact-legacy',
+          name: 'legacy.hex',
+          artifactKind: 'hex',
+          runtimeSource: 'micropython',
+          bytesBase64: 'AQID/w==',
+          createdAt: now,
+        },
+      ],
+      devices: [
+        {
+          id: 'device-1',
+          name: 'Beacon A',
+          position: { x: 120, y: 80 },
+          programArtifactId: 'artifact-legacy',
+        },
+      ],
+    };
+
+    expect(deserializeProject(JSON.stringify(legacyProject))).toMatchObject({
+      schemaVersion: 7,
+      artifacts: [
+        {
+          id: 'artifact-legacy',
+          runtimeSource: 'micropython',
+          bytes: new Uint8Array([1, 2, 3, 255]),
+        },
+      ],
+    });
   });
 
   it('rejects unsupported schema versions', () => {
-    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 6', '"schemaVersion": 99');
+    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 7', '"schemaVersion": 99');
 
     expect(() => deserializeProject(serialized)).toThrow('Unsupported project schema version: 99');
   });
@@ -54,7 +98,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 1;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(6);
+    expect(deserialized.schemaVersion).toBe(7);
     expect(deserialized.environmentSources[0]?.type).toBe('light');
   });
 
@@ -63,7 +107,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 2;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(6);
+    expect(deserialized.schemaVersion).toBe(7);
     expect(deserialized.devices[0]?.editableProgram).toBeDefined();
   });
 
@@ -72,7 +116,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 3;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(6);
+    expect(deserialized.schemaVersion).toBe(7);
     expect(deserialized.devices[0]?.locked).toBeUndefined();
   });
 
@@ -81,7 +125,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 4;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(6);
+    expect(deserialized.schemaVersion).toBe(7);
     expect(deserialized.devices[0]?.positionLocked).toBeUndefined();
   });
 
@@ -90,7 +134,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 5;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(6);
+    expect(deserialized.schemaVersion).toBe(7);
   });
 
   it('round-trips custom canvas instructions', () => {
@@ -224,7 +268,16 @@ function makeProject(): SwarmProject {
         name: 'mc_beacon.hex',
         artifactKind: 'hex',
         runtimeSource: 'makecode-pxt',
-        bytes: new Uint8Array([1, 2, 3, 255]),
+        program: {
+          runtimeSource: 'makecode-pxt',
+          sourceFiles: {
+            'main.ts': 'radio.sendString("ping")',
+            'pxt.json': '{"name":"mc_beacon"}',
+          },
+          projectMetadata: {
+            editor: 'tsprj',
+          },
+        },
         createdAt: now,
       },
     ],
