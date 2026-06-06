@@ -66,6 +66,26 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add locked device' }));
   }
 
+  function stubCanvasGeometry(canvas: SVGElement) {
+    Object.defineProperty(canvas, 'getBoundingClientRect', {
+      configurable: true,
+      value: () => ({
+        x: 0,
+        y: 0,
+        left: 0,
+        top: 0,
+        right: 860,
+        bottom: 520,
+        width: 860,
+        height: 520,
+        toJSON: () => ({}),
+      }),
+    });
+    Object.defineProperty(canvas, 'setPointerCapture', { configurable: true, value: vi.fn() });
+    Object.defineProperty(canvas, 'releasePointerCapture', { configurable: true, value: vi.fn() });
+    Object.defineProperty(canvas, 'hasPointerCapture', { configurable: true, value: () => false });
+  }
+
   it('renders the spatial canvas with reset-only runtime controls', () => {
     const { container } = render(<SwarmCanvasPanel />);
 
@@ -139,6 +159,23 @@ describe('SwarmCanvasPanel', () => {
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
     expect(screen.getByText('Locked', { selector: '.selection-name-badge' })).toBeInTheDocument();
     expect(screen.getByText('The first successful code upload will be its only assignment.')).toBeInTheDocument();
+  });
+
+  it('shows the position-lock action only for locked devices and keeps it permanent once applied', () => {
+    const { container } = render(<SwarmCanvasPanel />);
+
+    expect(screen.queryByRole('button', { name: 'Lock position' })).not.toBeInTheDocument();
+
+    addLockedDeviceFromSwarmTools();
+
+    expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Lock position' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Lock position' }));
+
+    expect(screen.queryByRole('button', { name: 'Lock position' })).not.toBeInTheDocument();
+    expect(
+      screen.getByText('This device is locked in place on the canvas and cannot be moved or unlocked.'),
+    ).toBeInTheDocument();
   });
 
   it('handles magnet source controls according to feature flags', () => {
@@ -415,6 +452,36 @@ describe('SwarmCanvasPanel', () => {
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(0);
   });
 
+  it('keeps regular devices draggable while preventing movement on position-locked locked devices', () => {
+    const { container } = render(<SwarmCanvasPanel />);
+    const canvas = container.querySelector('.swarm-canvas') as SVGElement;
+    stubCanvasGeometry(canvas);
+
+    addLockedDeviceFromSwarmTools();
+    fireEvent.click(screen.getByRole('button', { name: 'Lock position' }));
+
+    const nodes = container.querySelectorAll('.microbit-node');
+    const regularNode = nodes[0] as SVGGElement;
+    const fixedLockedNode = nodes[1] as SVGGElement;
+
+    expect(regularNode).toHaveAttribute('transform', 'translate(430 260)');
+    fireEvent.pointerDown(regularNode, { pointerId: 1, clientX: 430, clientY: 260 });
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 100, clientY: 100 });
+    fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 100, clientY: 100 });
+    expect(regularNode).toHaveAttribute('transform', 'translate(100 100)');
+    expect(screen.queryByRole('button', { name: 'Lock position' })).not.toBeInTheDocument();
+
+    expect(fixedLockedNode).toHaveAttribute('transform', 'translate(526 260)');
+    fireEvent.pointerDown(fixedLockedNode, { pointerId: 2, clientX: 526, clientY: 260 });
+    fireEvent.pointerMove(canvas, { pointerId: 2, clientX: 160, clientY: 160 });
+    fireEvent.pointerUp(canvas, { pointerId: 2, clientX: 160, clientY: 160 });
+
+    expect(
+      screen.getByText('This device is locked in place on the canvas and cannot be moved or unlocked.'),
+    ).toBeInTheDocument();
+    expect(fixedLockedNode).toHaveAttribute('transform', 'translate(526 260)');
+  });
+
   it('keeps runtime hosts hidden until devices have assigned runtime artifacts', () => {
     render(<SwarmCanvasPanel />);
 
@@ -574,6 +641,28 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.click(radioInspector.querySelector('summary') as HTMLElement);
 
     await waitFor(() => expect(screen.getByText(/sensors to 1 received/i)).toBeInTheDocument());
+  });
+
+  it('redacts radio inspector payloads when the sender is a locked device', async () => {
+    render(<SwarmCanvasPanel RuntimeHost={(props) => <LockedSenderRadioHost {...props} />} />);
+
+    addLockedDeviceFromSwarmTools();
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
+      target: { files: [makeUploadFile('locked.hex', makeMicroPythonHex('radio.send("hidden")'))] },
+    });
+    await waitFor(() => expect(screen.getByText('Assigned: locked.hex')).toBeInTheDocument());
+
+    const radioInspector = screen.getByLabelText('Radio message inspector');
+    fireEvent.click(radioInspector.querySelector('summary') as HTMLElement);
+
+    await waitFor(() => expect(screen.getByText('Broadcast hidden for locked device')).toBeInTheDocument());
+    expect(screen.getByText(/Node 2 to 1 received/i)).toBeInTheDocument();
+    expect(screen.queryByText('secret lesson')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
+
+    expect(screen.getByText('Broadcast hidden for locked device')).toBeInTheDocument();
+    expect(screen.queryByText('secret lesson')).not.toBeInTheDocument();
   });
 
   it('uses autogenerated fallback names and keeps radio identity keyed by device id', async () => {
@@ -1137,6 +1226,25 @@ function DuplicateRadioPacketHost({ project, onRadioConfigHint, onRadioPacket }:
       const packet = { data: new Uint8Array([0x01]), signalStrength: 7 };
       onRadioPacket('device-1', packet);
       onRadioPacket('device-1', packet);
+    }, 0);
+    return () => globalThis.clearTimeout(timerId);
+  }, [project, onRadioConfigHint, onRadioPacket]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
+function LockedSenderRadioHost({ project, onRadioConfigHint, onRadioPacket }: MicroPythonRuntimeHostProps) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    const lockedDevice = project.devices.find((device) => device.id === 'device-2');
+    if (emitted.current || !lockedDevice?.programArtifactId) {
+      return;
+    }
+    emitted.current = true;
+    const timerId = globalThis.setTimeout(() => {
+      onRadioConfigHint?.('device-1', { group: 42 });
+      onRadioConfigHint?.('device-2', { group: 42 });
+      onRadioPacket('device-2', { data: new TextEncoder().encode('secret lesson'), signalStrength: 7 });
     }, 0);
     return () => globalThis.clearTimeout(timerId);
   }, [project, onRadioConfigHint, onRadioPacket]);

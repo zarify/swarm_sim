@@ -57,6 +57,7 @@ describe('project bundle codec', () => {
           id: 'device-locked',
           name: 'Mystery node',
           locked: true,
+          positionLocked: true,
           position: { x: 120, y: 80 },
           programArtifactId: 'artifact-locked',
         },
@@ -68,6 +69,7 @@ describe('project bundle codec', () => {
     expect(reopened.devices[0]).toMatchObject({
       id: 'device-locked',
       locked: true,
+      positionLocked: true,
       programArtifactId: 'artifact-locked',
     });
     expect(reopened.devices[0]?.editableProgram).toBeUndefined();

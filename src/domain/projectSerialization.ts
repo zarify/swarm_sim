@@ -43,6 +43,7 @@ function parseSerializedProject(value: unknown): SwarmProject {
     schemaVersion !== 1 &&
     schemaVersion !== 2 &&
     schemaVersion !== 3 &&
+    schemaVersion !== 4 &&
     schemaVersion !== PROJECT_SCHEMA_VERSION
   ) {
     throw new Error(`Unsupported project schema version: ${schemaVersion}`);
@@ -80,16 +81,21 @@ function parseDevice(value: unknown): VirtualDevice {
   const programArtifactId = device.programArtifactId;
   const editableProgram = device.editableProgram;
   const locked = expectOptionalBoolean(device.locked, 'device.locked') ?? false;
+  const positionLocked = expectOptionalBoolean(device.positionLocked, 'device.positionLocked') ?? false;
   const parsedProgramArtifactId =
     programArtifactId === undefined
       ? undefined
       : expectString(programArtifactId, 'device.programArtifactId');
+  if (positionLocked && !locked) {
+    throw new Error('device.positionLocked requires device.locked to be true');
+  }
 
   return {
     id: expectString(device.id, 'device.id'),
     name: expectString(device.name, 'device.name'),
     position: parsePoint(device.position, 'device.position'),
     ...(locked ? { locked: true } : {}),
+    ...(positionLocked ? { positionLocked: true } : {}),
     ...(parsedProgramArtifactId === undefined ? {} : { programArtifactId: parsedProgramArtifactId }),
     ...(locked || editableProgram === undefined
       ? {}

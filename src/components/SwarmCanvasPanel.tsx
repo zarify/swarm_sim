@@ -81,6 +81,16 @@ interface CanvasModel {
   simulationState: SimulationState;
 }
 
+function formatRadioInspectorPayload(
+  data: Uint8Array,
+  payloadRedacted: boolean,
+): string {
+  if (payloadRedacted) {
+    return 'Broadcast hidden for locked device';
+  }
+  return decodePacketPreview(data);
+}
+
 async function readBundleFileBytes(file: File): Promise<Uint8Array> {
   if (typeof file.arrayBuffer === 'function') {
     return new Uint8Array(await file.arrayBuffer());
@@ -442,6 +452,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           return rest;
         });
       }
+
     }
     for (const [deviceId] of recentRuntimeSoundLogAt.current.entries()) {
       if (!activeDeviceIds.has(deviceId)) {
@@ -713,6 +724,21 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     });
   }
 
+  function lockDevicePosition(deviceId: DeviceId) {
+    releaseCanvasPointer();
+    setDragTarget((current) =>
+      current?.type === 'device' && current.id === deviceId ? null : current,
+    );
+    updateProject((current) => ({
+      ...current,
+      devices: current.devices.map((device) =>
+        device.id === deviceId && device.locked && !isDevicePositionLocked(device)
+          ? { ...device, positionLocked: true }
+          : device,
+      ),
+    }));
+  }
+
   function deleteSelectedNode() {
     if (selected.type === 'none') {
       return;
@@ -974,6 +1000,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       setModel((current) => {
         const senderRuntime = current.simulationState.devices[deviceId];
         const senderRuntimeSource = resolveDeviceRuntimeSource(current.project, deviceId);
+        const senderDevice = current.project.devices.find((device) => device.id === deviceId);
         const senderGroup = senderRuntime?.radio.group;
         const normalized = normalizeRuntimeRadioPacket(
           packet,
@@ -992,6 +1019,15 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           });
         }
         simulationState = routeRadioPacket(simulationState, deviceId, normalized.packet);
+        if (senderDevice?.locked && simulationState.radioEvents.length > 0) {
+          const lastEventIndex = simulationState.radioEvents.length - 1;
+          simulationState = {
+            ...simulationState,
+            radioEvents: simulationState.radioEvents.map((event, index) =>
+              index === lastEventIndex ? { ...event, payloadRedacted: true } : event,
+            ),
+          };
+        }
         const routedEvent = simulationState.radioEvents.at(-1);
         const outboundGroup = normalized.packet.group ?? senderRuntime?.radio.group;
         const outboundChannel = normalized.packet.channel ?? senderRuntime?.radio.channel;
@@ -1337,6 +1373,15 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
 
   function updateDragPosition(clientX: number, clientY: number) {
     if (!dragTarget || !svgRef.current) {
+      return;
+    }
+    if (
+      dragTarget.type === 'device' &&
+      isDevicePositionLocked(
+        modelRef.current.project.devices.find((device) => device.id === dragTarget.id),
+      )
+    ) {
+      endDrag();
       return;
     }
 
@@ -2026,8 +2071,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   className={`microbit-node ${isSelected ? 'microbit-node--selected' : ''}`}
                   transform={`translate(${device.position.x} ${device.position.y})`}
                   onPointerDown={(event) => {
-                    captureCanvasPointer(event.pointerId);
                     setSelected({ type: 'device', id: device.deviceId });
+                    if (isDevicePositionLocked(projectDevice)) {
+                      releaseCanvasPointer();
+                      setDragTarget(null);
+                      return;
+                    }
+                    captureCanvasPointer(event.pointerId);
                     setDragTarget({ type: 'device', id: device.deviceId });
                   }}
                 >
@@ -2172,6 +2222,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   logs={simulationState.deviceLogs.filter((log) => log.deviceId === selectedDevice.id)}
                   onResetRuntime={resetSelectedDevice}
                   onDeleteNode={deleteSelectedNode}
+                  onLockPosition={lockDevicePosition}
                   onArtifactUpload={uploadArtifactForDevice}
                   onOpenEditor={openDeviceEditor}
                   canAssignCode={canAssignDeviceCode(selectedDevice, artifactUploadState[selectedDevice.id])}
@@ -2217,7 +2268,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                       deviceDisplayNames.get(event.senderId) ?? defaultDeviceNameForId(event.senderId);
                     return (
                       <article key={event.id} className="radio-event">
-                        <p className="radio-event__payload">{decodePacketPreview(event.data)}</p>
+                        <p className="radio-event__payload">
+                          {formatRadioInspectorPayload(event.data, event.payloadRedacted === true)}
+                        </p>
                         <p className="radio-event__meta">
                           {senderName} to {event.recipients.length} received / {event.blockedTargets.length} blocked
                         </p>
@@ -2309,6 +2362,7 @@ function DeviceSelection({
   logs,
   onResetRuntime,
   onDeleteNode,
+  onLockPosition,
   onArtifactUpload,
   onOpenEditor,
   canAssignCode,
@@ -2330,6 +2384,7 @@ function DeviceSelection({
   logs: SimulationState['deviceLogs'];
   onResetRuntime: () => void;
   onDeleteNode: () => void;
+  onLockPosition: (deviceId: DeviceId) => void;
   onArtifactUpload: (deviceId: DeviceId, file: File) => void;
   onOpenEditor: (deviceId: DeviceId) => void;
   canAssignCode: boolean;
@@ -2350,6 +2405,7 @@ function DeviceSelection({
     : undefined;
   const editableProgram = getActiveEditableProgram(device);
   const locked = device.locked === true;
+  const positionLocked = isDevicePositionLocked(device);
 
   return (
     <>
@@ -2379,6 +2435,11 @@ function DeviceSelection({
         {!locked ? (
           <button type="button" onClick={() => onOpenEditor(device.id)} disabled={!editableProgram}>
             <span aria-hidden="true">✎</span> Edit code
+          </button>
+        ) : null}
+        {locked && !positionLocked ? (
+          <button type="button" onClick={() => onLockPosition(device.id)}>
+            <span aria-hidden="true">📍</span> Lock position
           </button>
         ) : null}
       </div>
@@ -2441,6 +2502,21 @@ function DeviceSelection({
               ? 'Source is hidden and this device cannot be overwritten.'
               : 'The first successful code upload will be its only assignment.'}
           </p>
+        ) : null}
+        {locked ? (
+          <div className="selection-position-lock">
+            {positionLocked ? (
+              <p>
+                <strong>Position fixed.</strong> This device is locked in place on the canvas and cannot
+                {' '}be moved or unlocked.
+              </p>
+            ) : (
+              <>
+                <p>Keep this locked device fixed in place on the canvas.</p>
+                <p>This is permanent once applied.</p>
+              </>
+            )}
+          </div>
         ) : null}
         {canAssignCode ? (
           <label className="artifact-field artifact-field--compact">
@@ -2666,6 +2742,12 @@ function canAssignDeviceCode(
     return false;
   }
   return !device.programArtifactId;
+}
+
+function isDevicePositionLocked(
+  device: Pick<VirtualDevice, 'locked' | 'positionLocked'> | undefined,
+): boolean {
+  return device?.locked === true && device.positionLocked === true;
 }
 
 function createDemoProject(): SwarmProject {
@@ -3352,6 +3434,10 @@ function readFileWithFileReader(file: File): Promise<ArrayBuffer> {
 
 function moveProjectObject(project: SwarmProject, target: DragTarget, position: Point): SwarmProject {
   if (target.type === 'device') {
+    const targetDevice = project.devices.find((device) => device.id === target.id);
+    if (isDevicePositionLocked(targetDevice)) {
+      return project;
+    }
     return {
       ...project,
       devices: project.devices.map((device) =>

@@ -40,6 +40,7 @@ describe('browserProjectStore fallback', () => {
         {
           id: 'layout-locked-device',
           locked: true,
+          positionLocked: true,
           programArtifactId: 'layout-locked-artifact',
         },
       ],
@@ -83,6 +84,7 @@ function makeProject(id: string, name: string, now: string, locked = false): Swa
         id: `${id}-device`,
         name: 'Node',
         ...(locked ? { locked: true } : {}),
+        ...(locked ? { positionLocked: true } : {}),
         position: { x: 20, y: 30 },
         programArtifactId: `${id}-artifact`,
       },

@@ -1097,6 +1097,17 @@ button:disabled {
   font-size: 0.78rem;
 }
 
+.selection-position-lock {
+  display: grid;
+  gap: 6px;
+}
+
+.selection-position-lock button {
+  justify-self: start;
+  padding: 7px 10px;
+  font-size: 0.72rem;
+}
+
 
 
 .radio-summary {

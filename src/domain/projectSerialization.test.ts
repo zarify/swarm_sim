@@ -8,7 +8,7 @@ describe('project serialization', () => {
     const project = createBlankProject({ id: 'project-1', name: 'Radio swarm', now });
 
     expect(project).toMatchObject({
-      schemaVersion: 4,
+      schemaVersion: 5,
       id: 'project-1',
       name: 'Radio swarm',
       createdAt: now,
@@ -28,7 +28,7 @@ describe('project serialization', () => {
   });
 
   it('rejects unsupported schema versions', () => {
-    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 4', '"schemaVersion": 99');
+    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 5', '"schemaVersion": 99');
 
     expect(() => deserializeProject(serialized)).toThrow('Unsupported project schema version: 99');
   });
@@ -54,7 +54,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 1;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(4);
+    expect(deserialized.schemaVersion).toBe(5);
     expect(deserialized.environmentSources[0]?.type).toBe('light');
   });
 
@@ -63,7 +63,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 2;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(4);
+    expect(deserialized.schemaVersion).toBe(5);
     expect(deserialized.devices[0]?.editableProgram).toBeDefined();
   });
 
@@ -72,8 +72,17 @@ describe('project serialization', () => {
     parsed.schemaVersion = 3;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(4);
+    expect(deserialized.schemaVersion).toBe(5);
     expect(deserialized.devices[0]?.locked).toBeUndefined();
+  });
+
+  it('migrates schema v4 projects to the current schema version with unlocked position defaults', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as Record<string, unknown>;
+    parsed.schemaVersion = 4;
+
+    const deserialized = deserializeProject(JSON.stringify(parsed));
+    expect(deserialized.schemaVersion).toBe(5);
+    expect(deserialized.devices[0]?.positionLocked).toBeUndefined();
   });
 
   it('round-trips magnet sources and editable programs in schema v3 projects', () => {
@@ -112,6 +121,24 @@ describe('project serialization', () => {
     expect(deserialized.devices[0]?.editableProgram).toBeUndefined();
   });
 
+  it('round-trips locked devices with persisted position locking', () => {
+    const project: SwarmProject = {
+      ...makeProject(),
+      devices: [
+        {
+          id: 'device-locked',
+          name: 'Mystery node',
+          position: { x: 120, y: 80 },
+          locked: true,
+          positionLocked: true,
+          programArtifactId: 'artifact-1',
+        },
+      ],
+    };
+
+    expect(deserializeProject(serializeProject(project))).toEqual(project);
+  });
+
   it('rejects malformed locked flags', () => {
     const parsed = JSON.parse(serializeProject(makeProject())) as {
       devices: Array<Record<string, unknown>>;
@@ -123,6 +150,35 @@ describe('project serialization', () => {
 
     expect(() => deserializeProject(JSON.stringify(parsed))).toThrow(
       'Expected device.locked to be a boolean',
+    );
+  });
+
+  it('rejects malformed position-locked flags', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as {
+      devices: Array<Record<string, unknown>>;
+    };
+    parsed.devices[0] = {
+      ...parsed.devices[0],
+      locked: true,
+      positionLocked: 'yes',
+    };
+
+    expect(() => deserializeProject(JSON.stringify(parsed))).toThrow(
+      'Expected device.positionLocked to be a boolean',
+    );
+  });
+
+  it('rejects position locking on unlocked devices', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as {
+      devices: Array<Record<string, unknown>>;
+    };
+    parsed.devices[0] = {
+      ...parsed.devices[0],
+      positionLocked: true,
+    };
+
+    expect(() => deserializeProject(JSON.stringify(parsed))).toThrow(
+      'device.positionLocked requires device.locked to be true',
     );
   });
 

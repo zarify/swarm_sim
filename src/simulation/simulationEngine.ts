@@ -76,6 +76,7 @@ export interface RadioMessageEvent {
   sequence: number;
   timestampMs: number;
   senderId: DeviceId;
+  payloadRedacted?: boolean;
   data: Uint8Array;
   group: number;
   channel: number;

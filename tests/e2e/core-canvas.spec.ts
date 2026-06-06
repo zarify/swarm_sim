@@ -123,6 +123,20 @@ test.describe('core canvas workflows', () => {
     await expect(page.getByLabel(/Load code onto Node 2/)).toHaveCount(0);
   });
 
+  test('lets locked devices be fixed in place permanently from device configuration', async ({ page }) => {
+    await gotoCanvas(page);
+
+    await addLockedDeviceFromSwarmTools(page);
+    await expect(page.getByRole('button', { name: 'Lock position' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Lock position' }).click();
+
+    await expect(page.getByRole('button', { name: 'Lock position' })).toHaveCount(0);
+    await expect(
+      page.getByText('This device is locked in place on the canvas and cannot be moved or unlocked.'),
+    ).toBeVisible();
+  });
+
   test('adds a magnet source and shows magnetic readings on devices', async ({ page }) => {
     await gotoCanvas(page);
 
