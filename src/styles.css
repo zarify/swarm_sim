@@ -164,11 +164,13 @@ h2 {
 .splash-modal__card {
   position: relative;
   width: min(560px, calc(100% - 32px));
+  max-height: calc(100vh - 72px);
   border: 1px solid rgba(105, 247, 255, 0.36);
   padding: 20px 20px 18px;
   background: linear-gradient(135deg, rgba(11, 29, 31, 0.98), rgba(7, 18, 20, 0.96));
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
-  cursor: pointer;
+  display: flex;
+  flex-direction: column;
 }
 
 .splash-modal__card h3 {
@@ -179,6 +181,16 @@ h2 {
 
 .splash-modal__card p {
   margin: 12px 0 0;
+}
+
+.splash-modal__body {
+  margin-top: 10px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.splash-modal__hint {
+  margin-top: 16px;
 }
 
 .splash-modal__close {
@@ -260,6 +272,78 @@ h2 {
   padding: 6px 10px;
   font-size: 1.1rem;
   line-height: 1;
+}
+
+.instructions-editor-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 21;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(4, 10, 12, 0.84);
+}
+
+.instructions-editor-modal__card {
+  position: relative;
+  width: min(720px, calc(100% - 32px));
+  max-height: calc(100vh - 72px);
+  overflow-y: auto;
+  border: 1px solid rgba(105, 247, 255, 0.36);
+  padding: 20px 20px 18px;
+  background: linear-gradient(135deg, rgba(11, 29, 31, 0.98), rgba(7, 18, 20, 0.96));
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+}
+
+.instructions-editor-modal__close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  min-width: 36px;
+  padding: 6px 10px;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.instructions-editor-modal__header {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.instructions-editor-modal__header strong {
+  font-size: 1.04rem;
+}
+
+.instructions-editor-modal__header span {
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.instructions-editor-modal__textarea {
+  width: 100%;
+  min-height: 320px;
+  margin-top: 14px;
+  border: 1px solid rgba(105, 247, 255, 0.34);
+  padding: 14px;
+  background: rgba(2, 10, 11, 0.88);
+  color: var(--ink);
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.instructions-editor-modal__textarea:focus {
+  outline: 2px solid rgba(105, 247, 255, 0.42);
+  outline-offset: 1px;
+}
+
+.instructions-editor-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 16px;
 }
 
 .code-editor-modal__header {
@@ -575,6 +659,14 @@ h2 {
   color: var(--amber);
 }
 
+.panel-info-button {
+  min-width: 42px;
+  padding: 10px;
+  text-transform: none;
+  font-size: 1rem;
+  line-height: 1;
+}
+
 .canvas-state-panel {
   margin-top: 12px;
   border: 1px solid rgba(105, 247, 255, 0.26);
@@ -654,6 +746,65 @@ h2 {
 
 .canvas-state-saved__delete {
   flex: 0 0 auto;
+}
+
+.instructions-markdown {
+  display: grid;
+  gap: 12px;
+}
+
+.instructions-markdown > * {
+  margin: 0;
+}
+
+.instructions-markdown h1,
+.instructions-markdown h2,
+.instructions-markdown h3,
+.instructions-markdown h4,
+.instructions-markdown h5,
+.instructions-markdown h6 {
+  letter-spacing: -0.02em;
+}
+
+.instructions-markdown h1 {
+  font-size: clamp(1.5rem, 2.2vw, 2rem);
+}
+
+.instructions-markdown h2 {
+  font-size: clamp(1.3rem, 2vw, 1.7rem);
+}
+
+.instructions-markdown h3 {
+  font-size: clamp(1.15rem, 1.8vw, 1.4rem);
+}
+
+.instructions-markdown ul,
+.instructions-markdown ol {
+  display: grid;
+  gap: 6px;
+  padding-left: 1.3rem;
+}
+
+.instructions-markdown code {
+  border: 1px solid rgba(105, 247, 255, 0.24);
+  padding: 1px 5px;
+  background: rgba(105, 247, 255, 0.08);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+}
+
+.instructions-markdown pre {
+  overflow-x: auto;
+  border: 1px solid rgba(105, 247, 255, 0.22);
+  padding: 12px;
+  background: rgba(2, 10, 11, 0.84);
+}
+
+.instructions-markdown pre code {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  white-space: pre-wrap;
 }
 
 button {

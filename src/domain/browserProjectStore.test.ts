@@ -46,6 +46,21 @@ describe('browserProjectStore fallback', () => {
       ],
     });
   });
+
+  it('preserves custom instructions through storage fallback', async () => {
+    const store = createBrowserProjectStore({
+      indexedDbFactory: undefined,
+      storage: createMemoryStorage(),
+    });
+    const project = {
+      ...makeProject('layout-instructions', 'Lesson layout', '2026-05-18T01:20:00.000Z'),
+      instructionsMarkdown: '# Instructions\n\n- Step one',
+    } satisfies SwarmProject;
+
+    await store.save(project);
+
+    await expect(store.load('layout-instructions')).resolves.toEqual(project);
+  });
 });
 
 function createMemoryStorage(): Storage {

@@ -8,7 +8,7 @@ describe('project serialization', () => {
     const project = createBlankProject({ id: 'project-1', name: 'Radio swarm', now });
 
     expect(project).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: 6,
       id: 'project-1',
       name: 'Radio swarm',
       createdAt: now,
@@ -28,7 +28,7 @@ describe('project serialization', () => {
   });
 
   it('rejects unsupported schema versions', () => {
-    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 5', '"schemaVersion": 99');
+    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 6', '"schemaVersion": 99');
 
     expect(() => deserializeProject(serialized)).toThrow('Unsupported project schema version: 99');
   });
@@ -54,7 +54,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 1;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(5);
+    expect(deserialized.schemaVersion).toBe(6);
     expect(deserialized.environmentSources[0]?.type).toBe('light');
   });
 
@@ -63,7 +63,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 2;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(5);
+    expect(deserialized.schemaVersion).toBe(6);
     expect(deserialized.devices[0]?.editableProgram).toBeDefined();
   });
 
@@ -72,7 +72,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 3;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(5);
+    expect(deserialized.schemaVersion).toBe(6);
     expect(deserialized.devices[0]?.locked).toBeUndefined();
   });
 
@@ -81,8 +81,33 @@ describe('project serialization', () => {
     parsed.schemaVersion = 4;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(5);
+    expect(deserialized.schemaVersion).toBe(6);
     expect(deserialized.devices[0]?.positionLocked).toBeUndefined();
+  });
+
+  it('migrates schema v5 projects to the current schema version', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as Record<string, unknown>;
+    parsed.schemaVersion = 5;
+
+    const deserialized = deserializeProject(JSON.stringify(parsed));
+    expect(deserialized.schemaVersion).toBe(6);
+  });
+
+  it('round-trips custom canvas instructions', () => {
+    const project = {
+      ...makeProject(),
+      instructionsMarkdown: '# Lesson\n\n- Press `A`\n- Watch the log',
+    } satisfies SwarmProject;
+
+    expect(deserializeProject(serializeProject(project))).toEqual(project);
+  });
+
+  it('normalizes blank instructions to the default quick-start state', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as Record<string, unknown>;
+    parsed.instructionsMarkdown = ' \n\n ';
+
+    const deserialized = deserializeProject(JSON.stringify(parsed));
+    expect(deserialized.instructionsMarkdown).toBeUndefined();
   });
 
   it('round-trips magnet sources and editable programs in schema v3 projects', () => {

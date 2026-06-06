@@ -39,6 +39,17 @@ describe('project bundle codec', () => {
     expect([...artifactsById.get('artifact-mp')!.bytes]).toEqual([...encoder.encode(':10000000MICROPY')]);
   });
 
+  it('round-trips custom instructions inside canvas bundles', async () => {
+    const project: SwarmProject = {
+      ...makeMixedRuntimeProject(),
+      instructionsMarkdown: '# Class activity\n\n1. Flash both nodes\n2. Compare results',
+    };
+
+    const reopened = await decodeProjectBundle(await encodeProjectBundle(project));
+
+    expect(reopened.instructionsMarkdown).toBe(project.instructionsMarkdown);
+  });
+
   it('round-trips locked devices without restoring editable source', async () => {
     const project: SwarmProject = {
       ...createBlankProject({ id: 'project-3', name: 'Locked bundle', now }),

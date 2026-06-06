@@ -15,42 +15,24 @@ Use npm scripts from `package.json`:
 - Run one Playwright test by title: `npm run test:e2e -- -g "uploads MicroPython fixture for selected device"`
 - Run a single test file: `npm run test -- src/runtime/sourceExtraction.test.ts`
 - Run a single test case by name: `npm run test -- src/runtime/sourceExtraction.test.ts -t "extracts the MakeCode project file map from the PXT HEX fixture"`
-- Run acceptance coverage only: `npm run test -- src/acceptance/mvpAcceptance.test.ts`
 
 There is currently no lint script in `package.json`.
-
-## Recommended MCP servers
-
-- **Playwright MCP (recommended):** this repo is heavily UI-driven (SVG canvas interactions, drag/drop uploads, runtime host iframes, radio/log inspectors). Use Playwright-based browser automation for end-to-end validation of these flows.
-- **GitHub MCP:** useful when implementation work is driven by issues/PRs and you need repository context (linked files, code search, and review workflow) while coding.
 
 ## High-level architecture
 
 - `src/App.tsx` is intentionally thin and mounts `SwarmCanvasPanel`, which is the main orchestration surface.
-- `src/components/SwarmCanvasPanel.tsx` owns two synchronized states:
-  - `project` (persisted domain model: devices, artifacts, environment sources)
-  - `simulationState` (runtime state from `src/simulation/simulationEngine.ts`)
-- `src/simulation/simulationEngine.ts` is a pure-function state engine for radio routing, device lifecycle, environment sensor projection, and log/radio event history.
-- Runtime execution is adapter-driven:
-  - Artifact/source analysis: `src/runtime/artifactReadiness.ts`, `src/runtime/sourceExtraction.ts`
-  - Program preparation/loading: `src/runtime/programLoader.ts`
-  - Common runtime contract: `src/runtime/runtimeAdapter.ts`
-  - Runtime hosts: `src/components/MicroPythonRuntimeHost.tsx`, `src/components/MakeCodeRuntimeHost.tsx`, composed by `src/components/SwarmRuntimeHosts.tsx`
-- MakeCode execution path is bridged through patched runner pages in `public/`:
-  - `makecode-patched-runner.html` (host-side runner bridge)
-  - `makecode-patched-simulator.html` (patched simulator event bridge)
-  These convert simulator `postMessage` traffic into repository runtime events.
-- Project persistence is schema-versioned:
-  - Domain types: `src/domain/project.ts`
-  - Compressed bundle codec and serializer: `src/domain/projectBundle.ts`, `src/domain/projectSerialization.ts`
-  - Browser storage abstraction with IndexedDB-first fallback: `src/domain/browserProjectStore.ts`, `src/domain/localProjectStore.ts`
+- `src/components/SwarmCanvasPanel.tsx` owns two synchronized state models: `project` (persisted devices/artifacts/environment sources) and `simulationState` (derived runtime state from `src/simulation/simulationEngine.ts`).
+- `src/simulation/simulationEngine.ts` is the pure-function state engine for device lifecycle, environment sensor projection, radio routing, and runtime/log history.
+- Runtime execution is adapter-driven: `src/runtime/sourceExtraction.ts` and `artifactReadiness.ts` identify embedded source, `src/runtime/programLoader.ts` prepares per-device runtime programs, and `src/runtime/runtimeAdapter.ts` defines the shared contract used by `MicroPythonRuntimeHost` and `MakeCodeRuntimeHost`, composed by `SwarmRuntimeHosts`.
+- The browser runtime bridge depends on patched simulator pages in `public/` (`makecode-patched-runner.html`, `makecode-patched-simulator.html`, `micropython-patched-simulator.html`) rather than direct simulator integration from React components.
+- Persistence is schema-versioned: `src/domain/project.ts` defines the domain model, `projectSerialization.ts` enforces schema compatibility, `projectBundle.ts` handles compressed `.swarm` bundles, and `browserProjectStore.ts` / `browserWorkingCopyStore.ts` provide IndexedDB-first browser persistence.
 
 ## Key repository conventions
 
 - Keep `runtimeSource` explicit and authoritative (`'unknown' | 'makecode-pxt' | 'micropython'`):
   - Artifacts are never classified from filename text alone.
-  - Runtime source may be corrected using byte-level extraction (`extractHexSource`) when upload heuristics disagree.
-- Treat simulator integration as source-specific adapter work, not direct arbitrary HEX execution. Follow the adapter contract in `runtimeAdapter.ts` and emit typed runtime events (`display-change`, `radio-output`, `radio-config-change`, `sound-output`, `serial-output`, `internal-error`).
+  - `programLoader.ts` validates artifact metadata against byte-level extraction (`extractHexSource`) before preparing runtime programs.
+- Treat simulator integration as source-specific adapter work, not direct arbitrary HEX execution. Follow the adapter contract in `runtimeAdapter.ts` and emit typed runtime events (`display-change`, `radio-output`, `radio-config-change`, `sound-output`, `serial-output`, `internal-error`, data-log events).
 - Preserve the `project` + `simulationState` coupling in `SwarmCanvasPanel`:
   - Project mutations must reconcile simulation state (see `reconcileSimulationProject` and related helpers).
   - Runtime host callbacks feed back into simulation via `routeRadioPacket`, `setDeviceRadioConfig`, and runtime log appenders.
@@ -58,6 +40,11 @@ There is currently no lint script in `package.json`.
   - Runtime packet dedupe is implemented with short-lived fingerprints (microtask-based) in both panel/host bridges.
 - Respect shared sensor domains from `src/runtime/microbitSensorDomains.ts`:
   - Use domain min/max/defaults for clamping and value normalization across simulation and runtime adapters.
+- Build-time feature flags live in `featureFlags.config.ts`; if you add or change define globals consumed by app code, mirror them in both `vite.config.ts` and `vitest.config.ts`.
+- Follow the repository's test-layer split from `AGENTS.md`:
+  - runtime/domain logic changes belong in Vitest
+  - user-facing canvas workflow changes belong in Playwright
+  - mixed changes should run both
 - Preserve project schema compatibility:
   - `PROJECT_SCHEMA_VERSION` gates deserialization.
   - Canvas bundles are exported/imported as compressed `.swarm` files; JSON serializer remains an internal compatibility surface.

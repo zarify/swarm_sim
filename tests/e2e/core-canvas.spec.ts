@@ -1,6 +1,8 @@
 import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { resolveBuildFeatureFlags } from '../../featureFlags.config';
+import { createBlankProject, type SwarmProject } from '../../src/domain/project';
+import { serializeProject } from '../../src/domain/projectSerialization';
 
 const microPythonFixture = path.resolve(process.cwd(), 'hex_files/mp_beacon.hex');
 const microPythonDataLogFixture = path.resolve(process.cwd(), 'hex_files/mp_datalog.hex');
@@ -81,8 +83,27 @@ async function readMakeCodeMagneticReadings(page: Page): Promise<{
 async function dismissSplash(page: Page) {
   const splash = page.getByRole('dialog', { name: 'Simulator instructions' });
   await expect(splash).toBeVisible();
-  await splash.click();
+  await page.keyboard.press('Escape');
   await expect(splash).toHaveCount(0);
+}
+
+function makeBundleWithInstructions(heading: string): Buffer {
+  const now = '2026-06-06T01:20:00.000Z';
+  const project: SwarmProject = {
+    ...createBlankProject({ id: 'instructions-bundle', name: 'Instructions bundle', now }),
+    instructionsMarkdown: `# ${heading}\n\n- Open the swarm tools\n- Press \`A\` on Node 1`,
+    devices: [
+      {
+        id: 'device-1',
+        name: 'Node 1',
+        position: { x: 430, y: 260 },
+      },
+    ],
+    artifacts: [],
+    environmentSources: [],
+  };
+  const payload = Buffer.from(serializeProject(project), 'utf-8');
+  return Buffer.concat([Buffer.from([0x53, 0x57, 0x41, 0x52, 0x4d, 0x02, 0x00]), payload]);
 }
 
 test.describe('core canvas workflows', () => {
@@ -346,6 +367,31 @@ test.describe('core canvas workflows', () => {
     );
   });
 
+  test('shows saved custom instructions again after reload and exposes the header info button', async ({ page }) => {
+    await gotoCanvas(page);
+
+    await page.getByRole('button', { name: 'Swarm tools' }).click();
+    await page.getByRole('button', { name: 'Edit instructions' }).click();
+    await page.getByLabel('Canvas instructions markdown').fill(
+      '# Lesson launch\n\n- Load code onto Node 1\n- Press `A` to begin',
+    );
+    await page.getByRole('button', { name: 'Save instructions' }).click();
+    await expect(page.getByRole('button', { name: 'Show instructions' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Save current canvas' }).click();
+    await expect(page.getByRole('status', { name: 'Current canvas status' })).toContainText(
+      'Saved for next session',
+    );
+    await page.reload();
+
+    const splash = page.getByRole('dialog', { name: 'Simulator instructions' });
+    await expect(splash).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Show instructions' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Show instructions' }).click();
+    await expect(page.getByRole('heading', { name: 'Lesson launch' })).toBeVisible();
+  });
+
   test('saves the current canvas after code is loaded and restores it after reload', async ({ page }) => {
     await gotoCanvas(page);
 
@@ -502,6 +548,24 @@ test.describe('core canvas workflows', () => {
     });
 
     await expect(page.getByText('Unsupported canvas bundle format')).toBeVisible();
+  });
+
+  test('shows custom instructions when importing a swarm bundle', async ({ page }) => {
+    await page.addInitScript(() => {
+      window.confirm = () => true;
+    });
+    await gotoCanvas(page);
+
+    await page.getByRole('button', { name: 'Swarm tools' }).click();
+    await page.getByLabel('Upload bundle').setInputFiles({
+      name: 'lesson.swarm',
+      mimeType: 'application/octet-stream',
+      buffer: makeBundleWithInstructions('Bundle lesson'),
+    });
+
+    await expect(page.getByRole('dialog', { name: 'Simulator instructions' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Bundle lesson' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Show instructions' })).toBeVisible();
   });
 
   test('uploads MicroPython fixture for selected device', async ({ page }) => {

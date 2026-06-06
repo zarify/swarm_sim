@@ -38,6 +38,8 @@ import {
   shouldGuardGlobalFileDrop,
   translateRuntimeRadioPacketForRecipient,
 } from './SwarmCanvasPanel';
+import { createBlankProject, type SwarmProject } from '../domain/project';
+import { serializeProject } from '../domain/projectSerialization';
 import { FEATURE_FLAGS } from '../runtime/featureFlags';
 import makeCodeBeaconHex from '../../hex_files/mc_beacon.hex?raw';
 
@@ -108,26 +110,67 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeInTheDocument();
   });
 
-  it('shows and dismisses the startup instructions with Escape', () => {
+  it('shows and dismisses the startup instructions with Escape', async () => {
     render(<SwarmCanvasPanel />);
 
-    expect(screen.getByRole('dialog', { name: 'Simulator instructions' })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('dialog', { name: 'Simulator instructions' })).toBeInTheDocument(),
+    );
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.queryByRole('dialog', { name: 'Simulator instructions' })).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Simulator instructions' })).not.toBeInTheDocument(),
+    );
   });
 
-  it('dismisses the startup instructions from the close button', () => {
+  it('dismisses the startup instructions from the close button', async () => {
     render(<SwarmCanvasPanel />);
 
+    await waitFor(() =>
+      expect(screen.getByRole('dialog', { name: 'Simulator instructions' })).toBeInTheDocument(),
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Close instructions' }));
-    expect(screen.queryByRole('dialog', { name: 'Simulator instructions' })).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Simulator instructions' })).not.toBeInTheDocument(),
+    );
   });
 
-  it('dismisses the startup instructions when clicking anywhere on the splash', () => {
+  it('dismisses the startup instructions when clicking anywhere on the splash', async () => {
     render(<SwarmCanvasPanel />);
 
+    await waitFor(() =>
+      expect(screen.getByRole('dialog', { name: 'Simulator instructions' })).toBeInTheDocument(),
+    );
     fireEvent.click(screen.getByRole('dialog', { name: 'Simulator instructions' }));
-    expect(screen.queryByRole('dialog', { name: 'Simulator instructions' })).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: 'Simulator instructions' })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('saves custom instructions, renders markdown, and lets the user reopen them from the header', async () => {
+    render(<SwarmCanvasPanel />);
+
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Simulator instructions' })).toBeInTheDocument());
+    fireEvent.keyDown(window, { key: 'Escape' });
+    openSwarmTools();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit instructions' }));
+
+    expect(screen.getByRole('dialog', { name: 'Canvas instructions editor' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Canvas instructions markdown'), {
+      target: {
+        value: '# Lesson steps\n\n- Press `A`\n- Open the log\n\n```python\nradio.send("ping")\n```',
+      },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save instructions' }));
+
+    expect(screen.getByRole('button', { name: 'Show instructions' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Show instructions' }));
+
+    const splash = screen.getByRole('dialog', { name: 'Simulator instructions' });
+    expect(splash).toBeInTheDocument();
+    expect(screen.getByText('Instructions')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Lesson steps' })).toBeInTheDocument();
+    expect(screen.getByText('A', { selector: 'code' })).toBeInTheDocument();
+    expect(screen.getByText('radio.send("ping")', { selector: 'code' })).toBeInTheDocument();
   });
 
   it('keeps telemetry in the debug modal by default', () => {
@@ -854,6 +897,71 @@ describe('SwarmCanvasPanel', () => {
     );
   });
 
+  it('restores saved custom instructions on remount and reopens the splash with them', async () => {
+    const { unmount } = render(<SwarmCanvasPanel />);
+
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Simulator instructions' })).toBeInTheDocument());
+    fireEvent.keyDown(window, { key: 'Escape' });
+    openSwarmTools();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit instructions' }));
+    fireEvent.change(screen.getByLabelText('Canvas instructions markdown'), {
+      target: { value: '# Welcome back\n\n- Resume from node 2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save instructions' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save current canvas' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('status', { name: 'Current canvas status' })).toHaveTextContent(
+        'Saved for next session',
+      ),
+    );
+
+    unmount();
+
+    render(<SwarmCanvasPanel />);
+
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Simulator instructions' })).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'Welcome back' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show instructions' })).toBeInTheDocument();
+  });
+
+  it('falls back to the default quick start when loading a saved layout without custom instructions', async () => {
+    const { container } = render(<SwarmCanvasPanel />);
+
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Simulator instructions' })).toBeInTheDocument());
+    fireEvent.keyDown(window, { key: 'Escape' });
+    openSwarmTools();
+    vi.spyOn(window, 'prompt').mockReturnValue('Default layout');
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save to browser' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load Default layout' })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit instructions' }));
+    fireEvent.change(screen.getByLabelText('Canvas instructions markdown'), {
+      target: { value: '# Teacher note\n\n- Keep radios on group 7' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save instructions' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit instructions' }));
+    fireEvent.change(screen.getByLabelText('Canvas instructions markdown'), {
+      target: { value: '   ' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save instructions' }));
+    expect(screen.queryByRole('button', { name: 'Show instructions' })).not.toBeInTheDocument();
+
+    addDeviceFromSwarmTools();
+    expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load Default layout' }));
+
+    await waitFor(() => expect(container.querySelectorAll('.microbit-node')).toHaveLength(1));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Simulator instructions' })).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'Getting started' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Show instructions' })).not.toBeInTheDocument();
+  });
+
   it('saves the current canvas after code is loaded onto a device', async () => {
     render(<SwarmCanvasPanel />);
 
@@ -979,6 +1087,20 @@ describe('SwarmCanvasPanel', () => {
     await waitFor(() =>
       expect(screen.getByText('Unsupported canvas bundle format')).toBeInTheDocument(),
     );
+  });
+
+  it('shows custom instructions when importing a swarm bundle with them', async () => {
+    render(<SwarmCanvasPanel />);
+    fireEvent.click(screen.getByRole('button', { name: 'Swarm tools' }));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    fireEvent.change(screen.getByLabelText('Upload bundle'), {
+      target: { files: [makeSwarmBundleFile(makeProjectWithInstructions('Imported lesson'))] },
+    });
+
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Simulator instructions' })).toBeInTheDocument());
+    expect(screen.getByRole('heading', { name: 'Imported lesson' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Show instructions' })).toBeInTheDocument();
   });
 
   it('selects the full node name when entering rename mode', () => {
@@ -1336,6 +1458,39 @@ function makeUploadFile(name: string, contents: string): File {
     name,
     text: async () => contents,
   } as File;
+}
+
+function makeSwarmBundleFile(project: SwarmProject): File {
+  const bundleBytes = makeSwarmBundleBytes(project);
+  const bundleBinary = Array.from(bundleBytes, (byte) => String.fromCharCode(byte)).join('');
+  return new File([bundleBinary], `${project.name}.swarm`, {
+    type: 'application/octet-stream',
+  });
+}
+
+function makeSwarmBundleBytes(project: SwarmProject): Uint8Array {
+  const payload = new TextEncoder().encode(serializeProject(project));
+  const bytes = new Uint8Array(7 + payload.length);
+  bytes.set([0x53, 0x57, 0x41, 0x52, 0x4d, 0x02, 0x00], 0);
+  bytes.set(payload, 7);
+  return bytes;
+}
+
+function makeProjectWithInstructions(heading: string): SwarmProject {
+  const now = '2026-06-06T01:20:00.000Z';
+  return {
+    ...createBlankProject({ id: 'bundle-instructions', name: 'Bundle instructions', now }),
+    instructionsMarkdown: `# ${heading}\n\n- Follow the note\n- Press \`A\``,
+    devices: [
+      {
+        id: 'device-1',
+        name: 'Node 1',
+        position: { x: 430, y: 260 },
+      },
+    ],
+    artifacts: [],
+    environmentSources: [],
+  };
 }
 
 function makeDeferredUpload(name: string): {

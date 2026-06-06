@@ -1,6 +1,6 @@
 import type { ArtifactKind, RuntimeSource } from '../runtime/types';
 
-export const PROJECT_SCHEMA_VERSION = 5;
+export const PROJECT_SCHEMA_VERSION = 6;
 
 export type ProjectId = string;
 export type DeviceId = string;
@@ -79,6 +79,7 @@ export interface SwarmProject {
   name: string;
   createdAt: string;
   updatedAt: string;
+  instructionsMarkdown?: string;
   devices: VirtualDevice[];
   artifacts: ProgramArtifact[];
   environmentSources: EnvironmentSource[];
@@ -107,6 +108,14 @@ export function createBlankProject(options: {
     artifacts: [],
     environmentSources: [],
   };
+}
+
+export function normalizeInstructionsMarkdown(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = value.replace(/\r\n?/g, '\n').trim();
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 export function summarizeProject(project: SwarmProject): ProjectSummary {

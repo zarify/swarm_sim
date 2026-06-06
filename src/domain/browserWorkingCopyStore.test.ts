@@ -17,6 +17,21 @@ describe('browserWorkingCopyStore fallback', () => {
     await store.clear();
     await expect(store.load()).resolves.toBeUndefined();
   });
+
+  it('preserves custom instructions in the working copy via storage fallback', async () => {
+    const store = createBrowserWorkingCopyStore({
+      indexedDbFactory: undefined,
+      storage: createMemoryStorage(),
+    });
+    const project = {
+      ...makeProject('working-copy-2', 'Instructions working copy', '2026-06-06T01:10:00.000Z'),
+      instructionsMarkdown: '# Welcome\n\n- Follow the notes',
+    } satisfies SwarmProject;
+
+    await store.save(project);
+
+    await expect(store.load()).resolves.toEqual(project);
+  });
 });
 
 function createMemoryStorage(): Storage {

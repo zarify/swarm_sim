@@ -1,4 +1,5 @@
 import {
+  normalizeInstructionsMarkdown,
   defaultEnvironmentSourceName,
   PROJECT_SCHEMA_VERSION,
   type DeviceEditableProgram,
@@ -44,10 +45,15 @@ function parseSerializedProject(value: unknown): SwarmProject {
     schemaVersion !== 2 &&
     schemaVersion !== 3 &&
     schemaVersion !== 4 &&
+    schemaVersion !== 5 &&
     schemaVersion !== PROJECT_SCHEMA_VERSION
   ) {
     throw new Error(`Unsupported project schema version: ${schemaVersion}`);
   }
+
+  const instructionsMarkdown = normalizeInstructionsMarkdown(
+    expectOptionalString(project.instructionsMarkdown, 'instructionsMarkdown'),
+  );
 
   return {
     schemaVersion: PROJECT_SCHEMA_VERSION,
@@ -55,6 +61,7 @@ function parseSerializedProject(value: unknown): SwarmProject {
     name: expectString(project.name, 'name'),
     createdAt: expectString(project.createdAt, 'createdAt'),
     updatedAt: expectString(project.updatedAt, 'updatedAt'),
+    ...(instructionsMarkdown ? { instructionsMarkdown } : {}),
     devices: expectArray(project.devices, 'devices').map(parseDevice),
     artifacts: expectArray(project.artifacts, 'artifacts').map(parseArtifact),
     environmentSources: expectArray(project.environmentSources, 'environmentSources').map((source) =>
@@ -222,6 +229,16 @@ function expectArray(value: unknown, label: string): unknown[] {
     throw new Error(`Expected ${label} to be an array`);
   }
 
+  return value;
+}
+
+function expectOptionalString(value: unknown, label: string): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new Error(`Expected ${label} to be a string`);
+  }
   return value;
 }
 

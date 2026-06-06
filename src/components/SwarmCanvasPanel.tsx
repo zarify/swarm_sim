@@ -12,6 +12,7 @@ import {
   createBlankProject,
   defaultDeviceNameForId,
   defaultEnvironmentSourceName,
+  normalizeInstructionsMarkdown,
   type DeviceEditableProgram,
   type DeviceId,
   type EnvironmentSource,
@@ -60,6 +61,8 @@ import { createBrowserWorkingCopyStore } from '../domain/browserWorkingCopyStore
 import { decodeProjectBundle, encodeProjectBundle } from '../domain/projectBundle';
 import { findReusableArtifact } from '../domain/projectArtifacts';
 import { DeviceCodeEditorModal } from './DeviceCodeEditorModal';
+import { CanvasInstructionsEditorModal } from './CanvasInstructionsEditorModal';
+import { InstructionsMarkdown } from './InstructionsMarkdown';
 import {
   createEditableProgramSnapshot,
   getActiveEditableProgram,
@@ -169,8 +172,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const [runtimeLoadResults, setRuntimeLoadResults] = useState<DeviceProgramLoadResult[]>([]);
   const [savedProjectSummaries, setSavedProjectSummaries] = useState<ProjectSummary[]>([]);
   const [isCanvasStateMenuOpen, setIsCanvasStateMenuOpen] = useState(false);
-  const [isSplashOpen, setIsSplashOpen] = useState(true);
+  const [isSplashOpen, setIsSplashOpen] = useState(false);
   const [isDebugModalOpen, setIsDebugModalOpen] = useState(false);
+  const [isInstructionsEditorOpen, setIsInstructionsEditorOpen] = useState(false);
   const [isRefreshingSavedProjects, setIsRefreshingSavedProjects] = useState(false);
   const [canvasStateMessage, setCanvasStateMessage] = useState<string>();
   const [isBundleDropActive, setIsBundleDropActive] = useState(false);
@@ -224,6 +228,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       ? undefined
       : project.devices.find((device) => device.id === editorDeviceId);
   const activeEditorProgram = editorDevice ? getActiveEditableProgram(editorDevice) : undefined;
+  const customInstructionsMarkdown = project.instructionsMarkdown;
+  const hasCustomInstructions = Boolean(customInstructionsMarkdown);
 
   useEffect(
     () => () => {
@@ -256,11 +262,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           hasHydratedWorkingCopy.current = true;
           setHasSavedWorkingCopy(Boolean(savedWorkingCopy));
           if (!savedWorkingCopy || hasPendingCanvasEditsBeforeHydration.current) {
+            setIsSplashOpen(true);
             return;
           }
           replaceScenarioProject(savedWorkingCopy, {
             hasUnsavedChanges: false,
             recordUserInteraction: false,
+            reopenSplash: true,
           });
           setCanvasStateMessage(`Restored current canvas "${savedWorkingCopy.name}"`);
         } catch (error) {
@@ -274,6 +282,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           }
           hasHydratedWorkingCopy.current = true;
           setHasSavedWorkingCopy(false);
+          setIsSplashOpen(true);
           setCanvasStateMessage(
             error instanceof Error ? error.message : 'Unable to restore saved current canvas',
           );
@@ -281,6 +290,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       })();
     } catch (error) {
       hasHydratedWorkingCopy.current = true;
+      setIsSplashOpen(true);
       setCanvasStateMessage(
         error instanceof Error ? error.message : 'Browser storage is not available',
       );
@@ -360,6 +370,21 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isDebugModalOpen]);
+
+  useEffect(() => {
+    if (!isInstructionsEditorOpen) {
+      return;
+    }
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      event.preventDefault();
+      setIsInstructionsEditorOpen(false);
+    }
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [isInstructionsEditorOpen]);
 
   useEffect(() => {
     if (!editorDeviceId) {
@@ -1507,6 +1532,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     options: {
       hasUnsavedChanges?: boolean;
       recordUserInteraction?: boolean;
+      reopenSplash?: boolean;
     } = {},
   ) {
     if (options.recordUserInteraction ?? true) {
@@ -1516,6 +1542,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     setDragTarget(null);
     setIsSidebarDragActive(false);
     setIsBundleDropActive(false);
+    setIsInstructionsEditorOpen(false);
+    setRenameTarget(null);
+    setRenameDraft('');
+    setEditorDeviceId(null);
     setDisplaySnapshots({});
     setRuntimeActivity({});
     setRuntimeLoadResults([]);
@@ -1541,6 +1571,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     nextDeviceNumber.current = nextProject.devices.length + 1;
     nextSourceNumber.current = nextEnvironmentSourceNumber(nextProject.environmentSources);
     setScenarioResetSignal((current) => current + 1);
+    if (options.reopenSplash) {
+      setIsSplashOpen(true);
+    }
   }
 
   async function saveCurrentCanvasToBrowser() {
@@ -1611,7 +1644,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }
     try {
       const loadedProject = await browserProjectStore.current.load(projectId);
-      replaceScenarioProject(loadedProject);
+      replaceScenarioProject(loadedProject, { reopenSplash: true });
       setCanvasStateMessage(`Loaded "${loadedProject.name}"`);
     } catch (error) {
       setCanvasStateMessage(
@@ -1699,7 +1732,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
 
     try {
       const imported = await decodeProjectBundle(await readBundleFileBytes(file));
-      replaceScenarioProject(imported);
+      replaceScenarioProject(imported, { reopenSplash: true });
       setCanvasStateMessage(`Imported "${imported.name}"`);
     } catch (error) {
       setCanvasStateMessage(
@@ -1721,6 +1754,24 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       }),
     );
     setCanvasStateMessage('Canvas cleared');
+  }
+
+  function saveCanvasInstructions(nextInstructions: string) {
+    const normalizedInstructions = normalizeInstructionsMarkdown(nextInstructions);
+    if (normalizedInstructions === project.instructionsMarkdown) {
+      setIsInstructionsEditorOpen(false);
+      return;
+    }
+    updateProject((current) => {
+      const { instructionsMarkdown: _existingInstructions, ...rest } = current;
+      return normalizedInstructions
+        ? { ...rest, instructionsMarkdown: normalizedInstructions }
+        : rest;
+    });
+    setCanvasStateMessage(
+      normalizedInstructions ? 'Saved canvas instructions' : 'Restored default quick start instructions',
+    );
+    setIsInstructionsEditorOpen(false);
   }
 
   function handleBundleFileInput(event: ChangeEvent<HTMLInputElement>) {
@@ -1809,6 +1860,17 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   : 'Not yet saved'}
             </strong>
           </div>
+          {hasCustomInstructions ? (
+            <button
+              type="button"
+              className="panel-info-button"
+              aria-label="Show instructions"
+              title="Show instructions"
+              onClick={() => setIsSplashOpen(true)}
+            >
+              i
+            </button>
+          ) : null}
           <button type="button" onClick={() => void saveCurrentCanvasToBrowser()}>
             Save current canvas
           </button>
@@ -1864,6 +1926,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           <div className="canvas-state-panel__section">
             <span className="metric-label">Canvas state</span>
             <div className="canvas-state-panel__actions">
+              <button type="button" onClick={() => setIsInstructionsEditorOpen(true)}>
+                Edit instructions
+              </button>
               <button type="button" onClick={() => void saveCurrentLayoutToBrowser()}>
                 Save to browser
               </button>
@@ -1936,7 +2001,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           aria-label="Simulator instructions"
           onClick={() => setIsSplashOpen(false)}
         >
-          <div className="splash-modal__card">
+          <div className="splash-modal__card" onClick={(event) => event.stopPropagation()}>
             <button
               type="button"
               className="splash-modal__close"
@@ -1945,15 +2010,32 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
             >
               ×
             </button>
-            <p className="metric-label">Quick start</p>
-            <h3>Getting started</h3>
-            <p>
-              Drag nodes to change distance, load `.hex` files onto selected devices, and inspect packet flow in the
-              radio inspector.
+            <p className="metric-label">{hasCustomInstructions ? 'Instructions' : 'Quick start'}</p>
+            <div className="splash-modal__body">
+              {customInstructionsMarkdown ? (
+                <InstructionsMarkdown markdown={customInstructionsMarkdown} />
+              ) : (
+                <>
+                  <h3>Getting started</h3>
+                  <p>
+                    Drag nodes to change distance, load `.hex` files onto selected devices, and inspect packet flow in
+                    the radio inspector.
+                  </p>
+                </>
+              )}
+            </div>
+            <p className="hint splash-modal__hint">
+              Click anywhere, press Escape, or use the close button to continue.
             </p>
-            <p className="hint">Click anywhere, press Escape, or use the close button to continue.</p>
           </div>
         </div>
+      ) : null}
+      {isInstructionsEditorOpen ? (
+        <CanvasInstructionsEditorModal
+          initialInstructions={project.instructionsMarkdown}
+          onClose={() => setIsInstructionsEditorOpen(false)}
+          onSave={saveCanvasInstructions}
+        />
       ) : null}
 
       <div className="swarm-layout">

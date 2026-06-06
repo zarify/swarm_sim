@@ -54,7 +54,7 @@ interface CompressionResult {
 }
 
 async function compressPayload(payload: Uint8Array): Promise<CompressionResult> {
-  if (typeof CompressionStream !== 'function') {
+  if (!canUseBundleCompression()) {
     return { method: COMPRESSION_NONE, bytes: payload };
   }
 
@@ -72,12 +72,22 @@ async function decompressPayload(payload: Uint8Array, method: number): Promise<U
     throw new Error(`Unsupported canvas bundle compression method: ${method}`);
   }
 
-  if (typeof DecompressionStream !== 'function') {
+  if (!canUseBundleCompression()) {
     throw new Error('This browser cannot open compressed canvas bundles');
   }
 
   const stream = bytesToStream(payload).pipeThrough(new DecompressionStream('gzip'));
   return readStreamBytes(stream);
+}
+
+function canUseBundleCompression(): boolean {
+  const isJsdom =
+    typeof navigator !== 'undefined' && /\bjsdom\b/i.test(navigator.userAgent);
+  return (
+    !isJsdom &&
+    typeof CompressionStream === 'function' &&
+    typeof DecompressionStream === 'function'
+  );
 }
 
 function hasBundleMagic(bytes: Uint8Array): boolean {
