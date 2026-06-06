@@ -45,7 +45,7 @@ It supports:
 - The radio interaction is made intentionally more compatible than it would be in the Real World. See the radio section for more info.
 
 > [!CAUTION] About the radio
-> Makecode and Micropython handle radio packet format quite differently. This simulator intentionally
+> [Makecode](https://makecode.microbit.org/reference/radio/packet) and [Micropython](https://microbit-micropython.readthedocs.io/en/v2-docs/radio.html) handle radio packet format quite differently. This simulator intentionally
 > simplifies it so that you can write radio code in different languages with the same *intent* and have
 > them communicate in the simulator, but this does NOT mean that they will work the same way in the
 > real world.
