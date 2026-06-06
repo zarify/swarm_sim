@@ -2,6 +2,7 @@ import {
   normalizeInstructionsMarkdown,
   defaultEnvironmentSourceName,
   PROJECT_SCHEMA_VERSION,
+  type ArtifactProgram,
   type DeviceEditableProgram,
   type EnvironmentSource,
   type ProgramArtifact,
@@ -11,7 +12,7 @@ import {
 import type { ArtifactKind, RuntimeSource } from '../runtime/types';
 
 export interface SerializedProgramArtifact extends Omit<ProgramArtifact, 'bytes'> {
-  bytesBase64: string;
+  bytesBase64?: string;
 }
 
 export interface SerializedSwarmProject extends Omit<SwarmProject, 'artifacts'> {
@@ -22,8 +23,13 @@ export function serializeProject(project: SwarmProject): string {
   const serialized: SerializedSwarmProject = {
     ...project,
     artifacts: project.artifacts.map((artifact) => ({
-      ...artifact,
-      bytesBase64: bytesToBase64(artifact.bytes),
+      id: artifact.id,
+      name: artifact.name,
+      artifactKind: artifact.artifactKind,
+      runtimeSource: artifact.runtimeSource,
+      createdAt: artifact.createdAt,
+      ...('program' in artifact ? { program: serializeArtifactProgram(artifact.program) } : {}),
+      ...('bytes' in artifact ? { bytesBase64: bytesToBase64(artifact.bytes) } : {}),
     })),
   };
 
@@ -46,6 +52,7 @@ function parseSerializedProject(value: unknown): SwarmProject {
     schemaVersion !== 3 &&
     schemaVersion !== 4 &&
     schemaVersion !== 5 &&
+    schemaVersion !== 6 &&
     schemaVersion !== PROJECT_SCHEMA_VERSION
   ) {
     throw new Error(`Unsupported project schema version: ${schemaVersion}`);
@@ -70,16 +77,84 @@ function parseSerializedProject(value: unknown): SwarmProject {
   };
 }
 
+function serializeArtifactProgram(program: ArtifactProgram): ArtifactProgram {
+  switch (program.runtimeSource) {
+    case 'micropython':
+      return {
+        runtimeSource: 'micropython',
+        filesystemBase64: { ...program.filesystemBase64 },
+      };
+    case 'makecode-pxt':
+      return {
+        runtimeSource: 'makecode-pxt',
+        sourceFiles: { ...program.sourceFiles },
+        ...(program.projectMetadata === undefined
+          ? {}
+          : { projectMetadata: cloneRecord(program.projectMetadata) }),
+      };
+  }
+}
+
 function parseArtifact(value: unknown): ProgramArtifact {
   const artifact = expectRecord(value, 'artifact');
-
-  return {
+  const runtimeSource = parseRuntimeSource(artifact.runtimeSource);
+  const base = {
     id: expectString(artifact.id, 'artifact.id'),
     name: expectString(artifact.name, 'artifact.name'),
     artifactKind: parseArtifactKind(artifact.artifactKind),
-    runtimeSource: parseRuntimeSource(artifact.runtimeSource),
-    bytes: base64ToBytes(expectString(artifact.bytesBase64, 'artifact.bytesBase64')),
     createdAt: expectString(artifact.createdAt, 'artifact.createdAt'),
+  };
+
+  if (artifact.program !== undefined) {
+    const program = parseArtifactProgram(artifact.program, 'artifact.program', runtimeSource);
+    return {
+      ...base,
+      runtimeSource: program.runtimeSource,
+      program,
+    };
+  }
+
+  if (artifact.bytesBase64 !== undefined) {
+    return {
+      ...base,
+      runtimeSource,
+      bytes: base64ToBytes(expectString(artifact.bytesBase64, 'artifact.bytesBase64')),
+    };
+  }
+
+  throw new Error('Expected artifact.program or artifact.bytesBase64');
+}
+
+function parseArtifactProgram(
+  value: unknown,
+  label: string,
+  runtimeSource: RuntimeSource,
+): ArtifactProgram {
+  const program = expectRecord(value, label);
+  const programRuntimeSource = parseRuntimeSource(program.runtimeSource);
+
+  if (programRuntimeSource === 'unknown') {
+    throw new Error(`Invalid artifact program runtime source: ${programRuntimeSource}`);
+  }
+  if (runtimeSource !== 'unknown' && runtimeSource !== programRuntimeSource) {
+    throw new Error(
+      `Artifact runtime source ${runtimeSource} does not match persisted program source ${programRuntimeSource}`,
+    );
+  }
+
+  if (programRuntimeSource === 'micropython') {
+    return {
+      runtimeSource: 'micropython',
+      filesystemBase64: parseStringRecord(program.filesystemBase64, `${label}.filesystemBase64`),
+    };
+  }
+
+  return {
+    runtimeSource: 'makecode-pxt',
+    sourceFiles: parseStringRecord(program.sourceFiles, `${label}.sourceFiles`),
+    ...(program.projectMetadata === undefined
+      ? {}
+      : { projectMetadata: expectRecord(program.projectMetadata, `${label}.projectMetadata`) }),
   };
 }
 
@@ -279,6 +354,10 @@ function expectNumber(value: unknown, label: string): number {
   }
 
   return value;
+}
+
+function cloneRecord(record: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(record)) as Record<string, unknown>;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

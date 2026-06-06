@@ -64,6 +64,7 @@ import { DeviceCodeEditorModal } from './DeviceCodeEditorModal';
 import { CanvasInstructionsEditorModal } from './CanvasInstructionsEditorModal';
 import { InstructionsMarkdown } from './InstructionsMarkdown';
 import {
+  createArtifactProgramSnapshot,
   createEditableProgramSnapshot,
   getActiveEditableProgram,
   resolveDeviceRuntimeSource as resolveEditableRuntimeSource,
@@ -903,11 +904,12 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       });
 
       const now = new Date().toISOString();
+      const artifactProgram = createArtifactProgramSnapshot(program);
       updateProject((current) => {
         const reusableArtifact = findReusableArtifact(current.artifacts, {
           artifactKind: readiness.artifactKind,
           runtimeSource,
-          bytes,
+          program: artifactProgram,
         });
         const nextArtifact =
           reusableArtifact ??
@@ -916,9 +918,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
             name: file.name,
             artifactKind: readiness.artifactKind,
             runtimeSource,
-            bytes,
+            program: artifactProgram,
             createdAt: now,
-          } as const);
+            } satisfies SwarmProject['artifacts'][number]);
 
         return {
           ...current,
@@ -3497,12 +3499,11 @@ async function resolveRuntimeSource(
   bytes: Uint8Array,
   heuristicRuntimeSource: SwarmProject['artifacts'][number]['runtimeSource'],
 ): Promise<{
-  runtimeSource: SwarmProject['artifacts'][number]['runtimeSource'];
+  runtimeSource: Exclude<SwarmProject['artifacts'][number]['runtimeSource'], 'unknown'>;
   issue?: ArtifactUploadIssue;
-  program?: RuntimeProgram;
+  program: RuntimeProgram;
 }> {
-  try {
-    const extracted = await extractHexSource(filename, bytes, { decompressLzma: decompressLzmaSource });
+  return extractHexSource(filename, bytes, { decompressLzma: decompressLzmaSource }).then((extracted) => {
     if (
       heuristicRuntimeSource !== 'unknown' &&
       heuristicRuntimeSource !== extracted.runtimeSource
@@ -3510,25 +3511,18 @@ async function resolveRuntimeSource(
       return {
         runtimeSource: extracted.runtimeSource,
         issue: {
-          severity: 'warning',
+          severity: 'warning' as const,
           message: `Runtime source corrected from ${heuristicRuntimeSource} to ${extracted.runtimeSource}`,
         },
         program: extracted.program,
       };
     }
     return { runtimeSource: extracted.runtimeSource, program: extracted.program };
-  } catch (error) {
-    return {
-      runtimeSource: 'unknown',
-      issue: {
-        severity: 'warning',
-        message:
-          error instanceof Error
-            ? `Assigned as non-executable because runtime source extraction failed: ${error.message}`
-            : 'Assigned as non-executable because runtime source extraction failed',
-      },
-    };
-  }
+  }).catch((error: unknown) => {
+    throw error instanceof Error
+      ? error
+      : new Error('No embedded MicroPython or MakeCode source found in HEX artifact');
+  });
 }
 
 function readFileWithFileReader(file: File): Promise<ArrayBuffer> {

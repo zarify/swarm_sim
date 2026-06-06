@@ -1,9 +1,13 @@
-import type { ProgramArtifact, SwarmProject } from './project';
+import type { ArtifactProgram, ProgramArtifact, SwarmProject } from './project';
+import { createArtifactProgramSnapshot } from '../runtime/editableProgram';
+import { extractHexSource } from '../runtime/sourceExtraction';
+import { decompressLzmaSource } from '../runtime/lzmaDecompressor';
 
 interface ArtifactIdentity {
   artifactKind: ProgramArtifact['artifactKind'];
   runtimeSource: ProgramArtifact['runtimeSource'];
-  bytes: Uint8Array;
+  program?: ArtifactProgram;
+  bytes?: Uint8Array;
 }
 
 export function findReusableArtifact(
@@ -15,8 +19,19 @@ export function findReusableArtifact(
     if (buildArtifactFingerprint(artifact) !== fingerprint) {
       return false;
     }
-    return areEqualBytes(artifact.bytes, candidate.bytes);
+    return areEquivalentArtifacts(artifact, candidate);
   });
+}
+
+export async function canonicalizeProjectArtifacts(project: SwarmProject): Promise<SwarmProject> {
+  const artifacts = await Promise.all(project.artifacts.map(canonicalizeArtifact));
+  if (artifacts.every((artifact, index) => artifact === project.artifacts[index])) {
+    return project;
+  }
+  return {
+    ...project,
+    artifacts,
+  };
 }
 
 export function deduplicateProjectArtifacts(project: SwarmProject): SwarmProject {
@@ -28,7 +43,7 @@ export function deduplicateProjectArtifacts(project: SwarmProject): SwarmProject
   for (const artifact of project.artifacts) {
     const fingerprint = buildArtifactFingerprint(artifact);
     const candidates = fingerprints.get(fingerprint) ?? [];
-    const matching = candidates.find((candidate) => areEqualBytes(candidate.bytes, artifact.bytes));
+    const matching = candidates.find((candidate) => areEquivalentArtifacts(candidate, artifact));
 
     if (matching) {
       remappedArtifactIds.set(artifact.id, matching.id);
@@ -91,10 +106,64 @@ export function deduplicateProjectArtifacts(project: SwarmProject): SwarmProject
   };
 }
 
+async function canonicalizeArtifact(artifact: ProgramArtifact): Promise<ProgramArtifact> {
+  if ('program' in artifact) {
+    return artifact;
+  }
+  try {
+    const extracted = await extractHexSource(artifact.name, artifact.bytes, {
+      decompressLzma: decompressLzmaSource,
+    });
+    return {
+      id: artifact.id,
+      name: artifact.name,
+      artifactKind: artifact.artifactKind,
+      runtimeSource: extracted.runtimeSource,
+      program: createArtifactProgramSnapshot(extracted.program),
+      createdAt: artifact.createdAt,
+    };
+  } catch {
+    return artifact;
+  }
+}
+
 function buildArtifactFingerprint(artifact: ArtifactIdentity): string {
-  return `${artifact.artifactKind}|${artifact.runtimeSource}|${artifact.bytes.byteLength}|${fnv1a32(
-    artifact.bytes,
-  )}`;
+  if (artifact.program) {
+    return `${artifact.artifactKind}|${artifact.runtimeSource}|program|${stableSerializeValue(artifact.program)}`;
+  }
+  if (artifact.bytes) {
+    return `${artifact.artifactKind}|${artifact.runtimeSource}|bytes|${artifact.bytes.byteLength}|${fnv1a32(
+      artifact.bytes,
+    )}`;
+  }
+  return `${artifact.artifactKind}|${artifact.runtimeSource}|empty`;
+}
+
+function areEquivalentArtifacts(left: ArtifactIdentity, right: ArtifactIdentity): boolean {
+  if (left.runtimeSource !== right.runtimeSource || left.artifactKind !== right.artifactKind) {
+    return false;
+  }
+  if (left.program && right.program) {
+    return stableSerializeValue(left.program) === stableSerializeValue(right.program);
+  }
+  if (left.bytes && right.bytes) {
+    return areEqualBytes(left.bytes, right.bytes);
+  }
+  return false;
+}
+
+function stableSerializeValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableSerializeValue(entry)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableSerializeValue(record[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
 }
 
 function areEqualBytes(left: Uint8Array, right: Uint8Array): boolean {

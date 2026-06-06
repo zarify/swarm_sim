@@ -2,7 +2,6 @@ import type { RuntimeReadiness, RuntimeSource } from './types';
 
 export interface RuntimeArtifact {
   filename: string;
-  bytes: Uint8Array;
 }
 
 export type RuntimeFilesystem = Record<string, Uint8Array>;

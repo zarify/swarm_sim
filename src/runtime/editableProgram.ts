@@ -1,4 +1,5 @@
 import type {
+  ArtifactProgram,
   ArtifactId,
   DeviceEditableProgram,
   ProgramArtifact,
@@ -36,6 +37,24 @@ export function createEditableProgramSnapshot(
   }
 }
 
+export function createArtifactProgramSnapshot(program: RuntimeProgram): ArtifactProgram {
+  switch (program.source) {
+    case 'micropython':
+      return {
+        runtimeSource: 'micropython',
+        filesystemBase64: encodeRuntimeFilesystemBase64(program.filesystem),
+      };
+    case 'makecode-pxt':
+      return {
+        runtimeSource: 'makecode-pxt',
+        sourceFiles: { ...(program.sourceFiles ?? {}) },
+        ...(program.projectMetadata
+          ? { projectMetadata: normalizeProjectMetadata(program.projectMetadata) }
+          : {}),
+      };
+  }
+}
+
 export function getActiveEditableProgram(
   device: Pick<VirtualDevice, 'locked' | 'programArtifactId' | 'editableProgram'>,
 ): DeviceEditableProgram | undefined {
@@ -68,14 +87,14 @@ export function deviceProgramVersionKey(
 
 export function buildRuntimeProgramFromEditableProgram(
   editableProgram: DeviceEditableProgram,
-  artifact?: ProgramArtifact,
+  artifactName?: string,
 ): RuntimeProgram {
   switch (editableProgram.runtimeSource) {
     case 'micropython':
       return {
         source: 'micropython',
         filesystem: encodeRuntimeFilesystem(editableProgram.files),
-        ...(artifact ? { artifact: { filename: artifact.name, bytes: artifact.bytes } } : {}),
+        ...(artifactName ? { artifact: { filename: artifactName } } : {}),
       } satisfies MicroPythonRuntimeProgram;
     case 'makecode-pxt':
       return {
@@ -84,7 +103,29 @@ export function buildRuntimeProgramFromEditableProgram(
         ...(editableProgram.projectMetadata
           ? { projectMetadata: normalizeProjectMetadata(editableProgram.projectMetadata) }
           : {}),
-        ...(artifact ? { artifact: { filename: artifact.name, bytes: artifact.bytes } } : {}),
+        ...(artifactName ? { artifact: { filename: artifactName } } : {}),
+      } satisfies MakeCodeRuntimeProgram;
+  }
+}
+
+export function buildRuntimeProgramFromArtifactProgram(
+  artifact: Pick<ProgramArtifact, 'name' | 'runtimeSource'> & { program: ArtifactProgram },
+): RuntimeProgram {
+  switch (artifact.program.runtimeSource) {
+    case 'micropython':
+      return {
+        source: 'micropython',
+        filesystem: decodeRuntimeFilesystemBase64(artifact.program.filesystemBase64),
+        artifact: { filename: artifact.name },
+      } satisfies MicroPythonRuntimeProgram;
+    case 'makecode-pxt':
+      return {
+        source: 'makecode-pxt',
+        sourceFiles: { ...artifact.program.sourceFiles },
+        ...(artifact.program.projectMetadata
+          ? { projectMetadata: normalizeProjectMetadata(artifact.program.projectMetadata) }
+          : {}),
+        artifact: { filename: artifact.name },
       } satisfies MakeCodeRuntimeProgram;
   }
 }
@@ -101,6 +142,18 @@ function encodeRuntimeFilesystem(files: Record<string, string>): Record<string, 
   );
 }
 
+function encodeRuntimeFilesystemBase64(filesystem: Record<string, Uint8Array>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(filesystem).map(([filename, bytes]) => [filename, bytesToBase64(bytes)]),
+  );
+}
+
+function decodeRuntimeFilesystemBase64(filesystemBase64: Record<string, string>): Record<string, Uint8Array> {
+  return Object.fromEntries(
+    Object.entries(filesystemBase64).map(([filename, base64]) => [filename, base64ToBytes(base64)]),
+  );
+}
+
 function normalizeProjectMetadata(
   projectMetadata: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
@@ -108,4 +161,22 @@ function normalizeProjectMetadata(
     return undefined;
   }
   return JSON.parse(JSON.stringify(projectMetadata)) as Record<string, unknown>;
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 8192;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
 }

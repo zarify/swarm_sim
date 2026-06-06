@@ -2,6 +2,7 @@ import type { ProjectSummary, SwarmProject } from './project';
 import { summarizeProject } from './project';
 import { decodeProjectBundle, encodeProjectBundle } from './projectBundle';
 import { deserializeProject } from './projectSerialization';
+import { canonicalizeProjectArtifacts } from './projectArtifacts';
 import {
   deleteProject as deleteProjectFromStorage,
   listProjectSummaries as listProjectSummariesFromStorage,
@@ -50,8 +51,8 @@ export function createBrowserProjectStore(
   }
 
   return {
-    save: async (project) => saveProjectToStorage(storage, project),
-    load: async (projectId) => loadProjectFromStorage(storage, projectId),
+    save: async (project) => saveProjectToStorage(storage, await canonicalizeProjectArtifacts(project)),
+    load: async (projectId) => canonicalizeProjectArtifacts(loadProjectFromStorage(storage, projectId)),
     list: async () => listProjectSummariesFromStorage(storage),
     remove: async (projectId) => deleteProjectFromStorage(storage, projectId),
   };
@@ -120,7 +121,7 @@ function createIndexedDbStore(indexedDbFactory: IDBFactory): BrowserProjectStore
         return decodeProjectBundle(record.bundleBytes);
       }
       if (record.serializedProject) {
-        return deserializeProject(record.serializedProject);
+        return canonicalizeProjectArtifacts(deserializeProject(record.serializedProject));
       }
 
       throw new Error(`Stored project is invalid: ${projectId}`);

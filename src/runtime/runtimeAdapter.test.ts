@@ -1,17 +1,14 @@
 import type { MakeCodeRuntimeProgram, MicroPythonRuntimeProgram } from './runtimeAdapter';
 
-const encoder = new TextEncoder();
-
 describe('runtime adapter contract', () => {
   it('represents the MicroPython simulator filesystem flash shape', () => {
     const program = {
       source: 'micropython',
       filesystem: {
-        'main.py': encoder.encode('from microbit import *'),
+        'main.py': new TextEncoder().encode('from microbit import *'),
       },
       artifact: {
         filename: 'mp_beacon.hex',
-        bytes: encoder.encode(':00000001FF'),
       },
     } satisfies MicroPythonRuntimeProgram;
 
@@ -30,7 +27,6 @@ describe('runtime adapter contract', () => {
       },
       artifact: {
         filename: 'mc_beacon.hex',
-        bytes: encoder.encode(':00000001FF'),
       },
     } satisfies MakeCodeRuntimeProgram;
 

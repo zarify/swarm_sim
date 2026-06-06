@@ -409,7 +409,7 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("shared")');
   });
 
-  it('keeps unextractable HEX assignments as non-executable artifacts', async () => {
+  it('rejects unextractable HEX uploads', async () => {
     render(<SwarmCanvasPanel />);
 
     const file = makeUploadFile('unknown.hex', makeHexWithAscii('hello'));
@@ -417,11 +417,15 @@ describe('SwarmCanvasPanel', () => {
       target: { files: [file] },
     });
 
-    await waitFor(() => expect(screen.getByText('Assigned: unknown.hex')).toBeInTheDocument());
-    expect(screen.getByText('Runtime source: unknown')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByText('No embedded MicroPython or MakeCode source found in HEX artifact'),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.getByText('No code assigned yet')).toBeInTheDocument();
     expect(
-      screen.getByText(/Assigned as non-executable because runtime source extraction failed/),
-    ).toBeInTheDocument();
+      screen.queryByText('Assigned: unknown.hex'),
+    ).not.toBeInTheDocument();
   });
 
   it('keeps the latest selected-device upload when an older read finishes later', async () => {

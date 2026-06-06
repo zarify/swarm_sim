@@ -1,5 +1,6 @@
 import type { DeviceId, ProgramArtifact, SwarmProject, VirtualDevice } from '../domain/project';
 import {
+  buildRuntimeProgramFromArtifactProgram,
   buildRuntimeProgramFromEditableProgram,
   getActiveEditableProgram,
 } from './editableProgram';
@@ -61,8 +62,17 @@ export async function prepareDeviceRuntimeProgram(
       return {
         device,
         artifact,
-        program: buildRuntimeProgramFromEditableProgram(editableProgram, artifact),
+        program: buildRuntimeProgramFromEditableProgram(editableProgram, artifact.name),
         runtimeSource: editableProgram.runtimeSource,
+      };
+    }
+
+    if ('program' in artifact) {
+      return {
+        device,
+        artifact,
+        program: buildRuntimeProgramFromArtifactProgram(artifact),
+        runtimeSource: artifact.program.runtimeSource,
       };
     }
 

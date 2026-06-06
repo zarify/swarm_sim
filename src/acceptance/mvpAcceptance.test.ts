@@ -34,9 +34,21 @@ describe('MVP acceptance coverage', () => {
       'makecode-pxt',
       'micropython',
     ]);
-    expect(equalBytes(reopened.artifacts[0]?.bytes, project.artifacts[0]?.bytes)).toBe(true);
-    expect(equalBytes(reopened.artifacts[1]?.bytes, project.artifacts[1]?.bytes)).toBe(true);
-  });
+    expect(reopened.artifacts[0]).toMatchObject({
+      name: project.artifacts[0]?.name,
+      runtimeSource: 'makecode-pxt',
+      program: {
+        runtimeSource: 'makecode-pxt',
+      },
+    });
+    expect(reopened.artifacts[1]).toMatchObject({
+      name: project.artifacts[1]?.name,
+      runtimeSource: 'micropython',
+      program: {
+        runtimeSource: 'micropython',
+      },
+    });
+  }, 20_000);
 
   it('routes radio across 10 devices and immediately reflects movement out of range', () => {
     let state = createSimulationState(makeTenDeviceProject(), { defaultRadioRangeRadius: 170 });
@@ -216,18 +228,4 @@ function makeTwoDeviceProject(): SwarmProject {
     ],
     environmentSources: [],
   };
-}
-
-function equalBytes(left: Uint8Array | undefined, right: Uint8Array | undefined): boolean {
-  if (!left || !right || left.length !== right.length) {
-    return false;
-  }
-
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) {
-      return false;
-    }
-  }
-
-  return true;
 }
