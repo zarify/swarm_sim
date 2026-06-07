@@ -41,7 +41,10 @@ import {
 import { createBlankProject, type SwarmProject } from '../domain/project';
 import { serializeProject } from '../domain/projectSerialization';
 import { FEATURE_FLAGS } from '../runtime/featureFlags';
-import { encodeMicroPythonRadioString } from '../runtime/micropythonIframeAdapter';
+import {
+  decodeMicroPythonRadioString,
+  encodeMicroPythonRadioString,
+} from '../runtime/micropythonIframeAdapter';
 
 describe('SwarmCanvasPanel', () => {
   beforeEach(() => {
@@ -786,7 +789,7 @@ describe('SwarmCanvasPanel', () => {
         'makecode-pxt',
         'micropython',
       );
-      expect(new TextDecoder().decode(translated.data), testCase.name).toBe(testCase.expected);
+      expect(decodeMicroPythonRadioString(translated.data), testCase.name).toBe(testCase.expected);
     }
   });
 

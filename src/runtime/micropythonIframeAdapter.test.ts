@@ -123,7 +123,7 @@ display.show(Image.ARROW_N)`),
     expect(targetWindow.messages[1]?.message).toMatchObject({ kind: 'mute' });
   });
 
-  it('maps buttons, sensors, reset, stop, and radio input to documented simulator messages', async () => {
+  it('maps buttons, sensors, reset, stop, and MicroPython string radio input to documented simulator messages', async () => {
     const targetWindow = makeTargetWindow();
     const adapter = new MicroPythonIframeRuntimeAdapter({
       targetWindow,
@@ -151,7 +151,7 @@ display.show(Image.ARROW_N)`),
       { message: { kind: 'set_value', id: 'compassY', value: 45 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'compassZ', value: 0 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       {
-        message: { kind: 'radio_input', data: new TextEncoder().encode('ping'), rssi: 63 },
+        message: { kind: 'radio_input', data: radioData, rssi: 63 },
         targetOrigin: 'https://python-simulator.usermbit.org',
       },
       { message: { kind: 'reset' }, targetOrigin: 'https://python-simulator.usermbit.org' },

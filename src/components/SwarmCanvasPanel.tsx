@@ -69,6 +69,7 @@ import {
   getActiveEditableProgram,
   resolveDeviceRuntimeSource as resolveEditableRuntimeSource,
 } from '../runtime/editableProgram';
+import { encodeMicroPythonRadioString } from '../runtime/micropythonIframeAdapter';
 
 type Selection =
   | { type: 'device'; id: DeviceId }
@@ -3184,7 +3185,7 @@ export function translateRuntimeRadioPacketForRecipient(
       return { data: new Uint8Array(packet.data) };
     }
     return {
-      data: new TextEncoder().encode(decoded),
+      data: encodeMicroPythonRadioString(decoded),
       diagnostic: `Translated MakeCode radio packet for MicroPython recipient: ${truncatePreview(decoded, 28)}`,
     };
   }

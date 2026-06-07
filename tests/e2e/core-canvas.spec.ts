@@ -336,6 +336,40 @@ test.describe('core canvas workflows', () => {
     await page.getByRole('button', { name: 'Close code editor' }).click();
   });
 
+  test('keeps scrolled editor clicks aligned with the visible code line', async ({ page }) => {
+    await gotoCanvas(page);
+
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await page.getByRole('button', { name: 'Edit code' }).click();
+
+    const sourceField = page.getByLabel('Editing main.py for Node 1');
+    const longSource = Array.from({ length: 80 }, (_, index) => `line_${index + 1}`).join('\n');
+    await sourceField.fill(longSource);
+
+    const clickTarget = await sourceField.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      const lineHeight = Number.parseFloat(style.lineHeight);
+      const paddingTop = Number.parseFloat(style.paddingTop);
+      element.scrollTop = lineHeight * 29;
+      return {
+        x: rect.x + 56,
+        y: rect.y + paddingTop + lineHeight / 2,
+      };
+    });
+
+    await page.mouse.click(clickTarget.x, clickTarget.y);
+    await page.keyboard.type('EDIT_');
+    await page.getByRole('button', { name: 'Save changes' }).click();
+
+    await page.getByRole('button', { name: 'Edit code' }).click();
+    const editedLines = (await sourceField.inputValue()).split('\n');
+    expect(editedLines[29]).toContain('EDIT_');
+    expect(editedLines[30]).toBe('line_31');
+    await page.getByRole('button', { name: 'Close code editor' }).click();
+  });
+
   test('keeps telemetry behind the debug modal until opened', async ({ page }) => {
     await gotoCanvas(page);
 

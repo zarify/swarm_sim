@@ -122,12 +122,10 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   }
 
   async sendRadio(packet: RuntimeRadioPacket): Promise<void> {
-    const decoded = decodeMicroPythonRadioString(packet.data);
-    const data = decoded === undefined ? packet.data : new TextEncoder().encode(decoded);
     const rssi = toSimulatorRadioRssi(packet.signalStrength);
     this.post({
       kind: 'radio_input',
-      data,
+      data: new Uint8Array(packet.data),
       ...(rssi === undefined ? {} : { rssi }),
     });
   }

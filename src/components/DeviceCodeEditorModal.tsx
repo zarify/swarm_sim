@@ -30,6 +30,13 @@ export function DeviceCodeEditorModal({
     [draftSource, editableProgram.runtimeSource],
   );
 
+  useEffect(() => {
+    if (!textareaRef.current) {
+      return;
+    }
+    syncHighlightedScroll(highlightRef.current, textareaRef.current);
+  }, [highlightedSource]);
+
   return (
     <div
       className="code-editor-modal"
@@ -74,6 +81,7 @@ export function DeviceCodeEditorModal({
               onScroll={(event) => syncHighlightedScroll(highlightRef.current, event.currentTarget)}
               onKeyDown={(event) => handleEditorKeyDown(event, setDraftSource)}
               spellCheck={false}
+              wrap="off"
             />
           </div>
         </div>
@@ -134,8 +142,7 @@ function syncHighlightedScroll(highlight: HTMLPreElement | null, textarea: HTMLT
   if (!highlight) {
     return;
   }
-  highlight.scrollTop = textarea.scrollTop;
-  highlight.scrollLeft = textarea.scrollLeft;
+  highlight.style.transform = `translate(${-textarea.scrollLeft}px, ${-textarea.scrollTop}px)`;
 }
 
 function handleEditorKeyDown(
