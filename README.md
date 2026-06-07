@@ -7,7 +7,9 @@ and sensor behaviour using either of those simulators:
 
 So I decided I'd fire up the trusty (YMMV) agent to make something to fill the gaps.
 
-> [!INFO] I just want to run this, tell me how
+> [!NOTE]
+> **I just want to run this, tell me how**
+> 
 > Either go use it [on my site](https://headtilt.me/swarm/) or:
 > 1. Download the latest release
 > 2. Unzip the contents into a folder on a web server
@@ -44,7 +46,9 @@ It supports:
 - This isn't an exact micro:bit simulator. I intentionally left things out (e.g. accelerometer, pins)
 - The radio interaction is made intentionally more compatible than it would be in the Real World. See the radio section for more info.
 
-> [!CAUTION] About the radio
+> [!CAUTION]
+> **About the radio**
+> 
 > [Makecode](https://makecode.microbit.org/reference/radio/packet) and [Micropython](https://microbit-micropython.readthedocs.io/en/v2-docs/radio.html) handle radio packet format quite differently. This simulator intentionally
 > simplifies it so that you can write radio code in different languages with the same *intent* and have
 > them communicate in the simulator, but this does NOT mean that they will work the same way in the
