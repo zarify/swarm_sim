@@ -70,9 +70,18 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
   }
 
-  function addLockedDeviceFromSwarmTools() {
+  function setAddLockedMode(enabled: boolean) {
     openSwarmTools();
-    fireEvent.click(screen.getByRole('button', { name: 'Add locked device' }));
+    const checkbox = screen.getByRole('checkbox', { name: 'Add locked' });
+    if ((checkbox as HTMLInputElement).checked !== enabled) {
+      fireEvent.click(checkbox);
+    }
+  }
+
+  function addLockedDeviceFromSwarmTools() {
+    setAddLockedMode(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
+    setAddLockedMode(false);
   }
 
   function stubCanvasGeometry(canvas: SVGElement) {
@@ -131,6 +140,7 @@ describe('SwarmCanvasPanel', () => {
     const actions = screen.getAllByRole('button').map((button) => button.textContent?.replace(/\s+/g, ' ').trim());
     expect(actions.indexOf('⬇ Download bundle')).toBeLessThan(actions.indexOf('Download log files'));
     expect(screen.getByLabelText('Upload bundle').closest('label')).toHaveAttribute('title', 'Upload canvas bundle');
+    expect(screen.getByRole('checkbox', { name: 'Add locked' })).not.toBeChecked();
   });
 
   it('shows and dismisses the startup instructions with Escape', async () => {
@@ -224,24 +234,151 @@ describe('SwarmCanvasPanel', () => {
 
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
     expect(screen.getByText('Locked', { selector: '.selection-name-badge' })).toBeInTheDocument();
-    expect(screen.getByText('The first successful code upload will be its only assignment.')).toBeInTheDocument();
+    expect(screen.getByText('Code locked after first upload')).toBeInTheDocument();
   });
 
-  it('shows the position-lock action only for locked devices and keeps it permanent once applied', () => {
+  it('supports toggleable pinning for regular devices and permanent pinning for locked devices', () => {
     const { container } = render(<SwarmCanvasPanel />);
 
-    expect(screen.queryByRole('button', { name: 'Lock position' })).not.toBeInTheDocument();
+    const regularPinButton = screen.getByRole('button', { name: 'Pin device position' });
+    expect(regularPinButton).toHaveAttribute('title', 'Pin device position');
+    fireEvent.click(regularPinButton);
+    expect(screen.getByRole('button', { name: 'Unpin device position' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin device position' }));
+    expect(screen.getByRole('button', { name: 'Pin device position' })).toHaveAttribute('aria-pressed', 'false');
 
     addLockedDeviceFromSwarmTools();
 
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'Lock position' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Lock position' }));
+    const lockedPinButton = screen.getByRole('button', { name: 'Pin device position permanently' });
+    expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeEnabled();
+    fireEvent.click(lockedPinButton);
 
-    expect(screen.queryByRole('button', { name: 'Lock position' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pinned device position permanently' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
+    expect(screen.getByText('Position and name locked')).toBeInTheDocument();
     expect(
-      screen.getByText('This device is locked in place on the canvas and cannot be moved or unlocked.'),
-    ).toBeInTheDocument();
+      screen.queryByText('This device is locked in place on the canvas and cannot be moved, renamed, or unlocked.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows concise code lock copy for locked devices before their first upload', () => {
+    render(<SwarmCanvasPanel />);
+
+    addLockedDeviceFromSwarmTools();
+
+    expect(screen.getByText('Code locked after first upload')).toBeInTheDocument();
+    expect(screen.queryByText('The first successful code upload will be its only assignment.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Locked after first code upload.')).not.toBeInTheDocument();
+  });
+
+  it('shows concise property lock copy for locked light sources', () => {
+    if (!FEATURE_FLAGS.light) {
+      return;
+    }
+
+    const { container } = render(<SwarmCanvasPanel />);
+
+    setAddLockedMode(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Add light' }));
+    setAddLockedMode(false);
+
+    expect(container.querySelectorAll('.source-node--light')).toHaveLength(1);
+    expect(screen.getByText('Locked', { selector: '.selection-name-badge' })).toBeInTheDocument();
+    expect(screen.getByText('Properties unlocked')).toBeInTheDocument();
+    expect(screen.getByLabelText('Radius')).toBeEnabled();
+    expect(screen.getByLabelText('Peak level (micro:bit scale)')).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pin node position permanently' }));
+
+    expect(screen.getByRole('button', { name: 'Pinned node position permanently' })).toBeDisabled();
+    expect(screen.getByLabelText('Radius')).toBeDisabled();
+    expect(screen.getByLabelText('Peak level (micro:bit scale)')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
+    expect(screen.getByText('Properties locked')).toBeInTheDocument();
+    expect(screen.queryByText('Keep this locked node fixed in place on the canvas.')).not.toBeInTheDocument();
+    expect(screen.queryByText('This is permanent once applied.')).not.toBeInTheDocument();
+    expect(screen.queryByText('This node is locked in place and its properties cannot be changed.')).not.toBeInTheDocument();
+  });
+
+  it('shows concise property lock copy for locked sound sources', () => {
+    if (!FEATURE_FLAGS.sound) {
+      return;
+    }
+
+    render(<SwarmCanvasPanel />);
+
+    setAddLockedMode(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Add sound' }));
+    setAddLockedMode(false);
+
+    expect(screen.getByText('Properties unlocked')).toBeInTheDocument();
+  });
+
+  it('keeps unlocked source controls editable when the source is pinned', () => {
+    if (!FEATURE_FLAGS.light) {
+      return;
+    }
+
+    render(<SwarmCanvasPanel />);
+
+    openSwarmTools();
+    fireEvent.click(screen.getByRole('button', { name: 'Add light' }));
+
+    const radius = screen.getByLabelText('Radius');
+    const peakLevel = screen.getByLabelText('Peak level (micro:bit scale)');
+    fireEvent.click(screen.getByRole('button', { name: 'Pin node position' }));
+
+    expect(screen.getByRole('button', { name: 'Unpin node position' })).toBeEnabled();
+    expect(radius).toBeEnabled();
+    expect(peakLevel).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeEnabled();
+  });
+
+  it('blocks a stale rename commit after a locked source becomes permanently pinned', () => {
+    if (!FEATURE_FLAGS.light) {
+      return;
+    }
+
+    render(<SwarmCanvasPanel />);
+
+    setAddLockedMode(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Add light' }));
+    setAddLockedMode(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename selected node' }));
+    const renameInput = screen.getByLabelText('Edit node name');
+    fireEvent.change(renameInput, { target: { value: 'Locked renamed light' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pin node position permanently' }));
+    fireEvent.keyDown(renameInput, { key: 'Enter' });
+
+    expect(screen.getByText('Light 1', { selector: '.selection-name' })).toBeInTheDocument();
+    expect(screen.queryByText('Locked renamed light', { selector: '.selection-name' })).not.toBeInTheDocument();
+  });
+
+  it('persists the radio range overlay through current-canvas save and restore', async () => {
+    const { container, unmount } = render(<SwarmCanvasPanel />);
+
+    openSwarmTools();
+    const radioRangeToggle = screen.getByRole('checkbox', { name: 'Radio range overlay' });
+    fireEvent.click(radioRangeToggle);
+    expect(container.querySelectorAll('.radio-radius')).toHaveLength(0);
+    expect(getSaveCanvasButton()).toHaveTextContent('Unsaved');
+
+    fireEvent.click(getSaveCanvasButton());
+    await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
+
+    unmount();
+
+    const restored = render(<SwarmCanvasPanel />);
+    await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    openSwarmTools();
+
+    expect(screen.getByRole('checkbox', { name: 'Radio range overlay' })).not.toBeChecked();
+    expect(restored.container.querySelectorAll('.radio-radius')).toHaveLength(0);
   });
 
   it('handles magnet source controls according to feature flags', () => {
@@ -489,8 +626,10 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit code' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Load code onto Node 2/)).not.toBeInTheDocument();
-    expect(screen.getByText('Locked after first code upload.')).toBeInTheDocument();
-    expect(screen.getByText('Source is hidden and this device cannot be overwritten.')).toBeInTheDocument();
+    expect(screen.getByText('Code locked')).toBeInTheDocument();
+    expect(screen.queryByText('Code locked after first upload')).not.toBeInTheDocument();
+    expect(screen.queryByText('Locked after first code upload.')).not.toBeInTheDocument();
+    expect(screen.queryByText('Source is hidden and this device cannot be overwritten.')).not.toBeInTheDocument();
   });
 
   it('blocks later overwrite attempts on locked devices through sidebar drop', async () => {
@@ -522,34 +661,42 @@ describe('SwarmCanvasPanel', () => {
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(0);
   });
 
-  it('keeps regular devices draggable while preventing movement on position-locked locked devices', () => {
+  it('keeps regular devices draggable while preventing movement on pinned locked devices', () => {
     const { container } = render(<SwarmCanvasPanel />);
     const canvas = container.querySelector('.swarm-canvas') as SVGElement;
     stubCanvasGeometry(canvas);
 
+    const regularNode = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
+    fireEvent.click(screen.getByRole('button', { name: 'Pin device position' }));
+    fireEvent.pointerDown(regularNode, { pointerId: 1, clientX: 430, clientY: 260 });
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 120, clientY: 120 });
+    fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 120, clientY: 120 });
+    expect(regularNode).toHaveAttribute('transform', 'translate(430 260)');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unpin device position' }));
+    fireEvent.pointerDown(regularNode, { pointerId: 2, clientX: 430, clientY: 260 });
+    fireEvent.pointerMove(canvas, { pointerId: 2, clientX: 100, clientY: 100 });
+    fireEvent.pointerUp(canvas, { pointerId: 2, clientX: 100, clientY: 100 });
+    expect(regularNode).toHaveAttribute('transform', 'translate(100 100)');
+
     addLockedDeviceFromSwarmTools();
-    fireEvent.click(screen.getByRole('button', { name: 'Lock position' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pin device position permanently' }));
 
     const nodes = container.querySelectorAll('.microbit-node');
-    const regularNode = nodes[0] as SVGGElement;
     const fixedLockedNode = nodes[1] as SVGGElement;
+    const fixedLockedTransform = fixedLockedNode.getAttribute('transform');
 
-    expect(regularNode).toHaveAttribute('transform', 'translate(430 260)');
-    fireEvent.pointerDown(regularNode, { pointerId: 1, clientX: 430, clientY: 260 });
-    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 100, clientY: 100 });
-    fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 100, clientY: 100 });
-    expect(regularNode).toHaveAttribute('transform', 'translate(100 100)');
-    expect(screen.queryByRole('button', { name: 'Lock position' })).not.toBeInTheDocument();
+    expect(fixedLockedTransform).toBeTruthy();
+    fireEvent.pointerDown(fixedLockedNode, { pointerId: 3, clientX: 526, clientY: 260 });
+    fireEvent.pointerMove(canvas, { pointerId: 3, clientX: 160, clientY: 160 });
+    fireEvent.pointerUp(canvas, { pointerId: 3, clientX: 160, clientY: 160 });
 
-    expect(fixedLockedNode).toHaveAttribute('transform', 'translate(526 260)');
-    fireEvent.pointerDown(fixedLockedNode, { pointerId: 2, clientX: 526, clientY: 260 });
-    fireEvent.pointerMove(canvas, { pointerId: 2, clientX: 160, clientY: 160 });
-    fireEvent.pointerUp(canvas, { pointerId: 2, clientX: 160, clientY: 160 });
-
+    expect(screen.getByRole('button', { name: 'Pinned device position permanently' })).toBeDisabled();
+    expect(screen.getByText('Position and name locked')).toBeInTheDocument();
     expect(
-      screen.getByText('This device is locked in place on the canvas and cannot be moved or unlocked.'),
-    ).toBeInTheDocument();
-    expect(fixedLockedNode).toHaveAttribute('transform', 'translate(526 260)');
+      screen.queryByText('This device is locked in place on the canvas and cannot be moved, renamed, or unlocked.'),
+    ).not.toBeInTheDocument();
+    expect(fixedLockedNode).toHaveAttribute('transform', fixedLockedTransform!);
   });
 
   it('keeps runtime hosts hidden until devices have assigned runtime artifacts', () => {

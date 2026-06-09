@@ -8,11 +8,14 @@ describe('project serialization', () => {
     const project = createBlankProject({ id: 'project-1', name: 'Radio swarm', now });
 
     expect(project).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       id: 'project-1',
       name: 'Radio swarm',
       createdAt: now,
       updatedAt: now,
+      viewOptions: {
+        showRadioRange: true,
+      },
       devices: [],
       artifacts: [],
       environmentSources: [],
@@ -60,7 +63,7 @@ describe('project serialization', () => {
     };
 
     expect(deserializeProject(JSON.stringify(legacyProject))).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 8,
       artifacts: [
         {
           id: 'artifact-legacy',
@@ -72,7 +75,7 @@ describe('project serialization', () => {
   });
 
   it('rejects unsupported schema versions', () => {
-    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 7', '"schemaVersion": 99');
+    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 8', '"schemaVersion": 99');
 
     expect(() => deserializeProject(serialized)).toThrow('Unsupported project schema version: 99');
   });
@@ -98,7 +101,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 1;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(7);
+    expect(deserialized.schemaVersion).toBe(8);
     expect(deserialized.environmentSources[0]?.type).toBe('light');
   });
 
@@ -107,7 +110,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 2;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(7);
+    expect(deserialized.schemaVersion).toBe(8);
     expect(deserialized.devices[0]?.editableProgram).toBeDefined();
   });
 
@@ -116,7 +119,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 3;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(7);
+    expect(deserialized.schemaVersion).toBe(8);
     expect(deserialized.devices[0]?.locked).toBeUndefined();
   });
 
@@ -125,8 +128,8 @@ describe('project serialization', () => {
     parsed.schemaVersion = 4;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(7);
-    expect(deserialized.devices[0]?.positionLocked).toBeUndefined();
+    expect(deserialized.schemaVersion).toBe(8);
+    expect(deserialized.devices[0]?.positionPinned).toBeUndefined();
   });
 
   it('migrates schema v5 projects to the current schema version', () => {
@@ -134,7 +137,17 @@ describe('project serialization', () => {
     parsed.schemaVersion = 5;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(7);
+    expect(deserialized.schemaVersion).toBe(8);
+  });
+
+  it('migrates schema v7 projects to the current schema version with default view options', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as Record<string, unknown>;
+    parsed.schemaVersion = 7;
+    delete parsed.viewOptions;
+
+    const deserialized = deserializeProject(JSON.stringify(parsed));
+    expect(deserialized.schemaVersion).toBe(8);
+    expect(deserialized.viewOptions.showRadioRange).toBe(true);
   });
 
   it('round-trips custom canvas instructions', () => {
@@ -190,22 +203,62 @@ describe('project serialization', () => {
     expect(deserialized.devices[0]?.editableProgram).toBeUndefined();
   });
 
-  it('round-trips locked devices with persisted position locking', () => {
+  it('round-trips persisted view options and node pinning', () => {
     const project: SwarmProject = {
       ...makeProject(),
+      viewOptions: {
+        showRadioRange: false,
+      },
       devices: [
         {
           id: 'device-locked',
           name: 'Mystery node',
           position: { x: 120, y: 80 },
           locked: true,
-          positionLocked: true,
+          positionPinned: true,
           programArtifactId: 'artifact-1',
+        },
+        {
+          id: 'device-2',
+          name: 'Free node',
+          position: { x: 200, y: 120 },
+          positionPinned: true,
+        },
+      ],
+      environmentSources: [
+        {
+          id: 'light-1',
+          type: 'light',
+          name: 'Light 1',
+          position: { x: 40, y: 20 },
+          radius: 160,
+          intensity: 0.8,
+          locked: true,
+          positionPinned: true,
         },
       ],
     };
 
     expect(deserializeProject(serializeProject(project))).toEqual(project);
+  });
+
+  it('migrates legacy locked-device position locking into pinned state', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as {
+      schemaVersion: number;
+      devices: Array<Record<string, unknown>>;
+    };
+    parsed.schemaVersion = 7;
+    parsed.devices[0] = {
+      ...parsed.devices[0],
+      locked: true,
+      positionLocked: true,
+    };
+
+    const deserialized = deserializeProject(JSON.stringify(parsed));
+    expect(deserialized.devices[0]).toMatchObject({
+      locked: true,
+      positionPinned: true,
+    });
   });
 
   it('rejects malformed locked flags', () => {
@@ -222,7 +275,7 @@ describe('project serialization', () => {
     );
   });
 
-  it('rejects malformed position-locked flags', () => {
+  it('rejects malformed legacy position-locked flags', () => {
     const parsed = JSON.parse(serializeProject(makeProject())) as {
       devices: Array<Record<string, unknown>>;
     };
@@ -248,6 +301,20 @@ describe('project serialization', () => {
 
     expect(() => deserializeProject(JSON.stringify(parsed))).toThrow(
       'device.positionLocked requires device.locked to be true',
+    );
+  });
+
+  it('rejects malformed position-pinned flags', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as {
+      devices: Array<Record<string, unknown>>;
+    };
+    parsed.devices[0] = {
+      ...parsed.devices[0],
+      positionPinned: 'yes',
+    };
+
+    expect(() => deserializeProject(JSON.stringify(parsed))).toThrow(
+      'Expected device.positionPinned to be a boolean',
     );
   });
 

@@ -40,7 +40,7 @@ describe('browserProjectStore fallback', () => {
         {
           id: 'layout-locked-device',
           locked: true,
-          positionLocked: true,
+          positionPinned: true,
           programArtifactId: 'layout-locked-artifact',
         },
       ],
@@ -60,6 +60,35 @@ describe('browserProjectStore fallback', () => {
     await store.save(project);
 
     await expect(store.load('layout-instructions')).resolves.toEqual(project);
+  });
+
+  it('preserves view options and locked source pinning through storage fallback', async () => {
+    const store = createBrowserProjectStore({
+      indexedDbFactory: undefined,
+      storage: createMemoryStorage(),
+    });
+    const project: SwarmProject = {
+      ...makeProject('layout-pinned', 'Pinned layout', '2026-05-18T01:30:00.000Z'),
+      viewOptions: {
+        showRadioRange: false,
+      },
+      environmentSources: [
+        {
+          id: 'light-1',
+          type: 'light',
+          name: 'Light 1',
+          position: { x: 60, y: 90 },
+          radius: 180,
+          intensity: 0.7,
+          locked: true,
+          positionPinned: true,
+        },
+      ],
+    };
+
+    await store.save(project);
+
+    await expect(store.load('layout-pinned')).resolves.toEqual(project);
   });
 });
 
@@ -108,7 +137,7 @@ function makeProject(id: string, name: string, now: string, locked = false): Swa
         id: `${id}-device`,
         name: 'Node',
         ...(locked ? { locked: true } : {}),
-        ...(locked ? { positionLocked: true } : {}),
+        ...(locked ? { positionPinned: true } : {}),
         position: { x: 20, y: 30 },
         programArtifactId: `${id}-artifact`,
       },

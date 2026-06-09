@@ -1,6 +1,6 @@
 import type { ArtifactKind, RuntimeSource } from '../runtime/types';
 
-export const PROJECT_SCHEMA_VERSION = 7;
+export const PROJECT_SCHEMA_VERSION = 8;
 
 export type ProjectId = string;
 export type DeviceId = string;
@@ -10,6 +10,22 @@ export type EnvironmentSourceId = string;
 export interface Point {
   x: number;
   y: number;
+}
+
+export interface CanvasViewOptions {
+  showRadioRange: boolean;
+}
+
+export const DEFAULT_CANVAS_VIEW_OPTIONS: CanvasViewOptions = {
+  showRadioRange: true,
+};
+
+export function normalizeCanvasViewOptions(
+  value: Partial<CanvasViewOptions> | undefined,
+): CanvasViewOptions {
+  return {
+    showRadioRange: value?.showRadioRange ?? DEFAULT_CANVAS_VIEW_OPTIONS.showRadioRange,
+  };
 }
 
 interface ProgramArtifactBase {
@@ -75,7 +91,7 @@ export interface VirtualDevice {
   name: string;
   position: Point;
   locked?: boolean;
-  positionLocked?: boolean;
+  positionPinned?: boolean;
   programArtifactId?: ArtifactId;
   editableProgram?: DeviceEditableProgram;
 }
@@ -85,6 +101,8 @@ interface EnvironmentSourceBase {
   name: string;
   position: Point;
   radius: number;
+  locked?: boolean;
+  positionPinned?: boolean;
 }
 
 export interface LevelEnvironmentSource extends EnvironmentSourceBase {
@@ -106,6 +124,7 @@ export interface SwarmProject {
   name: string;
   createdAt: string;
   updatedAt: string;
+  viewOptions: CanvasViewOptions;
   instructionsMarkdown?: string;
   devices: VirtualDevice[];
   artifacts: ProgramArtifact[];
@@ -131,6 +150,7 @@ export function createBlankProject(options: {
     name: options.name,
     createdAt: options.now,
     updatedAt: options.now,
+    viewOptions: normalizeCanvasViewOptions(undefined),
     devices: [],
     artifacts: [],
     environmentSources: [],

@@ -71,6 +71,32 @@ describe('project bundle codec', () => {
     expect(reopened.instructionsMarkdown).toBe(project.instructionsMarkdown);
   });
 
+  it('round-trips view options and locked source pinning inside canvas bundles', async () => {
+    const project: SwarmProject = {
+      ...makeMixedRuntimeProject(),
+      viewOptions: {
+        showRadioRange: false,
+      },
+      environmentSources: [
+        {
+          id: 'light-1',
+          type: 'light',
+          name: 'Light 1',
+          position: { x: 140, y: 90 },
+          radius: 200,
+          intensity: 0.75,
+          locked: true,
+          positionPinned: true,
+        },
+      ],
+    };
+
+    const reopened = await decodeProjectBundle(await encodeProjectBundle(project));
+
+    expect(reopened.viewOptions).toEqual(project.viewOptions);
+    expect(reopened.environmentSources).toEqual(project.environmentSources);
+  });
+
   it('round-trips locked devices without restoring editable source', async () => {
     const project: SwarmProject = {
       ...createBlankProject({ id: 'project-3', name: 'Locked bundle', now }),
@@ -89,7 +115,7 @@ describe('project bundle codec', () => {
           id: 'device-locked',
           name: 'Mystery node',
           locked: true,
-          positionLocked: true,
+          positionPinned: true,
           position: { x: 120, y: 80 },
           programArtifactId: 'artifact-locked',
         },
@@ -101,7 +127,7 @@ describe('project bundle codec', () => {
     expect(reopened.devices[0]).toMatchObject({
       id: 'device-locked',
       locked: true,
-      positionLocked: true,
+      positionPinned: true,
       programArtifactId: 'artifact-locked',
     });
     expect(reopened.devices[0]?.editableProgram).toBeUndefined();
