@@ -2722,26 +2722,11 @@ function DeviceSelection({
       </details>
       <div className="selection-artifact-block">
         {locked ? (
-          <p>
-            <strong>Locked device.</strong>{' '}
-            {device.programArtifactId
-              ? 'Source is hidden and this device cannot be overwritten.'
-              : 'The first successful code upload will be its only assignment.'}
-          </p>
+          <p>{device.programArtifactId ? 'Code locked' : 'Code locked after first upload'}</p>
         ) : null}
-        {locked ? (
+        {locked && positionPinned ? (
           <div className="selection-position-lock">
-            {positionPinned ? (
-              <p>
-                <strong>Position fixed.</strong> This device is locked in place on the canvas and cannot
-                {' '}be moved, renamed, or unlocked.
-              </p>
-            ) : (
-              <>
-                <p>Keep this locked device fixed in place on the canvas.</p>
-                <p>This is permanent once applied.</p>
-              </>
-            )}
+            <p>Position and name locked</p>
           </div>
         ) : null}
         {canAssignCode ? (
@@ -2759,8 +2744,6 @@ function DeviceSelection({
               }}
             />
           </label>
-        ) : locked && uploadState !== 'uploading' ? (
-          <p>Locked after first code upload.</p>
         ) : null}
         <p>{device.programArtifactId ? `Assigned: ${artifactName(project, device.programArtifactId)}` : 'No code assigned yet'}</p>
         {assignedArtifact ? <p>Runtime source: {assignedArtifact.runtimeSource}</p> : null}
@@ -2862,16 +2845,7 @@ function SourceSelection({
       </div>
       {locked ? (
         <div className="selection-position-lock">
-          {positionPinned ? (
-            <p>
-              <strong>Position fixed.</strong> This node is locked in place and its properties cannot be changed.
-            </p>
-          ) : (
-            <>
-              <p>Keep this locked node fixed in place on the canvas.</p>
-              <p>This is permanent once applied.</p>
-            </>
-          )}
+          <p>{positionPinned ? 'Properties locked' : 'Properties unlocked'}</p>
         </div>
       ) : null}
       <label className="range-field">
