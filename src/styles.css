@@ -1264,6 +1264,25 @@ button:disabled {
   font-size: 0.7rem;
 }
 
+.selection-action-pin {
+  justify-content: center;
+  min-width: 38px;
+  padding-inline: 8px;
+}
+
+.selection-action-pin--active {
+  border-color: rgba(183, 255, 74, 0.42);
+  background: rgba(183, 255, 74, 0.1);
+  color: var(--phosphor);
+}
+
+.pin-glyph {
+  width: 1rem;
+  height: 1rem;
+  display: block;
+  fill: currentColor;
+}
+
 .selection-artifact-block {
   margin-top: 12px;
   padding-top: 12px;

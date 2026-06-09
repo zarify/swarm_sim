@@ -1,4 +1,5 @@
 import {
+  normalizeCanvasViewOptions,
   normalizeInstructionsMarkdown,
   defaultEnvironmentSourceName,
   PROJECT_SCHEMA_VERSION,
@@ -53,6 +54,7 @@ function parseSerializedProject(value: unknown): SwarmProject {
     schemaVersion !== 4 &&
     schemaVersion !== 5 &&
     schemaVersion !== 6 &&
+    schemaVersion !== 7 &&
     schemaVersion !== PROJECT_SCHEMA_VERSION
   ) {
     throw new Error(`Unsupported project schema version: ${schemaVersion}`);
@@ -68,6 +70,7 @@ function parseSerializedProject(value: unknown): SwarmProject {
     name: expectString(project.name, 'name'),
     createdAt: expectString(project.createdAt, 'createdAt'),
     updatedAt: expectString(project.updatedAt, 'updatedAt'),
+    viewOptions: parseCanvasViewOptions(project.viewOptions, schemaVersion),
     ...(instructionsMarkdown ? { instructionsMarkdown } : {}),
     devices: expectArray(project.devices, 'devices').map(parseDevice),
     artifacts: expectArray(project.artifacts, 'artifacts').map(parseArtifact),
@@ -163,12 +166,14 @@ function parseDevice(value: unknown): VirtualDevice {
   const programArtifactId = device.programArtifactId;
   const editableProgram = device.editableProgram;
   const locked = expectOptionalBoolean(device.locked, 'device.locked') ?? false;
-  const positionLocked = expectOptionalBoolean(device.positionLocked, 'device.positionLocked') ?? false;
+  const positionPinned = expectOptionalBoolean(device.positionPinned, 'device.positionPinned') ?? false;
+  const legacyPositionLocked =
+    expectOptionalBoolean(device.positionLocked, 'device.positionLocked') ?? false;
   const parsedProgramArtifactId =
     programArtifactId === undefined
       ? undefined
       : expectString(programArtifactId, 'device.programArtifactId');
-  if (positionLocked && !locked) {
+  if (legacyPositionLocked && !locked && !positionPinned) {
     throw new Error('device.positionLocked requires device.locked to be true');
   }
 
@@ -177,7 +182,7 @@ function parseDevice(value: unknown): VirtualDevice {
     name: expectString(device.name, 'device.name'),
     position: parsePoint(device.position, 'device.position'),
     ...(locked ? { locked: true } : {}),
-    ...(positionLocked ? { positionLocked: true } : {}),
+    ...(positionPinned || legacyPositionLocked ? { positionPinned: true } : {}),
     ...(parsedProgramArtifactId === undefined ? {} : { programArtifactId: parsedProgramArtifactId }),
     ...(locked || editableProgram === undefined
       ? {}
@@ -189,6 +194,9 @@ function parseEnvironmentSource(value: unknown, schemaVersion: number): Environm
   const source = expectRecord(value, 'environmentSource');
   const id = expectString(source.id, 'environmentSource.id');
   const type = expectString(source.type, 'environmentSource.type');
+  const locked = expectOptionalBoolean(source.locked, 'environmentSource.locked') ?? false;
+  const positionPinned =
+    expectOptionalBoolean(source.positionPinned, 'environmentSource.positionPinned') ?? false;
 
   if (type !== 'light' && type !== 'sound' && type !== 'magnet') {
     throw new Error(`Invalid environment source type: ${type}`);
@@ -205,6 +213,8 @@ function parseEnvironmentSource(value: unknown, schemaVersion: number): Environm
         : defaultEnvironmentSourceName({ id, type }),
     position: parsePoint(source.position, 'environmentSource.position'),
     radius: expectNumber(source.radius, 'environmentSource.radius'),
+    ...(locked ? { locked: true } : {}),
+    ...(positionPinned ? { positionPinned: true } : {}),
   };
 
   if (type === 'magnet') {
@@ -224,6 +234,16 @@ function parseEnvironmentSource(value: unknown, schemaVersion: number): Environm
     type,
     intensity: expectNumber(source.intensity, 'environmentSource.intensity'),
   };
+}
+
+function parseCanvasViewOptions(value: unknown, schemaVersion: number) {
+  if (schemaVersion < 8 || value === undefined) {
+    return normalizeCanvasViewOptions(undefined);
+  }
+  const viewOptions = expectRecord(value, 'viewOptions');
+  return normalizeCanvasViewOptions({
+    showRadioRange: expectOptionalBoolean(viewOptions.showRadioRange, 'viewOptions.showRadioRange'),
+  });
 }
 
 function parsePoint(value: unknown, label: string) {

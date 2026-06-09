@@ -32,9 +32,18 @@ async function addDeviceFromSwarmTools(page: Page) {
   await page.getByRole('button', { name: 'Add device' }).click();
 }
 
-async function addLockedDeviceFromSwarmTools(page: Page) {
+async function setAddLockedMode(page: Page, enabled: boolean) {
   await openSwarmTools(page);
-  await page.getByRole('button', { name: 'Add locked device' }).click();
+  const checkbox = page.getByRole('checkbox', { name: 'Add locked' });
+  if ((await checkbox.isChecked()) !== enabled) {
+    await checkbox.click();
+  }
+}
+
+async function addLockedDeviceFromSwarmTools(page: Page) {
+  await setAddLockedMode(page, true);
+  await page.getByRole('button', { name: 'Add device' }).click();
+  await setAddLockedMode(page, false);
 }
 
 async function addLightFromSwarmTools(page: Page) {
@@ -152,14 +161,35 @@ test.describe('core canvas workflows', () => {
     await gotoCanvas(page);
 
     await addLockedDeviceFromSwarmTools(page);
-    await expect(page.getByRole('button', { name: 'Lock position' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Rename selected node' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Pin device position permanently' })).toBeVisible();
 
-    await page.getByRole('button', { name: 'Lock position' }).click();
+    await page.getByRole('button', { name: 'Pin device position permanently' }).click();
 
-    await expect(page.getByRole('button', { name: 'Lock position' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Pinned device position permanently' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
     await expect(
-      page.getByText('This device is locked in place on the canvas and cannot be moved or unlocked.'),
+      page.getByText('This device is locked in place on the canvas and cannot be moved, renamed, or unlocked.'),
     ).toBeVisible();
+  });
+
+  test('locks locked light-source controls after permanent pinning', async ({ page }) => {
+    await gotoCanvas(page);
+    await setAddLockedMode(page, true);
+    await page.getByRole('button', { name: 'Add light' }).click();
+    await setAddLockedMode(page, false);
+
+    await expect(page.getByRole('button', { name: 'Rename selected node' })).toBeEnabled();
+    await expect(page.getByLabel('Radius')).toBeEnabled();
+    await expect(page.getByLabel('Peak level (micro:bit scale)')).toBeEnabled();
+
+    await page.getByRole('button', { name: 'Pin node position permanently' }).click();
+
+    await expect(page.getByRole('button', { name: 'Pinned node position permanently' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
+    await expect(page.getByLabel('Radius')).toBeDisabled();
+    await expect(page.getByLabel('Peak level (micro:bit scale)')).toBeDisabled();
+    await expect(page.getByText('This node is locked in place and its properties cannot be changed.')).toBeVisible();
   });
 
   test('keeps the canvas size stable when switching between locked and unlocked devices', async ({ page }) => {
@@ -406,19 +436,31 @@ test.describe('core canvas workflows', () => {
     await expect(page.locator('.microbit-node')).toHaveCount(1);
   });
 
-  test('restores the explicitly saved current canvas after a page reload', async ({ page }) => {
+  test('restores the explicitly saved current canvas with pinned and view state after a page reload', async ({ page }) => {
     await gotoCanvas(page);
 
     await addDeviceFromSwarmTools(page);
     await expect(page.locator('.microbit-node')).toHaveCount(2);
 
+    await page.locator('.microbit-node').first().click();
+    await openSwarmTools(page);
+    await page.getByRole('checkbox', { name: 'Radio range overlay' }).uncheck();
+    await expect(page.locator('.radio-radius')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Pin device position' }).click();
+    await expect(page.getByRole('button', { name: 'Unpin device position' })).toBeVisible();
+
     await getSaveCanvasButton(page).click();
     await expect(getSaveCanvasButton(page)).toContainText('Saved');
 
     await page.reload();
+    await dismissSplash(page);
 
     await expect(page.locator('.microbit-node')).toHaveCount(2);
     await expect(getSaveCanvasButton(page)).toContainText('Saved');
+    await openSwarmTools(page);
+    await expect(page.getByRole('checkbox', { name: 'Radio range overlay' })).not.toBeChecked();
+    await expect(page.locator('.radio-radius')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Unpin device position' })).toBeVisible();
   });
 
   test('shows saved custom instructions again after reload and exposes the header info button', async ({ page }) => {
