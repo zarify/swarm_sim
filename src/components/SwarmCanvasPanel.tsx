@@ -18,6 +18,7 @@ import {
   type EnvironmentSource,
   type EnvironmentSourceId,
   type Point,
+  type ProgramArtifact,
   type ProjectSummary,
   type SwarmProject,
   type VirtualDevice,
@@ -133,6 +134,14 @@ interface RuntimeDataLogArchiveFile {
   content: string;
 }
 
+type SavedCanvasResetConfirmationReason = 'canvas-membership' | 'device-code' | 'locked-state';
+
+interface SavedCanvasResetAnalysis {
+  requiresRestore: boolean;
+  requiresConfirmation: boolean;
+  confirmationReasons: SavedCanvasResetConfirmationReason[];
+}
+
 type ArtifactUploadState = 'uploading' | 'ready' | 'failed';
 type RuntimeNodeState = 'pending' | 'ready' | 'failed' | 'error';
 type RuntimeRadioConfigHint = Partial<Pick<DeviceRuntimeState['radio'], 'group' | 'channel' | 'signalStrength'>>;
@@ -197,6 +206,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const [editorDeviceId, setEditorDeviceId] = useState<DeviceId | null>(null);
   const [hasUnsavedCanvasChanges, setHasUnsavedCanvasChanges] = useState(false);
   const [hasSavedWorkingCopy, setHasSavedWorkingCopy] = useState(false);
+  const [isResetActionPending, setIsResetActionPending] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const sidebarRef = useRef<HTMLElement | null>(null);
   const bundleDropAreaRef = useRef<HTMLDivElement | null>(null);
@@ -723,7 +733,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     cancelRename();
   }
 
-  function resetAllDevices() {
+  function performRuntimeOnlyReset() {
     setScenarioResetSignal((current) => current + 1);
     setDisplaySnapshots({});
     setRuntimeActivity({});
@@ -740,6 +750,49 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       ...current,
       simulationState: resetSimulation(current.project, defaultRadioOptions),
     }));
+  }
+
+  async function resetAllDevices() {
+    if (isResetActionPending) {
+      return;
+    }
+    if (!browserWorkingCopyStore.current) {
+      performRuntimeOnlyReset();
+      return;
+    }
+    setIsResetActionPending(true);
+    try {
+      const savedWorkingCopy = await browserWorkingCopyStore.current.load();
+      if (!savedWorkingCopy) {
+        performRuntimeOnlyReset();
+        return;
+      }
+      setHasSavedWorkingCopy(true);
+      const resetDiff = analyzeSavedCanvasReset(modelRef.current.project, savedWorkingCopy);
+      if (!resetDiff.requiresRestore) {
+        performRuntimeOnlyReset();
+        return;
+      }
+      if (
+        resetDiff.requiresConfirmation &&
+        !confirmSavedCanvasReset(resetDiff.confirmationReasons, hasUnsavedCanvasChangesRef.current)
+      ) {
+        performRuntimeOnlyReset();
+        return;
+      }
+      replaceScenarioProject(savedWorkingCopy, {
+        hasUnsavedChanges: false,
+        recordUserInteraction: false,
+      });
+      setCanvasStateMessage(`Reset restored saved canvas "${savedWorkingCopy.name}"`);
+    } catch (error) {
+      setCanvasStateMessage(
+        error instanceof Error ? error.message : 'Unable to restore saved current canvas',
+      );
+      performRuntimeOnlyReset();
+    } finally {
+      setIsResetActionPending(false);
+    }
   }
 
   function resetSelectedDevice() {
@@ -1802,6 +1855,22 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     return window.confirm(`${actionLabel} will replace the current canvas.${unsavedSuffix} Continue?`);
   }
 
+  function confirmSavedCanvasReset(
+    confirmationReasons: SavedCanvasResetConfirmationReason[],
+    hasUnsavedChanges: boolean,
+  ): boolean {
+    if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+      return true;
+    }
+    const reasonSummary = formatSavedCanvasResetReasonSummary(confirmationReasons);
+    const unsavedSuffix = hasUnsavedChanges
+      ? ' This will also discard unsaved layout or code changes.'
+      : '';
+    return window.confirm(
+      `Reset will restore the latest saved canvas and ${reasonSummary}.${unsavedSuffix} Continue?`,
+    );
+  }
+
   async function loadSavedLayout(projectId: string) {
     if (!browserProjectStore.current) {
       setCanvasStateMessage('Browser storage is not available');
@@ -2039,7 +2108,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           <button
             type="button"
             className="button-with-icon"
-            onClick={resetAllDevices}
+            onClick={() => void resetAllDevices()}
+            disabled={isResetActionPending}
             title="Reset all devices and runtimes"
           >
             <span aria-hidden="true">↺</span> Reset
@@ -3227,10 +3297,217 @@ function removeDeviceFromProject(project: SwarmProject, deviceId: DeviceId): Swa
   };
 }
 
+function analyzeSavedCanvasReset(
+  currentProject: SwarmProject,
+  savedProject: SwarmProject,
+): SavedCanvasResetAnalysis {
+  let requiresRestore = false;
+  const confirmationReasons = new Set<SavedCanvasResetConfirmationReason>();
+
+  if (
+    currentProject.name !== savedProject.name ||
+    currentProject.instructionsMarkdown !== savedProject.instructionsMarkdown ||
+    stableSerializeForComparison(currentProject.viewOptions) !==
+      stableSerializeForComparison(savedProject.viewOptions)
+  ) {
+    requiresRestore = true;
+  }
+
+  const currentDevices = new Map(currentProject.devices.map((device) => [device.id, device]));
+  const savedDevices = new Map(savedProject.devices.map((device) => [device.id, device]));
+  if (!haveSameKeys(currentDevices, savedDevices)) {
+    requiresRestore = true;
+    confirmationReasons.add('canvas-membership');
+  }
+
+  const currentSources = new Map(currentProject.environmentSources.map((source) => [source.id, source]));
+  const savedSources = new Map(savedProject.environmentSources.map((source) => [source.id, source]));
+  if (!haveSameKeys(currentSources, savedSources)) {
+    requiresRestore = true;
+    confirmationReasons.add('canvas-membership');
+  }
+
+  const currentArtifacts = new Map(currentProject.artifacts.map((artifact) => [artifact.id, artifact]));
+  const savedArtifacts = new Map(savedProject.artifacts.map((artifact) => [artifact.id, artifact]));
+
+  for (const [deviceId, savedDevice] of savedDevices) {
+    const currentDevice = currentDevices.get(deviceId);
+    if (!currentDevice) {
+      continue;
+    }
+    if (currentDevice.name !== savedDevice.name) {
+      requiresRestore = true;
+    }
+    if (
+      currentDevice.position.x !== savedDevice.position.x ||
+      currentDevice.position.y !== savedDevice.position.y
+    ) {
+      requiresRestore = true;
+    }
+    if (
+      Boolean(currentDevice.locked) !== Boolean(savedDevice.locked) ||
+      Boolean(currentDevice.positionPinned) !== Boolean(savedDevice.positionPinned)
+    ) {
+      requiresRestore = true;
+      confirmationReasons.add('locked-state');
+    }
+    if (
+      buildDeviceCodeComparisonSignature(currentDevice, currentArtifacts) !==
+      buildDeviceCodeComparisonSignature(savedDevice, savedArtifacts)
+    ) {
+      requiresRestore = true;
+      confirmationReasons.add('device-code');
+    }
+  }
+
+  for (const [sourceId, savedSource] of savedSources) {
+    const currentSource = currentSources.get(sourceId);
+    if (!currentSource) {
+      continue;
+    }
+    if (
+      currentSource.position.x !== savedSource.position.x ||
+      currentSource.position.y !== savedSource.position.y ||
+      currentSource.name !== savedSource.name ||
+      stableSerializeForComparison(stripEnvironmentSourcePosition(currentSource)) !==
+        stableSerializeForComparison(stripEnvironmentSourcePosition(savedSource))
+    ) {
+      requiresRestore = true;
+    }
+    if (
+      Boolean(currentSource.locked) !== Boolean(savedSource.locked) ||
+      Boolean(currentSource.positionPinned) !== Boolean(savedSource.positionPinned)
+    ) {
+      confirmationReasons.add('locked-state');
+    }
+  }
+
+  const reasons = [...confirmationReasons];
+  return {
+    requiresRestore,
+    requiresConfirmation: reasons.length > 0,
+    confirmationReasons: reasons,
+  };
+}
+
 function touchProjectUpdatedAt(currentProject: SwarmProject, nextProject: SwarmProject): SwarmProject {
   return nextProject.updatedAt === currentProject.updatedAt
     ? { ...nextProject, updatedAt: new Date().toISOString() }
     : nextProject;
+}
+
+function haveSameKeys<T>(left: Map<string, T>, right: Map<string, T>): boolean {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const key of left.keys()) {
+    if (!right.has(key)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function buildDeviceCodeComparisonSignature(
+  device: VirtualDevice,
+  artifactsById: Map<string, ProgramArtifact>,
+): string {
+  const assignedArtifact = device.programArtifactId
+    ? artifactsById.get(device.programArtifactId)
+    : undefined;
+  const editableBaseArtifact = device.editableProgram?.baseArtifactId
+    ? artifactsById.get(device.editableProgram.baseArtifactId)
+    : undefined;
+  return stableSerializeForComparison({
+    assignedArtifact: assignedArtifact ? buildArtifactComparisonSnapshot(assignedArtifact) : undefined,
+    editableProgram: device.editableProgram
+      ? {
+          ...stripEditableProgramBaseArtifactId(device.editableProgram),
+          baseArtifact: editableBaseArtifact
+            ? buildArtifactComparisonSnapshot(editableBaseArtifact)
+            : undefined,
+        }
+      : undefined,
+  });
+}
+
+function buildArtifactComparisonSnapshot(artifact: ProgramArtifact): Record<string, unknown> {
+  return 'program' in artifact
+    ? {
+        artifactKind: artifact.artifactKind,
+        runtimeSource: artifact.runtimeSource,
+        program: artifact.program,
+      }
+    : {
+        artifactKind: artifact.artifactKind,
+        runtimeSource: artifact.runtimeSource,
+        bytesLength: artifact.bytes.byteLength,
+        bytesHash: fnv1a32(artifact.bytes),
+      };
+}
+
+function stripEditableProgramBaseArtifactId(program: DeviceEditableProgram): Record<string, unknown> {
+  const {
+    baseArtifactId: _baseArtifactId,
+    revision: _revision,
+    updatedAt: _updatedAt,
+    ...rest
+  } = program;
+  return rest;
+}
+
+function stripEnvironmentSourcePosition(source: EnvironmentSource): Record<string, unknown> {
+  const { position: _position, ...rest } = source;
+  return rest;
+}
+
+function stableSerializeForComparison(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableSerializeForComparison(entry)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    return `{${Object.keys(record)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableSerializeForComparison(record[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function fnv1a32(bytes: Uint8Array): string {
+  let hash = 0x811c9dc5;
+  for (const value of bytes) {
+    hash ^= value;
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
+}
+
+function formatSavedCanvasResetReasonSummary(
+  confirmationReasons: SavedCanvasResetConfirmationReason[],
+): string {
+  const uniqueReasons = [...new Set(confirmationReasons)];
+  if (uniqueReasons.length === 0) {
+    return 'replace the current canvas';
+  }
+  const labels = uniqueReasons.map((reason) => {
+    switch (reason) {
+      case 'canvas-membership':
+        return 'add or remove nodes or sources';
+      case 'device-code':
+        return 'restore saved code';
+      case 'locked-state':
+        return 'change locked or pinned state';
+    }
+  });
+  if (labels.length === 1) {
+    return labels[0]!;
+  }
+  if (labels.length === 2) {
+    return `${labels[0]} and ${labels[1]}`;
+  }
+  return `${labels.slice(0, -1).join(', ')}, and ${labels.at(-1)}`;
 }
 
 function pickFirstHexFile(dataTransfer: DataTransfer): File | undefined {

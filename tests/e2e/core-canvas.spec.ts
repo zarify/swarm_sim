@@ -542,6 +542,35 @@ test.describe('core canvas workflows', () => {
     await expect(page.getByRole('button', { name: 'Unpin device position' })).toBeVisible();
   });
 
+  test('Reset restores the saved current canvas after confirmation and keeps the current canvas on cancel', async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      const responses = [false, true];
+      window.confirm = () => responses.shift() ?? true;
+    });
+
+    await gotoCanvas(page);
+
+    await addDeviceFromSwarmTools(page);
+    await expect(page.locator('.microbit-node')).toHaveCount(2);
+    await getSaveCanvasButton(page).click();
+    await expect(getSaveCanvasButton(page)).toContainText('Saved');
+
+    await addDeviceFromSwarmTools(page);
+    await expect(page.locator('.microbit-node')).toHaveCount(3);
+    await expect(getSaveCanvasButton(page)).toContainText('Unsaved');
+
+    await page.getByRole('button', { name: 'Reset' }).first().click();
+    await expect(page.locator('.microbit-node')).toHaveCount(3);
+    await expect(getSaveCanvasButton(page)).toContainText('Unsaved');
+
+    await page.getByRole('button', { name: 'Reset' }).first().click();
+    await expect(page.locator('.microbit-node')).toHaveCount(2);
+    await expect(getSaveCanvasButton(page)).toContainText('Saved');
+    await expect(page.getByText(/Reset restored saved canvas "/)).toBeVisible();
+  });
+
   test('shows saved custom instructions again after reload and exposes the header info button', async ({ page }) => {
     await gotoCanvas(page);
 

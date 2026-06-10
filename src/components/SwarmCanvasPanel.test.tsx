@@ -5,6 +5,7 @@ import { vi } from 'vitest';
 import type { MicroPythonRuntimeHostProps, RoutedRadioDelivery } from './MicroPythonRuntimeHost';
 const workingCopyStorageState = vi.hoisted(() => ({
   items: new Map<string, string>(),
+  loadErrorMessage: undefined as string | undefined,
 }));
 
 vi.mock('../domain/browserWorkingCopyStore', async () => {
@@ -28,8 +29,18 @@ vi.mock('../domain/browserWorkingCopyStore', async () => {
   };
   return {
     ...actual,
-    createBrowserWorkingCopyStore: () =>
-      actual.createBrowserWorkingCopyStore({ indexedDbFactory: undefined, storage }),
+    createBrowserWorkingCopyStore: () => {
+      const store = actual.createBrowserWorkingCopyStore({ indexedDbFactory: undefined, storage });
+      return {
+        ...store,
+        load: async () => {
+          if (workingCopyStorageState.loadErrorMessage) {
+            throw new Error(workingCopyStorageState.loadErrorMessage);
+          }
+          return store.load();
+        },
+      };
+    },
   };
 });
 
@@ -52,6 +63,7 @@ describe('SwarmCanvasPanel', () => {
       window.localStorage.clear();
     }
     workingCopyStorageState.items.clear();
+    workingCopyStorageState.loadErrorMessage = undefined;
     vi.restoreAllMocks();
   });
 
@@ -63,6 +75,10 @@ describe('SwarmCanvasPanel', () => {
 
   function getSaveCanvasButton() {
     return screen.getByRole('button', { name: /Save canvas/i });
+  }
+
+  function getHeaderResetButton() {
+    return screen.getAllByRole('button', { name: /^Reset$/ })[0]!;
   }
 
   function addDeviceFromSwarmTools() {
@@ -1105,6 +1121,33 @@ describe('SwarmCanvasPanel', () => {
     );
   });
 
+  it('falls back to a runtime-only reset when loading the saved canvas fails', async () => {
+    const { container } = render(
+      <SwarmCanvasPanel RuntimeHost={(props) => <RuntimeErrorEmitterHost {...props} />} />,
+    );
+
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+      target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
+    });
+    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
+
+    fireEvent.click(getSaveCanvasButton());
+    await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
+    await waitFor(() =>
+      expect(container.querySelector('[data-runtime-state="device-1:error"]')).toBeInTheDocument(),
+    );
+
+    openSwarmTools();
+    workingCopyStorageState.loadErrorMessage = 'Saved canvas unavailable';
+    fireEvent.click(getHeaderResetButton());
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-runtime-state="device-1:error"]')).not.toBeInTheDocument(),
+    );
+    expect(screen.getByText('Saved canvas unavailable')).toBeInTheDocument();
+    expect(getSaveCanvasButton()).toHaveTextContent('Saved');
+  });
+
   it('pulses canvas A, B, and A+B controls into runtime state so hosts can consume button input', async () => {
     const buttonStates: string[] = [];
     const { container } = render(
@@ -1257,6 +1300,81 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.click(screen.getAllByRole('button', { name: /^Reset$/ })[0]!);
 
     expect(getSaveCanvasButton()).toHaveTextContent('Saved');
+  });
+
+  it('restores the saved canvas on Reset without confirmation when only positions changed', async () => {
+    const { container } = render(<SwarmCanvasPanel />);
+    const canvas = container.querySelector('.swarm-canvas') as SVGElement;
+    const firstNode = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
+    stubCanvasGeometry(canvas);
+
+    fireEvent.click(getSaveCanvasButton());
+    await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
+
+    fireEvent.pointerDown(firstNode, { pointerId: 1, clientX: 430, clientY: 260 });
+    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 100, clientY: 100 });
+    fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 100, clientY: 100 });
+
+    expect(firstNode).toHaveAttribute('transform', 'translate(100 100)');
+    expect(getSaveCanvasButton()).toHaveTextContent('Unsaved');
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.click(getHeaderResetButton());
+
+    await waitFor(() => expect(firstNode).toHaveAttribute('transform', 'translate(430 260)'));
+    await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it('prompts on Reset when restoring the saved canvas would add or remove nodes and keeps the current canvas on cancel', async () => {
+    const { container } = render(<SwarmCanvasPanel />);
+
+    addDeviceFromSwarmTools();
+    expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
+    fireEvent.click(getSaveCanvasButton());
+    await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
+
+    addDeviceFromSwarmTools();
+    expect(container.querySelectorAll('.microbit-node')).toHaveLength(3);
+    expect(getSaveCanvasButton()).toHaveTextContent('Unsaved');
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.click(getHeaderResetButton());
+
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+    expect(confirmSpy.mock.calls[0]?.[0]).toContain('add or remove nodes or sources');
+    await waitFor(() => expect(container.querySelectorAll('.microbit-node')).toHaveLength(3));
+    expect(getSaveCanvasButton()).toHaveTextContent('Unsaved');
+  });
+
+  it('prompts on Reset when restoring the saved canvas would change device code', async () => {
+    render(<SwarmCanvasPanel />);
+
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+      target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
+    });
+    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
+
+    fireEvent.click(getSaveCanvasButton());
+    await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
+    fireEvent.change(screen.getByLabelText('Editing main.py for Node 1'), {
+      target: { value: 'radio.send("edited")\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(screen.getByText(/Editable source:/)).toHaveTextContent('saved changes ready'));
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fireEvent.click(getHeaderResetButton());
+
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+    expect(confirmSpy.mock.calls[0]?.[0]).toContain('restore saved code');
+    await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
+    expect(screen.getByText(/Editable source:/)).toHaveTextContent('ready to edit');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
+    expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("ping")');
   });
 
   it('deletes individual saved layouts from the canvas-state menu', async () => {
