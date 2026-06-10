@@ -35,12 +35,14 @@ import {
 } from '../runtime/featureFlags';
 import {
   appendDeviceRuntimeLog,
+  clearDeviceSoundEmitter,
   moveDevice,
   reconcileSimulationProject,
   resetSimulation,
   routeRadioPacket,
   setDeviceButton,
   setDeviceRadioConfig,
+  setDeviceSoundEmitter,
   type DeviceRuntimeState,
   type SimulationState,
 } from '../simulation/simulationEngine';
@@ -143,6 +145,7 @@ const defaultRadioOptions = {
 };
 const runtimeActivityPulseMs = 480;
 const runtimeSoundLogCooldownMs = 900;
+const runtimeSoundEmitterHoldMs = 520;
 const displayMinFrameMs = 420;
 const buttonPulseMs = 110;
 const AB_BUTTONS = ['A', 'B'] as const;
@@ -200,11 +203,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const modelRef = useRef(model);
   const uploadTokens = useRef(new Map<DeviceId, number>());
   const runtimeActivityTimers = useRef(new Map<string, number>());
+  const runtimeSoundEmitterTimers = useRef(new Map<DeviceId, number>());
   const displayFrameTimers = useRef(new Map<DeviceId, number>());
   const displayLastUpdateMs = useRef(new Map<DeviceId, number>());
   const buttonPulseTimers = useRef(new Map<string, number>());
   const recentRoutedPackets = useRef(new Map<DeviceId, string>());
   const recentRuntimeSoundLogAt = useRef(new Map<DeviceId, number>());
+  const activeRuntimeSoundLevels = useRef(new Map<DeviceId, number>());
   const pendingRadioConfigHints = useRef(new Map<DeviceId, RuntimeRadioConfigHint>());
   const runtimeResetNonce = useRef(0);
   const nextDeviceNumber = useRef(model.project.devices.length + 1);
@@ -253,9 +258,11 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     () => () => {
       releaseCanvasPointer();
       clearRuntimeActivityTimers(runtimeActivityTimers.current);
+      clearRuntimeSoundEmitterTimers(runtimeSoundEmitterTimers.current);
       clearDisplayFrameTimers(displayFrameTimers.current);
       clearButtonPulseTimers(buttonPulseTimers.current);
       recentRuntimeSoundLogAt.current.clear();
+      activeRuntimeSoundLevels.current.clear();
     },
     [],
   );
@@ -722,11 +729,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     setRuntimeActivity({});
     setRuntimeErrorByDevice({});
     clearRuntimeActivityTimers(runtimeActivityTimers.current);
+    clearRuntimeSoundEmitterTimers(runtimeSoundEmitterTimers.current);
     clearDisplayFrameTimers(displayFrameTimers.current);
     clearButtonPulseTimers(buttonPulseTimers.current);
     displayLastUpdateMs.current.clear();
     recentRoutedPackets.current.clear();
     recentRuntimeSoundLogAt.current.clear();
+    activeRuntimeSoundLevels.current.clear();
     setModel((current) => ({
       ...current,
       simulationState: resetSimulation(current.project, defaultRadioOptions),
@@ -774,6 +783,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       const { [deviceId]: _removed, ...rest } = current;
       return rest;
     });
+    clearRuntimeSoundEmitterState(deviceId);
   }
 
   function toggleDevicePositionPin(deviceId: DeviceId) {
@@ -932,6 +942,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       const { [deviceId]: _removed, ...rest } = current;
       return rest;
     });
+    clearRuntimeSoundEmitterState(deviceId);
 
     try {
       const bytes = await readHexFileBytes(file);
@@ -1041,6 +1052,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
 
   function saveEditedProgram(deviceId: DeviceId, nextProgram: DeviceEditableProgram) {
     const now = new Date().toISOString();
+    clearRuntimeSoundEmitterState(deviceId);
     updateProject((current) => ({
       ...current,
       updatedAt: now,
@@ -1320,14 +1332,24 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   }
 
   function handleRuntimeSoundOutput(deviceId: DeviceId, level: number) {
+    const normalizedLevel = normalizeRuntimeSoundLevel(level);
+    refreshRuntimeSoundEmitter(deviceId, normalizedLevel);
+    if (normalizedLevel <= 0) {
+      activeRuntimeSoundLevels.current.delete(deviceId);
+      return;
+    }
     pulseRuntimeActivity(deviceId, 'sound');
-    appendRuntimeSoundLog(deviceId, level);
+    const previousLevel = activeRuntimeSoundLevels.current.get(deviceId);
+    activeRuntimeSoundLevels.current.set(deviceId, normalizedLevel);
+    if (previousLevel !== normalizedLevel) {
+      appendRuntimeSoundLog(deviceId, normalizedLevel, previousLevel === undefined);
+    }
   }
 
-  function appendRuntimeSoundLog(deviceId: DeviceId, level: number) {
+  function appendRuntimeSoundLog(deviceId: DeviceId, level: number, force = false) {
     const now = Date.now();
     const lastLogged = recentRuntimeSoundLogAt.current.get(deviceId) ?? 0;
-    if (now - lastLogged < runtimeSoundLogCooldownMs) {
+    if (!force && now - lastLogged < runtimeSoundLogCooldownMs) {
       return;
     }
     recentRuntimeSoundLogAt.current.set(deviceId, now);
@@ -1412,6 +1434,67 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }, runtimeActivityPulseMs);
 
     runtimeActivityTimers.current.set(timerKey, timeoutId);
+  }
+
+  function refreshRuntimeSoundEmitter(deviceId: DeviceId, level: number) {
+    const normalizedLevel = normalizeRuntimeSoundLevel(level);
+    clearRuntimeSoundEmitterTimer(deviceId);
+    setModel((current) => {
+      if (!current.simulationState.devices[deviceId]) {
+        return current;
+      }
+      const simulationState =
+        normalizedLevel > 0
+          ? setDeviceSoundEmitter(current.simulationState, deviceId, normalizedLevel)
+          : clearDeviceSoundEmitter(current.simulationState, deviceId);
+      if (simulationState === current.simulationState) {
+        return current;
+      }
+      const next = { ...current, simulationState };
+      modelRef.current = next;
+      return next;
+    });
+    if (normalizedLevel <= 0) {
+      return;
+    }
+
+    const timeoutId = globalThis.setTimeout(() => {
+      runtimeSoundEmitterTimers.current.delete(deviceId);
+      activeRuntimeSoundLevels.current.delete(deviceId);
+      setModel((current) => {
+        const simulationState = clearDeviceSoundEmitter(current.simulationState, deviceId);
+        if (simulationState === current.simulationState) {
+          return current;
+        }
+        const next = { ...current, simulationState };
+        modelRef.current = next;
+        return next;
+      });
+    }, runtimeSoundEmitterHoldMs);
+    runtimeSoundEmitterTimers.current.set(deviceId, timeoutId);
+  }
+
+  function clearRuntimeSoundEmitterTimer(deviceId: DeviceId) {
+    const timerId = runtimeSoundEmitterTimers.current.get(deviceId);
+    if (timerId === undefined) {
+      return;
+    }
+    globalThis.clearTimeout(timerId);
+    runtimeSoundEmitterTimers.current.delete(deviceId);
+  }
+
+  function clearRuntimeSoundEmitterState(deviceId: DeviceId) {
+    clearRuntimeSoundEmitterTimer(deviceId);
+    activeRuntimeSoundLevels.current.delete(deviceId);
+    setModel((current) => {
+      const simulationState = clearDeviceSoundEmitter(current.simulationState, deviceId);
+      if (simulationState === current.simulationState) {
+        return current;
+      }
+      const next = { ...current, simulationState };
+      modelRef.current = next;
+      return next;
+    });
   }
 
   function setPulsedButtons(deviceId: DeviceId, buttons: readonly ('A' | 'B')[], pressed: boolean) {
@@ -1639,7 +1722,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     pendingRadioConfigHints.current.clear();
     recentRoutedPackets.current.clear();
     recentRuntimeSoundLogAt.current.clear();
+    activeRuntimeSoundLevels.current.clear();
     clearRuntimeActivityTimers(runtimeActivityTimers.current);
+    clearRuntimeSoundEmitterTimers(runtimeSoundEmitterTimers.current);
     clearDisplayFrameTimers(displayFrameTimers.current);
     clearButtonPulseTimers(buttonPulseTimers.current);
     displayLastUpdateMs.current.clear();
@@ -2195,6 +2280,11 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                 <stop offset="0%" stopColor="rgba(255, 176, 46, 0.28)" />
                 <stop offset="100%" stopColor="rgba(255, 176, 46, 0)" />
               </radialGradient>
+              <radialGradient id="runtime-sound-glow">
+                <stop offset="0%" stopColor="rgba(255, 176, 46, 0.36)" />
+                <stop offset="62%" stopColor="rgba(255, 176, 46, 0.14)" />
+                <stop offset="100%" stopColor="rgba(255, 176, 46, 0)" />
+              </radialGradient>
             </defs>
 
             <rect className="canvas-field" width={canvasSize.width} height={canvasSize.height} />
@@ -2241,6 +2331,18 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   />
                 ))
               : null}
+
+            {Object.values(simulationState.soundEmitters).map((emitter) => (
+              <circle
+                key={`${emitter.deviceId}-runtime-sound-radius`}
+                className="runtime-sound-radius"
+                data-runtime-sound-radius={emitter.deviceId}
+                cx={emitter.position.x}
+                cy={emitter.position.y}
+                r={emitter.radius}
+                opacity={runtimeSoundRadiusOpacity(emitter.level)}
+              />
+            ))}
 
             {visibleEnvironmentSources.map((source) => (
               <g
@@ -3827,6 +3929,13 @@ function clearRuntimeActivityTimers(timers: Map<string, number>): void {
   timers.clear();
 }
 
+function clearRuntimeSoundEmitterTimers(timers: Map<DeviceId, number>): void {
+  for (const timer of timers.values()) {
+    globalThis.clearTimeout(timer);
+  }
+  timers.clear();
+}
+
 function clearDisplayFrameTimers(timers: Map<DeviceId, number>): void {
   for (const timer of timers.values()) {
     globalThis.clearTimeout(timer);
@@ -3862,6 +3971,18 @@ function sensorLevelToIntensity(level: number): number {
     clampNumber(level, MICROBIT_SENSOR_LEVEL_MIN, MICROBIT_SENSOR_LEVEL_MAX) /
     MICROBIT_SENSOR_LEVEL_MAX
   );
+}
+
+function normalizeRuntimeSoundLevel(level: number): number {
+  if (!Number.isFinite(level)) {
+    return 0;
+  }
+  return Math.round(clampNumber(level, MICROBIT_SENSOR_LEVEL_MIN, MICROBIT_SENSOR_LEVEL_MAX));
+}
+
+function runtimeSoundRadiusOpacity(level: number): number {
+  const normalized = normalizeRuntimeSoundLevel(level) / MICROBIT_SENSOR_LEVEL_MAX;
+  return 0.28 + normalized * 0.52;
 }
 
 function normalizeRuntimeRadioConfigHint(

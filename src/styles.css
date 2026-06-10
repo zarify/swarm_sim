@@ -971,6 +971,13 @@ button:disabled {
   pointer-events: none;
 }
 
+.runtime-sound-radius {
+  fill: url("#runtime-sound-glow");
+  stroke: rgba(255, 176, 46, 0.38);
+  stroke-width: 1.4;
+  pointer-events: none;
+}
+
 .microbit-body {
   fill: rgba(11, 35, 37, 0.96);
   stroke: rgba(183, 255, 74, 0.55);

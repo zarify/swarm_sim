@@ -8,6 +8,38 @@ const microPythonFixture = path.resolve(process.cwd(), 'hex_files/mp_beacon.hex'
 const microPythonDataLogFixture = path.resolve(process.cwd(), 'hex_files/mp_datalog.hex');
 const makeCodeBeaconFixture = path.resolve(process.cwd(), 'hex_files/mc_beacon.hex');
 const makeCodeDataLogFixture = path.resolve(process.cwd(), 'hex_files/mc_datalog.hex');
+const makeCodeContinuousSoundProgram = `input.onButtonPressed(Button.A, function () {
+    basic.showArrow(ArrowNames.North)
+    music.play(music.tonePlayable(262, music.beat(BeatFraction.Breve)), music.PlaybackMode.UntilDone)
+    basic.clearScreen()
+})
+input.onButtonPressed(Button.AB, function () {
+    music.stopAllSounds()
+    basic.showIcon(IconNames.No)
+})
+input.onButtonPressed(Button.B, function () {
+    basic.showLeds(\`
+        . # . # .
+        # . . . #
+        # . # . #
+        # . . . #
+        . # . # .
+        \`)
+    music.ringTone(262)
+})
+music.setVolume(127)
+basic.forever(function () {
+    if (input.soundLevel() > 0) {
+        led.plotBarGraph(
+        input.soundLevel(),
+        255
+        )
+    }
+})`;
+const makeCodeMutedContinuousSoundProgram = `input.onButtonPressed(Button.B, function () {
+    music.ringTone(262)
+})
+music.setVolume(0)`;
 const featureFlags = resolveBuildFeatureFlags(process.env);
 const makeCodeUpstreamHosts = new Set([
   'makecode.microbit.org',
@@ -30,6 +62,53 @@ async function openSwarmTools(page: Page) {
 async function addDeviceFromSwarmTools(page: Page) {
   await openSwarmTools(page);
   await page.getByRole('button', { name: 'Add device' }).click();
+}
+
+async function selectDeviceNode(page: Page, index: number) {
+  await page.locator('.microbit-node').nth(index).click();
+}
+
+async function updateSelectedMakeCodeSource(page: Page, deviceName: string, source: string) {
+  await page.getByRole('button', { name: 'Edit code' }).click();
+  await expect(page.getByRole('dialog', { name: `Code editor for ${deviceName}` })).toBeVisible();
+  const sourceField = page.getByLabel(`Editing main.ts for ${deviceName}`);
+  await expect(sourceField).toBeVisible();
+  await sourceField.fill(source);
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await expect(page.getByText(/Editable source:/)).toContainText('saved changes ready');
+}
+
+async function waitForMakeCodeRuntimeReady(page: Page) {
+  await page.getByRole('button', { name: 'Debug' }).click();
+  await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+  await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+    timeout: 15_000,
+  });
+  await expect
+    .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')))
+    .toBe(true);
+  await page.getByRole('button', { name: 'Close debug tools' }).click();
+}
+
+function selectedSoundMetric(page: Page) {
+  return page
+    .locator('.radio-summary div')
+    .filter({ has: page.locator('dt', { hasText: 'Sound' }) })
+    .locator('dd');
+}
+
+async function dragDeviceNodeBy(page: Page, index: number, delta: { x: number; y: number }) {
+  const body = page.locator('.microbit-node .microbit-body').nth(index);
+  const box = await body.boundingBox();
+  if (!box) {
+    throw new Error(`Device ${index} body not found`);
+  }
+  const startX = box.x + box.width / 2;
+  const startY = box.y + box.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX + delta.x, startY + delta.y, { steps: 8 });
+  await page.mouse.up();
 }
 
 async function setAddLockedMode(page: Page, enabled: boolean) {
@@ -943,6 +1022,34 @@ test.describe('core canvas workflows', () => {
     await expect(soundLine.locator('.device-log__type')).toHaveText('snd');
   });
 
+  test('logs a later MicroPython sound marker again after the transient window expires', async ({ page }) => {
+    await gotoCanvas(page);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
+
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')))
+      .toBe(true);
+    const simulatorFrame = page.frames().find((frame) => frame.url().includes('/micropython-patched-simulator.html'));
+    expect(simulatorFrame).toBeTruthy();
+    await simulatorFrame!.evaluate(() => {
+      window.parent.postMessage({ kind: 'serial_output', data: '\x1eSWARM_SOUND:180\n' }, window.location.origin);
+    });
+
+    const eventLog = page.getByLabel('Event log for Node 1');
+    await eventLog.locator('summary').click();
+    await expect(page.locator('.device-log__line', { hasText: 'Sound output started (level 180)' })).toHaveCount(1);
+
+    await page.waitForTimeout(800);
+    await simulatorFrame!.evaluate(() => {
+      window.parent.postMessage({ kind: 'serial_output', data: '\x1eSWARM_SOUND:180\n' }, window.location.origin);
+    });
+
+    await expect(page.locator('.device-log__line', { hasText: 'Sound output started (level 180)' })).toHaveCount(2);
+  });
+
   test('shows per-device sound feedback for MakeCode runtime sound events', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
@@ -981,6 +1088,111 @@ test.describe('core canvas workflows', () => {
     const soundLine = page.locator('.device-log__line', { hasText: 'Sound output started' });
     await expect(soundLine).toHaveCount(1);
     await expect(soundLine.locator('.device-log__type')).toHaveText('snd');
+  });
+
+  test('loads MakeCode targetconfig through the JSON rewrite path', async ({ page }) => {
+    const targetconfigRequests: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().includes('/api/config/microbit/targetconfig/')) {
+        targetconfigRequests.push(request.url());
+      }
+    });
+
+    await gotoCanvas(page);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await waitForMakeCodeRuntimeReady(page);
+
+    expect(
+      targetconfigRequests.some((url) => url.endsWith('/api/config/microbit/targetconfig/v8.0.22.json')),
+    ).toBe(true);
+    expect(
+      targetconfigRequests.some((url) => url.endsWith('/api/config/microbit/targetconfig/v8.0.22')),
+    ).toBe(false);
+  });
+
+  test('keeps MakeCode continuous sound active at the configured volume until stopAllSounds', async ({ page }) => {
+    await gotoCanvas(page);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await addDeviceFromSwarmTools(page);
+    await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await selectDeviceNode(page, 0);
+    await updateSelectedMakeCodeSource(page, 'Node 1', makeCodeContinuousSoundProgram);
+    await selectDeviceNode(page, 1);
+    await updateSelectedMakeCodeSource(page, 'Node 2', makeCodeContinuousSoundProgram);
+    await waitForMakeCodeRuntimeReady(page);
+
+    await selectDeviceNode(page, 1);
+    await page.locator('[data-testid="device-button-device-1-B"]').click();
+
+    await expect(page.locator('[data-runtime-sound-radius="device-1"]')).toBeVisible();
+    await expect(selectedSoundMetric(page)).toHaveText('33');
+    await page.waitForTimeout(1000);
+    await expect(page.locator('[data-runtime-sound-radius="device-1"]')).toBeVisible();
+
+    await selectDeviceNode(page, 0);
+    const eventLog = page.getByLabel('Event log for Node 1');
+    await eventLog.locator('summary').click();
+    await expect(page.locator('.device-log__line', { hasText: 'Sound output started (level 127)' })).toHaveCount(1);
+
+    await selectDeviceNode(page, 1);
+    await dragDeviceNodeBy(page, 1, { x: 220, y: 0 });
+    await expect(selectedSoundMetric(page)).toHaveText('0');
+    await expect(page.locator('[data-runtime-sound-radius="device-1"]')).toBeVisible();
+
+    await page.locator('[data-testid="device-button-device-1-AB"]').click();
+    await expect(page.locator('[data-runtime-sound-radius="device-1"]')).toHaveCount(0, { timeout: 2_000 });
+  });
+
+  test('keeps muted MakeCode sound from emitting runtime sound activity', async ({ page }) => {
+    await gotoCanvas(page);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await updateSelectedMakeCodeSource(page, 'Node 1', makeCodeMutedContinuousSoundProgram);
+    await waitForMakeCodeRuntimeReady(page);
+
+    await page.locator('[data-testid="device-button-device-1-B"]').click();
+    await page.waitForTimeout(800);
+    await expect(page.locator('[data-runtime-sound-radius="device-1"]')).toHaveCount(0);
+
+    const eventLog = page.getByLabel('Event log for Node 1');
+    await eventLog.locator('summary').click();
+    await expect(page.locator('.device-log__line', { hasText: 'Sound output started' })).toHaveCount(0);
+  });
+
+  test('lets nearby devices pick up transient runtime sound from another micro:bit', async ({ page }) => {
+    await gotoCanvas(page);
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
+
+    await addDeviceFromSwarmTools(page);
+
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')))
+      .toBe(true);
+    const simulatorFrame = page.frames().find((frame) => frame.url().includes('/micropython-patched-simulator.html'));
+    expect(simulatorFrame).toBeTruthy();
+    await simulatorFrame!.evaluate(() => {
+      window.parent.postMessage({ kind: 'serial_output', data: '\x1eSWARM_SOUND:255\n' }, window.location.origin);
+    });
+
+    await expect(page.locator('[data-runtime-sound-radius="device-1"]')).toBeVisible();
+    const nearbySoundValue = page
+      .locator('.radio-summary div', { has: page.locator('dt', { hasText: 'Sound' }) })
+      .locator('dd');
+    await expect(nearbySoundValue).toHaveText('144');
+    await expect(nearbySoundValue).toHaveText('0', { timeout: 2_000 });
   });
 
   test('surfaces runtime internal errors as device error state and clears on reset', async ({ page }) => {

@@ -761,15 +761,21 @@ try:
         except Exception as _swarm_error:
             _swarm_report_display_bridge_error(_swarm_error)
 
-    def _swarm_emit_sound(_swarm_level=9):
+    _swarm_music_volume = 255
+
+    def _swarm_clamp_sound_level(_swarm_level):
         try:
             _swarm_value = int(_swarm_level)
         except Exception:
-            _swarm_value = 9
+            _swarm_value = _swarm_music_volume
         if _swarm_value < 0:
             _swarm_value = 0
         if _swarm_value > 255:
             _swarm_value = 255
+        return _swarm_value
+
+    def _swarm_emit_sound(_swarm_level=None):
+        _swarm_value = _swarm_clamp_sound_level(_swarm_music_volume if _swarm_level is None else _swarm_level)
         print("\x1eSWARM_SOUND:" + str(_swarm_value))
 
     class _SwarmDisplayProxy:
@@ -824,36 +830,62 @@ try:
             except Exception:
                 pass
 
+        def _swarm_music_set_volume(_swarm_level):
+            global _swarm_music_volume
+            _swarm_music_volume = _swarm_clamp_sound_level(_swarm_level)
+            try:
+                _swarm_music.set_volume(_swarm_music_volume)
+            except Exception:
+                pass
+
         def _swarm_wrap_music_callable(_swarm_fn):
             def _swarm_wrapped(*args, **kwargs):
-                _swarm_emit_sound()
+                _swarm_emit_sound(_swarm_music_volume)
                 _swarm_music_set_volume_zero()
                 _swarm_result = _swarm_fn(*args, **kwargs)
                 _swarm_music_set_volume_zero()
                 return _swarm_result
             return _swarm_wrapped
 
+        def _swarm_wrap_music_set_volume(_swarm_fn):
+            def _swarm_wrapped(*args, **kwargs):
+                if len(args) > 0:
+                    _swarm_level = args[0]
+                elif 'volume' in kwargs:
+                    _swarm_level = kwargs['volume']
+                else:
+                    _swarm_level = _swarm_music_volume
+                _swarm_music_set_volume(_swarm_level)
+                return _swarm_fn(*args, **kwargs)
+            return _swarm_wrapped
+
         class _SwarmMusicProxy:
-            _swarm_wrappable = ("play", "pitch", "play_tone", "ring_tone", "set_tempo")
+            _swarm_wrappable = ("play", "pitch", "play_tone", "ring_tone")
 
             def __init__(self, _swarm_target):
                 self._swarm_target = _swarm_target
 
             def __getattr__(self, _swarm_name):
                 _swarm_attr = getattr(self._swarm_target, _swarm_name)
+                if _swarm_name == "set_volume" and callable(_swarm_attr):
+                    return _swarm_wrap_music_set_volume(_swarm_attr)
                 if _swarm_name in self._swarm_wrappable and callable(_swarm_attr):
                     return _swarm_wrap_music_callable(_swarm_attr)
                 return _swarm_attr
 
         music = _SwarmMusicProxy(_swarm_music)
 
-        for _swarm_name in ("play", "pitch", "play_tone", "ring_tone", "set_tempo"):
+        for _swarm_name in ("play", "pitch", "play_tone", "ring_tone", "set_volume"):
             try:
                 _swarm_global = globals().get(_swarm_name)
             except Exception:
                 _swarm_global = None
             if callable(_swarm_global):
-                globals()[_swarm_name] = _swarm_wrap_music_callable(_swarm_global)
+                globals()[_swarm_name] = (
+                    _swarm_wrap_music_set_volume(_swarm_global)
+                    if _swarm_name == "set_volume"
+                    else _swarm_wrap_music_callable(_swarm_global)
+                )
         _swarm_music_set_volume_zero()
     except Exception:
         pass
@@ -863,7 +895,7 @@ try:
 
         def _swarm_wrap_speech_callable(_swarm_fn):
             def _swarm_wrapped(*args, **kwargs):
-                _swarm_emit_sound()
+                _swarm_emit_sound(_swarm_music_volume)
                 return _swarm_fn(*args, **kwargs)
             return _swarm_wrapped
 
