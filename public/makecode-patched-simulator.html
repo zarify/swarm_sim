@@ -31,6 +31,7 @@
         let simulatorReady = false;
         let lastDisplay = '';
         let lastSound = -1;
+        let lastSoundStatePostedAtMs = 0;
         let lastRadioConfigKey = 'none';
         const SOUND_OUTPUT_PULSE_MS = 240;
         const SOUND_TRACE_MIN_INTERVAL_MS = 400;
@@ -46,11 +47,12 @@
           'startPlaying',
           'speak',
         ];
-        const SOUND_MUTE_METHODS = [
+        const SOUND_VOLUME_METHODS = [
           'setVolume',
           'setOutputLevel',
           'setLevel',
         ];
+        const SOUND_STOP_METHODS = ['stop', 'stopAllSounds', 'stopPlaying', 'stopTone', 'mute'];
         const TRACE_QUERY_PARAM = 'swarmTrace';
         const TRACE_ENABLED = new URLSearchParams(window.location.search).get(TRACE_QUERY_PARAM) === '1';
         const TRACE_RADIO = TRACE_ENABLED;
@@ -79,6 +81,9 @@
         let lastGlobalAudioTraceAtMs = 0;
         let soundOutputPulseUntilMs = 0;
         let lastSoundOutputLevel = 0;
+        let trackedSoundOutputLevel = 255;
+        let activeAudioSourceCount = 0;
+        let trackedContinuousSoundActive = false;
 
         window.addEventListener('message', (event) => {
           if (event.source !== window.parent || event.origin !== RUNNER_ORIGIN) {
@@ -108,6 +113,7 @@
             postToRunner({ type: 'swarm-simulator-ready' });
           }
           patchMagneticForceApi();
+          patchMakeCodeMusicHooks();
           patchGlobalAudioStartHooks();
           patchRadioStateHooks(board);
           patchSoundStateHooks(board);
@@ -388,11 +394,19 @@
           const radio = readRadioConfig(board);
           const displayKey = displayPixels.join(',');
           const radioConfigKey = `${radio.group ?? 'none'}:${radio.channel ?? 'none'}`;
-          if (displayKey === lastDisplay && soundLevel === lastSound && radioConfigKey === lastRadioConfigKey) {
+          const now = Date.now();
+          const shouldRepublishActiveSound = soundLevel > 0 && now - lastSoundStatePostedAtMs >= 160;
+          if (
+            displayKey === lastDisplay &&
+            soundLevel === lastSound &&
+            radioConfigKey === lastRadioConfigKey &&
+            !shouldRepublishActiveSound
+          ) {
             return;
           }
           lastDisplay = displayKey;
           lastSound = soundLevel;
+          lastSoundStatePostedAtMs = now;
           lastRadioConfigKey = radioConfigKey;
           postToRunner({
             type: 'swarm-simulator-state',
@@ -442,19 +456,84 @@
             return;
           }
           const original = target[name];
+          if (original.__swarmMethodPatched) {
+            return;
+          }
           target[name] = function patchedRadioMethod(...args) {
             const result = original.apply(this, args);
             onInvoke?.(args);
             publishState(getBoard());
             return result;
           };
+          target[name].__swarmMethodPatched = true;
+        }
+
+        function patchMakeCodeMusicHooks() {
+          const pxsim = window.pxsim;
+          if (!pxsim) {
+            return;
+          }
+
+          const initialVolume = getBoard()?.edgeConnectorState?.pitchVolume;
+          if (initialVolume !== undefined) {
+            syncTrackedSoundLevel(initialVolume);
+          }
+
+          patchMethod(pxsim.music, 'setVolume', (args) => {
+            const level = inferVolumeLevelFromArgs(args);
+            if (level !== undefined) {
+              syncTrackedSoundLevel(level);
+            }
+          });
+          patchMethod(pxsim.pins, 'analogSetPitchVolume', (args) => {
+            const level = inferVolumeLevelFromArgs(args);
+            if (level !== undefined) {
+              syncTrackedSoundLevel(level);
+            }
+          });
+          patchMethod(pxsim.pins, 'analogPitch', (args) => {
+            const frequency = Number(args?.[0]);
+            const duration = Number(args?.[1]);
+            if (!Number.isFinite(frequency) || frequency <= 0) {
+              trackedContinuousSoundActive = false;
+              clearSoundOutput();
+              return;
+            }
+            markSoundOutput(resolveTrackedSoundLevel(getBoard()));
+            if (!Number.isFinite(duration) || duration <= 0) {
+              trackedContinuousSoundActive = true;
+            }
+          });
+          patchMethod(pxsim.AudioContextManager, 'tone', () => {
+            markSoundOutput(resolveTrackedSoundLevel(getBoard()));
+          });
+          patchMethod(pxsim.AudioContextManager, 'playInstructionsAsync', () => {
+            markSoundOutput(resolveTrackedSoundLevel(getBoard()));
+          });
+          patchMethod(pxsim.AudioContextManager, 'playBufferAsync', () => {
+            markSoundOutput(resolveTrackedSoundLevel(getBoard()));
+          });
+          patchMethod(pxsim.AudioContextManager, 'playPCMBufferStreamAsync', () => {
+            markSoundOutput(resolveTrackedSoundLevel(getBoard()));
+          });
+          patchMethod(pxsim.AudioContextManager, 'startSamplePlayback', () => {
+            markSoundOutput(resolveTrackedSoundLevel(getBoard()));
+          });
+          patchMethod(pxsim.AudioContextManager, 'stopAll', () => {
+            trackedContinuousSoundActive = false;
+            clearSoundOutput();
+          });
+          patchMethod(pxsim.AudioContextManager, 'stop', () => {
+            trackedContinuousSoundActive = false;
+            clearSoundOutput();
+          });
         }
 
         function patchGlobalAudioStartHooks() {
           if (globalAudioStartHooksPatched) {
             return;
           }
-          const patchStart = (prototype, methodName, sourceName) => {
+          const patchStart = (prototype, methodName, stopMethodName, sourceName) => {
             if (!prototype || typeof prototype[methodName] !== 'function') {
               return;
             }
@@ -464,7 +543,22 @@
             }
             prototype[methodName] = function patchedAudioStart(...args) {
               const now = Date.now();
-              markSoundOutput(255);
+              if (!this.__swarmSoundSourceActive) {
+                this.__swarmSoundSourceActive = true;
+                activeAudioSourceCount += 1;
+                if (typeof this.addEventListener === 'function' && !this.__swarmSoundEndedListenerAdded) {
+                  this.addEventListener('ended', () => {
+                    if (!this.__swarmSoundSourceActive) {
+                      return;
+                    }
+                    this.__swarmSoundSourceActive = false;
+                    activeAudioSourceCount = Math.max(0, activeAudioSourceCount - 1);
+                    publishState(getBoard());
+                  });
+                  this.__swarmSoundEndedListenerAdded = true;
+                }
+              }
+              markSoundOutput(trackedSoundOutputLevel);
               if (now - lastGlobalAudioTraceAtMs >= SOUND_TRACE_MIN_INTERVAL_MS) {
                 traceSound('global-audio-start', { source: sourceName });
                 lastGlobalAudioTraceAtMs = now;
@@ -472,10 +566,26 @@
               return original.apply(this, args);
             };
             prototype[methodName].__swarmSoundPatched = true;
+
+            if (stopMethodName && typeof prototype[stopMethodName] === 'function') {
+              const originalStop = prototype[stopMethodName];
+              if (!originalStop.__swarmSoundPatched) {
+                prototype[stopMethodName] = function patchedAudioStop(...args) {
+                  if (this.__swarmSoundSourceActive) {
+                    this.__swarmSoundSourceActive = false;
+                    activeAudioSourceCount = Math.max(0, activeAudioSourceCount - 1);
+                  }
+                  const result = originalStop.apply(this, args);
+                  publishState(getBoard());
+                  return result;
+                };
+                prototype[stopMethodName].__swarmSoundPatched = true;
+              }
+            }
           };
-          patchStart(window.AudioBufferSourceNode?.prototype, 'start', 'AudioBufferSourceNode.start');
-          patchStart(window.OscillatorNode?.prototype, 'start', 'OscillatorNode.start');
-          patchStart(window.ConstantSourceNode?.prototype, 'start', 'ConstantSourceNode.start');
+          patchStart(window.AudioBufferSourceNode?.prototype, 'start', 'stop', 'AudioBufferSourceNode.start');
+          patchStart(window.OscillatorNode?.prototype, 'start', 'stop', 'OscillatorNode.start');
+          patchStart(window.ConstantSourceNode?.prototype, 'start', 'stop', 'ConstantSourceNode.start');
           globalAudioStartHooksPatched = true;
         }
 
@@ -488,16 +598,32 @@
               continue;
             }
             patchedSoundStates.add(soundState);
-            forceMuteSoundState(soundState);
+            const explicitLevel = readExplicitSoundStateLevel(soundState, true);
+            if (explicitLevel !== undefined) {
+              syncTrackedSoundLevel(explicitLevel);
+            }
             for (const methodName of SOUND_PLAY_METHODS) {
-              patchMethod(soundState, methodName, (args) => {
-                markSoundOutput(inferSoundLevelFromArgs(args));
-                forceMuteSoundState(soundState);
+              patchMethod(soundState, methodName, () => {
+                const explicitLevel = readExplicitSoundStateLevel(soundState, true);
+                markSoundOutput(explicitLevel ?? trackedSoundOutputLevel);
               });
             }
-            for (const methodName of SOUND_MUTE_METHODS) {
+            for (const methodName of SOUND_VOLUME_METHODS) {
+              patchMethod(soundState, methodName, (args) => {
+                const inferred = inferVolumeLevelFromArgs(args);
+                if (inferred !== undefined) {
+                  syncTrackedSoundLevel(inferred);
+                } else {
+                  const explicitLevel = readExplicitSoundStateLevel(soundState, true);
+                  if (explicitLevel !== undefined) {
+                    syncTrackedSoundLevel(explicitLevel);
+                  }
+                }
+              });
+            }
+            for (const methodName of SOUND_STOP_METHODS) {
               patchMethod(soundState, methodName, () => {
-                forceMuteSoundState(soundState);
+                clearSoundOutput();
               });
             }
           }
@@ -605,14 +731,12 @@
           return candidates;
         }
 
-        function inferSoundLevelFromArgs(args) {
-          for (const value of args ?? []) {
-            const numeric = Number(value);
-            if (Number.isFinite(numeric) && numeric > 0) {
-              return clampByte(numeric);
-            }
+        function inferVolumeLevelFromArgs(args) {
+          const numeric = Number(args?.[0]);
+          if (!Number.isFinite(numeric)) {
+            return undefined;
           }
-          return 255;
+          return clampByte(numeric);
         }
 
         function markSoundOutput(level) {
@@ -631,10 +755,35 @@
             });
           }
           lastSoundOutputLevel = normalized;
+          trackedSoundOutputLevel = normalized;
           soundOutputPulseUntilMs = nextPulseUntilMs;
         }
 
+        function clearSoundOutput() {
+          activeAudioSourceCount = 0;
+          trackedContinuousSoundActive = false;
+          soundOutputPulseUntilMs = 0;
+          lastSoundOutputLevel = 0;
+        }
+
+        function syncTrackedSoundLevel(level) {
+          const normalized = clampByte(Number(level));
+          trackedSoundOutputLevel = normalized;
+          return trackedSoundOutputLevel;
+        }
+
+        function resolveTrackedSoundLevel(board) {
+          for (const soundState of getCandidateSoundStates(board)) {
+            const level = readExplicitSoundStateLevel(soundState, false);
+            if (level !== undefined && level > 0) {
+              return syncTrackedSoundLevel(level);
+            }
+          }
+          return trackedSoundOutputLevel;
+        }
+
         function readActiveSoundLevel(board) {
+          let boardSoundActive = false;
           for (const soundState of getCandidateSoundStates(board)) {
             if (!isRecord(soundState)) {
               continue;
@@ -643,27 +792,38 @@
               soundState.isPlaying?.() === true ||
               soundState.playing === true ||
               soundState.active === true;
-            if (!isPlaying) {
-              forceMuteSoundState(soundState);
-              continue;
+            if (isPlaying) {
+              boardSoundActive = true;
             }
-            const levelCandidates = [
-              soundState.volume,
-              soundState.outputLevel,
-              soundState.level,
-              soundState.currentVolume,
-            ];
-            for (const candidate of levelCandidates) {
-              const numeric = Number(candidate);
-              if (Number.isFinite(numeric) && numeric > 0) {
-                forceMuteSoundState(soundState);
-                return clampByte(numeric);
-              }
+            const explicitLevel = readExplicitSoundStateLevel(soundState, true);
+            if (isPlaying && explicitLevel !== undefined) {
+              return syncTrackedSoundLevel(explicitLevel);
             }
-            forceMuteSoundState(soundState);
-            return 255;
+          }
+          if (trackedContinuousSoundActive || boardSoundActive || activeAudioSourceCount > 0) {
+            return resolveTrackedSoundLevel(board);
           }
           return 0;
+        }
+
+        function readExplicitSoundStateLevel(soundState, includeZero) {
+          const levelCandidates = [
+            soundState.volume,
+            soundState.outputLevel,
+            soundState.level,
+            soundState.currentVolume,
+          ];
+          for (const candidate of levelCandidates) {
+            const numeric = Number(candidate);
+            if (!Number.isFinite(numeric)) {
+              continue;
+            }
+            const normalized = clampByte(numeric);
+            if (includeZero || normalized > 0) {
+              return normalized;
+            }
+          }
+          return undefined;
         }
 
         function looksLikeSoundState(value) {
@@ -685,24 +845,6 @@
             'setOutputLevel' in value ||
             'setLevel' in value;
           return hasAudioLevelSurface || value.playing === true;
-        }
-
-        function forceMuteSoundState(soundState) {
-          if (!isRecord(soundState)) {
-            return;
-          }
-          if ('volume' in soundState) {
-            soundState.volume = 0;
-          }
-          if ('outputLevel' in soundState) {
-            soundState.outputLevel = 0;
-          }
-          if ('level' in soundState) {
-            soundState.level = 0;
-          }
-          if ('currentVolume' in soundState) {
-            soundState.currentVolume = 0;
-          }
         }
 
         function queueDisplayUpdate() {

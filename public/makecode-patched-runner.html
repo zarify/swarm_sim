@@ -60,6 +60,7 @@
           programUsesDataLogger: false,
           dataLogMirrorToSerial: false,
           lastSoundActive: false,
+          lastSoundLevel: 0,
           lastSoundEventMs: 0,
           resolveSimulatorReady: null,
           rejectSimulatorReady: null,
@@ -163,6 +164,7 @@
             state.programUsesDataLogger = dataLogHints.usesDataLogger;
             state.dataLogMirrorToSerial = dataLogHints.mirrorToSerial;
             state.lastSoundActive = false;
+            state.lastSoundLevel = 0;
             state.lastSoundEventMs = 0;
 
             if (window.pxt?.runner?.stop) {
@@ -228,6 +230,7 @@
           state.programUsesDataLogger = false;
           state.dataLogMirrorToSerial = false;
           state.lastSoundActive = false;
+          state.lastSoundLevel = 0;
           state.lastSoundEventMs = 0;
           simulators.innerHTML = '';
         }
@@ -286,7 +289,7 @@
             return rawUrl;
           }
           if (rawUrl.startsWith('/api/')) {
-            return `${RUNNER_BASE_PATH}${rawUrl.slice(1)}`;
+            return `${RUNNER_BASE_PATH}${rewriteMakeCodeApiPath(rawUrl).slice(1)}`;
           }
           if (!rawUrl.includes('/api/')) {
             return rawUrl;
@@ -294,12 +297,23 @@
           try {
             const parsed = new URL(rawUrl, window.location.href);
             if (parsed.origin === HOST_ORIGIN && parsed.pathname.startsWith('/api/')) {
-              return `${RUNNER_BASE_PATH}${parsed.pathname.slice(1)}${parsed.search}${parsed.hash}`;
+              const rewrittenPath = rewriteMakeCodeApiPath(parsed.pathname);
+              return `${RUNNER_BASE_PATH}${rewrittenPath.slice(1)}${parsed.search}${parsed.hash}`;
             }
           } catch (error) {
             return rawUrl;
           }
           return rawUrl;
+        }
+
+        function rewriteMakeCodeApiPath(pathname) {
+          if (
+            pathname.startsWith('/api/config/microbit/targetconfig/') &&
+            !pathname.endsWith('.json')
+          ) {
+            return `${pathname}.json`;
+          }
+          return pathname;
         }
 
         function resolveRunnerBasePath() {
@@ -358,7 +372,7 @@
               }
               if (
                 soundActive &&
-                (!state.lastSoundActive || elapsedMs >= 200)
+                (!state.lastSoundActive || elapsedMs >= 200 || soundLevel !== state.lastSoundLevel)
               ) {
                 postToHost({
                   type: 'swarm-runtime-event',
@@ -370,6 +384,15 @@
                   elapsedMs,
                 });
                 state.lastSoundEventMs = now;
+                state.lastSoundLevel = soundLevel;
+              } else if (!soundActive && state.lastSoundActive) {
+                postToHost({
+                  type: 'swarm-runtime-event',
+                  eventType: 'sound',
+                  payload: { level: 0 },
+                });
+                traceSound('emit-runtime-sound-stop', { elapsedMs });
+                state.lastSoundLevel = 0;
               }
               state.lastSoundActive = soundActive;
             }

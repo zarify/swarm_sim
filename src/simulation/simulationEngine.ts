@@ -47,6 +47,14 @@ export interface DeviceRuntimeState {
   sensors: EnvironmentSensorState;
 }
 
+export interface DeviceSoundEmitter {
+  deviceId: DeviceId;
+  level: number;
+  intensity: number;
+  radius: number;
+  position: Point;
+}
+
 export interface RadioLink {
   sourceDeviceId: DeviceId;
   targetDeviceId: DeviceId;
@@ -110,6 +118,7 @@ export interface SimulationState {
   clockMs: number;
   sequence: number;
   devices: Record<DeviceId, DeviceRuntimeState>;
+  soundEmitters: Record<DeviceId, DeviceSoundEmitter>;
   environmentSources: EnvironmentSource[];
   radioLinks: RadioLink[];
   radioEvents: RadioMessageEvent[];
@@ -132,6 +141,8 @@ const MAGNET_SOFTENING_DISTANCE_PX = 24;
 const RSSI_AT_CLOSE_RANGE = -45;
 const RSSI_AT_RANGE_LIMIT = -75;
 const DEVICE_TOUCH_DISTANCE = 84;
+const DEVICE_SOUND_MIN_RADIUS = 40;
+const DEVICE_SOUND_MAX_RADIUS = 220;
 
 export function createSimulationState(
   project: SwarmProject,
@@ -163,6 +174,7 @@ export function createSimulationState(
     clockMs: 0,
     sequence: 0,
     devices,
+    soundEmitters: {},
     environmentSources: project.environmentSources.map(cloneEnvironmentSource),
     radioLinks: [],
     radioEvents: [],
@@ -200,6 +212,9 @@ export function reconcileSimulationProject(
   project: SwarmProject,
 ): SimulationState {
   const reset = createSimulationState(project, state.options);
+  const soundEmitters = Object.fromEntries(
+    Object.entries(state.soundEmitters).filter(([deviceId]) => reset.devices[deviceId]),
+  );
   const devices = Object.fromEntries(
     Object.entries(reset.devices).map(([deviceId, resetDevice]) => {
       const previousDevice = state.devices[deviceId];
@@ -223,6 +238,7 @@ export function reconcileSimulationProject(
     clockMs: state.clockMs,
     sequence: state.sequence,
     devices,
+    soundEmitters,
     radioEvents: state.radioEvents,
     deviceLogs: state.deviceLogs,
   });
@@ -283,6 +299,34 @@ export function setDeviceRadioConfig(
   };
 
   return recalculateDerivedState({ ...state, devices });
+}
+
+export function setDeviceSoundEmitter(
+  state: SimulationState,
+  deviceId: DeviceId,
+  level: number,
+): SimulationState {
+  const device = requireDevice(state, deviceId);
+  const normalizedLevel = clampRuntimeSoundLevel(level);
+  if (normalizedLevel <= 0) {
+    return clearDeviceSoundEmitter(state, deviceId);
+  }
+
+  const soundEmitters = {
+    ...state.soundEmitters,
+    [deviceId]: createDeviceSoundEmitter(deviceId, normalizedLevel, device.position),
+  };
+
+  return recalculateDerivedState({ ...state, soundEmitters });
+}
+
+export function clearDeviceSoundEmitter(state: SimulationState, deviceId: DeviceId): SimulationState {
+  if (!(deviceId in state.soundEmitters)) {
+    return state;
+  }
+
+  const { [deviceId]: _removed, ...soundEmitters } = state.soundEmitters;
+  return recalculateDerivedState({ ...state, soundEmitters });
 }
 
 export function setDeviceButton(
@@ -436,6 +480,8 @@ export function radioRangeForSignalStrength(
 export function calculateEnvironmentSensors(
   position: Point,
   environmentSources: EnvironmentSource[],
+  soundEmitters: readonly DeviceSoundEmitter[] = [],
+  excludedSoundEmitterDeviceId?: DeviceId,
 ): EnvironmentSensorState {
   assertPoint(position, 'position');
   let lightLevel = 0;
@@ -458,6 +504,14 @@ export function calculateEnvironmentSensors(
       magneticForceX += contribution.x;
       magneticForceY += contribution.y;
     }
+  }
+
+  for (const emitter of soundEmitters) {
+    if (emitter.deviceId === excludedSoundEmitterDeviceId) {
+      continue;
+    }
+    const contribution = calculateDeviceSoundContribution(position, emitter);
+    soundLevel = Math.max(soundLevel, contribution);
   }
   const magneticForceZ = 0;
   const clampedMagneticForceX = clampMicrobitNumericSensor('magneticForceX', magneticForceX);
@@ -483,9 +537,45 @@ export function calculateEnvironmentSensors(
 }
 
 function recalculateDerivedState(state: SimulationState): SimulationState {
+  const soundEmitters = Object.fromEntries(
+    Object.entries(state.soundEmitters)
+      .filter(([deviceId]) => state.devices[deviceId])
+      .map(([deviceId, emitter]) => {
+        const device = state.devices[deviceId];
+        if (!device) {
+          throw new Error(`Device not found: ${deviceId}`);
+        }
+        return [
+          deviceId,
+          {
+            ...emitter,
+            position: clonePoint(device.position),
+            radius: deviceSoundRadiusForLevel(emitter.level),
+            intensity: clampRuntimeSoundLevel(emitter.level) / SENSOR_MAX_LEVEL,
+          },
+        ] as const;
+      }),
+  );
+  const emitterList = Object.values(soundEmitters);
+  const devices = Object.fromEntries(
+    Object.entries(state.devices).map(([deviceId, device]) => [
+      deviceId,
+      {
+        ...device,
+        sensors: calculateEnvironmentSensors(
+          device.position,
+          state.environmentSources,
+          emitterList,
+          deviceId,
+        ),
+      },
+    ]),
+  );
   return {
     ...state,
-    radioLinks: calculateRadioLinks(state.devices, state.options),
+    devices,
+    soundEmitters,
+    radioLinks: calculateRadioLinks(devices, state.options),
   };
 }
 
@@ -649,22 +739,69 @@ function calculateSourceContribution(
   source: Extract<EnvironmentSource, { type: 'light' | 'sound' }>,
 ): number {
   assertPoint(source.position, `environment source ${source.id} position`);
+  return calculateLevelContribution(position, source.position, source.radius, source.intensity, {
+    invalidRadiusResult: 0,
+    invalidIntensityMessage: `environment source ${source.id} intensity must be a finite number`,
+  });
+}
 
-  if (!Number.isFinite(source.radius) || source.radius <= 0) {
+function calculateDeviceSoundContribution(position: Point, emitter: DeviceSoundEmitter): number {
+  return calculateLevelContribution(position, emitter.position, emitter.radius, emitter.intensity, {
+    invalidRadiusResult: 0,
+    invalidIntensityMessage: `device sound emitter ${emitter.deviceId} intensity must be a finite number`,
+  });
+}
+
+function createDeviceSoundEmitter(deviceId: DeviceId, level: number, position: Point): DeviceSoundEmitter {
+  const normalizedLevel = clampRuntimeSoundLevel(level);
+  const intensity = normalizedLevel / SENSOR_MAX_LEVEL;
+  return {
+    deviceId,
+    level: normalizedLevel,
+    intensity,
+    radius: deviceSoundRadiusForLevel(normalizedLevel),
+    position: clonePoint(position),
+  };
+}
+
+export function deviceSoundRadiusForLevel(level: number): number {
+  const normalizedLevel = clampRuntimeSoundLevel(level);
+  if (normalizedLevel <= 0) {
     return 0;
   }
+  const normalized = normalizedLevel / SENSOR_MAX_LEVEL;
+  return DEVICE_SOUND_MIN_RADIUS + normalized * (DEVICE_SOUND_MAX_RADIUS - DEVICE_SOUND_MIN_RADIUS);
+}
 
-  if (!Number.isFinite(source.intensity)) {
-    throw new Error(`environment source ${source.id} intensity must be a finite number`);
-  }
-
-  const distance = distanceBetween(position, source.position);
-  if (distance > source.radius) {
+function clampRuntimeSoundLevel(level: number): number {
+  if (!Number.isFinite(level)) {
     return 0;
   }
+  return clamp(Math.round(level), 0, SENSOR_MAX_LEVEL);
+}
 
-  const intensity = clamp(source.intensity, 0, 1);
-  return (1 - distance / source.radius) * intensity * SENSOR_MAX_LEVEL;
+function calculateLevelContribution(
+  position: Point,
+  sourcePosition: Point,
+  radius: number,
+  intensity: number,
+  options: {
+    invalidRadiusResult: number;
+    invalidIntensityMessage: string;
+  },
+): number {
+  assertPoint(sourcePosition, 'sound contribution source position');
+  if (!Number.isFinite(radius) || radius <= 0) {
+    return options.invalidRadiusResult;
+  }
+  if (!Number.isFinite(intensity)) {
+    throw new Error(options.invalidIntensityMessage);
+  }
+  const distance = distanceBetween(position, sourcePosition);
+  if (distance > radius) {
+    return 0;
+  }
+  return (1 - distance / radius) * clamp(intensity, 0, 1) * SENSOR_MAX_LEVEL;
 }
 
 function calculateMagnetContribution(

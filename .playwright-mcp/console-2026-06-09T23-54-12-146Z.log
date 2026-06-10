@@ -1,0 +1,6 @@
+[      96ms] [INFO] %cDownload the React DevTools for a better development experience: https://react.dev/link/react-devtools font-weight:bold @ http://127.0.0.1:4173/node_modules/.vite/deps/react-dom_client.js?v=cb6a9d02:20102
+[   22543ms] [WARNING] An iframe which has both allow-scripts and allow-same-origin for its sandbox attribute can escape its sandboxing. @ http://127.0.0.1:4173/makecode-patched-runner.html?swarmTrace=1:0
+[   22636ms] [WARNING] Block definition "text" overwrites previous definition. @ http://127.0.0.1:4173/makecode-local/pxtembed.js:18
+[   22636ms] [WARNING] Block definition "text_join" overwrites previous definition. @ http://127.0.0.1:4173/makecode-local/pxtembed.js:18
+[  103903ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:4173/?token=Dzsp0wLWTHQG' failed:  @ http://127.0.0.1:4173/@vite/client:744
+[  103905ms] [LOG] [vite] server connection lost. Polling for restart... @ http://127.0.0.1:4173/@vite/client:864

@@ -27,7 +27,11 @@ describe('MicroPython iframe runtime adapter', () => {
     expect(source).toContain('_SwarmDisplayProxy');
     expect(source).toContain('_SwarmMusicProxy');
     expect(source).toContain('_swarm_music_set_volume_zero');
+    expect(source).toContain('_swarm_wrap_music_set_volume');
+    expect(source).toContain('_swarm_music_volume = 255');
     expect(source).toContain('_SwarmSpeechProxy');
+    expect(source).toContain('if _swarm_name == "set_volume"');
+    expect(source).not.toContain('set_tempo');
     expect(source).not.toContain('__swarm');
     expect(source).toContain('from microbit import *');
     expect(source.indexOf('from microbit import *')).toBeLessThan(source.indexOf('class _SwarmDisplayProxy'));

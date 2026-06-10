@@ -3,6 +3,7 @@ import { FEATURE_FLAGS } from '../runtime/featureFlags';
 import {
   appendDeviceRuntimeLog,
   advanceSimulation,
+  clearDeviceSoundEmitter,
   createSimulationState,
   moveDevice,
   pauseSimulation,
@@ -13,6 +14,7 @@ import {
   routeRadioPacket,
   setDeviceButton,
   setDeviceRadioConfig,
+  setDeviceSoundEmitter,
   startSimulation,
 } from './simulationEngine';
 
@@ -199,6 +201,44 @@ describe('simulation engine', () => {
     expect(state.devices['device-b']?.sensors.lightLevel).toBe(128);
     expect(state.devices['device-c']?.sensors.soundLevel).toBe(128);
     expect(state.devices['device-e']?.sensors).toMatchObject({ lightLevel: 0, soundLevel: 0 });
+  });
+
+  it('projects transient runtime sound to nearby devices without self-hearing and clears it', () => {
+    let state = createSimulationState(makeProject());
+
+    state = setDeviceSoundEmitter(state, 'device-a', 255);
+
+    expect(state.soundEmitters['device-a']).toMatchObject({
+      deviceId: 'device-a',
+      level: 255,
+      radius: 220,
+    });
+    expect(state.devices['device-a']?.sensors.soundLevel).toBe(0);
+    expect(state.devices['device-b']?.sensors.soundLevel).toBe(197);
+    expect(state.devices['device-c']?.sensors.soundLevel).toBe(197);
+
+    state = clearDeviceSoundEmitter(state, 'device-a');
+
+    expect(state.soundEmitters['device-a']).toBeUndefined();
+    expect(state.devices['device-b']?.sensors.soundLevel).toBe(0);
+    expect(state.devices['device-c']?.sensors.soundLevel).toBe(128);
+  });
+
+  it('keeps sound merge semantics at max contribution instead of summing sources', () => {
+    const state = setDeviceSoundEmitter(createSimulationState(makeProject()), 'device-a', 64);
+
+    expect(state.devices['device-c']?.sensors.soundLevel).toBe(128);
+  });
+
+  it('recomputes runtime sound pickup when an emitting device moves', () => {
+    let state = setDeviceSoundEmitter(createSimulationState(makeProject()), 'device-a', 255);
+
+    expect(state.devices['device-b']?.sensors.soundLevel).toBe(197);
+
+    state = moveDevice(state, 'device-a', { x: 500, y: 500 });
+
+    expect(state.soundEmitters['device-a']?.position).toEqual({ x: 500, y: 500 });
+    expect(state.devices['device-b']?.sensors.soundLevel).toBe(0);
   });
 
   it('projects magnet sources into fixed canvas-aligned magnetic readings', () => {

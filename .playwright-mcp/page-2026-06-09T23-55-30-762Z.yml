@@ -1,0 +1,90 @@
+- main [ref=e3]:
+  - region "Swarm canvas" [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - paragraph [ref=e7]: Swarm canvas
+        - generic "Version v0.15.2" [ref=e8]: v0.15.2
+        - link "Open project repository on GitHub" [ref=e9] [cursor=pointer]:
+          - /url: https://github.com/zarify/swarm_sim
+          - text: ↗
+      - generic "Simulation controls" [ref=e10]:
+        - button "Save canvas - unsaved changes" [ref=e97] [cursor=pointer]:
+          - strong [ref=e12]: Save canvas
+          - generic [ref=e13]: Unsaved
+        - button "Reset" [ref=e14] [cursor=pointer]:
+          - generic [ref=e15]: ↺
+          - text: Reset
+        - button "Swarm tools" [ref=e16] [cursor=pointer]:
+          - generic [ref=e17]: ⚙
+          - text: Swarm tools
+    - generic [ref=e18]:
+      - img "Draggable micro:bit swarm canvas" [ref=e20]:
+        - generic [ref=e22]:
+          - generic: Node 1
+      - complementary "Canvas controls and selection details" [ref=e52]:
+        - generic [ref=e53]:
+          - generic [ref=e54]: Selection
+          - generic [ref=e55]:
+            - strong [ref=e56]: Node 1
+            - button "Rename selected node" [ref=e57] [cursor=pointer]: ✎
+          - generic [ref=e58]:
+            - button "Reset" [ref=e59] [cursor=pointer]:
+              - generic [ref=e60]: ↺
+              - text: Reset
+            - button "Delete" [ref=e61] [cursor=pointer]:
+              - generic [ref=e62]: 🗑
+              - text: Delete
+            - button "Pin device position" [ref=e63] [cursor=pointer]:
+              - img [ref=e64]
+            - button "Edit code" [ref=e66] [cursor=pointer]:
+              - generic [ref=e67]: ✎
+              - text: Edit code
+          - generic [ref=e68]:
+            - generic [ref=e69]:
+              - term [ref=e70]: Light
+              - definition [ref=e71]: "0"
+            - generic [ref=e72]:
+              - term [ref=e73]: Sound
+              - definition [ref=e74]: "0"
+          - group "Event log for Node 1" [ref=e75]:
+            - generic "Runtime log 17 -" [active] [ref=e132] [cursor=pointer]:
+              - generic [ref=e77]: Runtime log
+              - strong [ref=e78]: "17"
+              - text: "-"
+            - generic [ref=e133]:
+              - paragraph [ref=e134]:
+                - generic [ref=e135]: snd
+                - generic [ref=e136]: Sound output started (level 255)
+              - paragraph [ref=e137]:
+                - generic [ref=e138]: btn
+                - generic [ref=e139]: Button A released
+              - paragraph [ref=e140]:
+                - generic [ref=e141]: btn
+                - generic [ref=e142]: Button A pressed
+              - paragraph [ref=e143]:
+                - generic [ref=e144]: tx
+                - generic [ref=e145]: Sent radio packet to 0 recipient(s)
+              - paragraph [ref=e146]:
+                - generic [ref=e147]: tx
+                - generic [ref=e148]: Sent radio packet to 0 recipient(s)
+              - paragraph [ref=e149]:
+                - generic [ref=e150]: tx
+                - generic [ref=e151]: Sent radio packet to 0 recipient(s)
+          - generic [ref=e79]:
+            - generic [ref=e80]:
+              - text: Load code onto Node 1
+              - button "Load code onto Node 1" [ref=e81]
+            - paragraph [ref=e82]: "Assigned: mc_beacon.hex"
+            - paragraph [ref=e98]: "Runtime source: makecode-pxt"
+            - paragraph [ref=e99]:
+              - text: "Editable source:"
+              - strong [ref=e100]: saved changes ready
+            - paragraph [ref=e101]:
+              - text: "Runtime:"
+              - strong [ref=e102]: loaded
+        - group "Radio message inspector" [ref=e83]:
+          - generic "Radio inspector 14 +" [ref=e130] [cursor=pointer]:
+            - generic [ref=e85]: Radio inspector
+            - strong [ref=e86]: "14"
+            - text: +
+        - button "Debug" [ref=e88] [cursor=pointer]

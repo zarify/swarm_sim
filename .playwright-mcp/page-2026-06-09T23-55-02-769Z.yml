@@ -1,0 +1,88 @@
+- main [ref=e3]:
+  - region "Swarm canvas" [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - paragraph [ref=e7]: Swarm canvas
+        - generic "Version v0.15.2" [ref=e8]: v0.15.2
+        - link "Open project repository on GitHub" [ref=e9] [cursor=pointer]:
+          - /url: https://github.com/zarify/swarm_sim
+          - text: ↗
+      - generic "Simulation controls" [ref=e10]:
+        - button "Save canvas - unsaved changes" [ref=e97] [cursor=pointer]:
+          - strong [ref=e12]: Save canvas
+          - generic [ref=e13]: Unsaved
+        - button "Reset" [ref=e14] [cursor=pointer]:
+          - generic [ref=e15]: ↺
+          - text: Reset
+        - button "Swarm tools" [ref=e16] [cursor=pointer]:
+          - generic [ref=e17]: ⚙
+          - text: Swarm tools
+    - generic [ref=e18]:
+      - img "Draggable micro:bit swarm canvas" [ref=e20]:
+        - generic [ref=e22]:
+          - generic: Node 1
+      - complementary "Canvas controls and selection details" [ref=e52]:
+        - generic [ref=e53]:
+          - generic [ref=e54]: Selection
+          - generic [ref=e55]:
+            - strong [ref=e56]: Node 1
+            - button "Rename selected node" [ref=e57] [cursor=pointer]: ✎
+          - generic [ref=e58]:
+            - button "Reset" [ref=e59] [cursor=pointer]:
+              - generic [ref=e60]: ↺
+              - text: Reset
+            - button "Delete" [ref=e61] [cursor=pointer]:
+              - generic [ref=e62]: 🗑
+              - text: Delete
+            - button "Pin device position" [ref=e63] [cursor=pointer]:
+              - img [ref=e64]
+            - button "Edit code" [active] [ref=e66] [cursor=pointer]:
+              - generic [ref=e67]: ✎
+              - text: Edit code
+          - generic [ref=e68]:
+            - generic [ref=e69]:
+              - term [ref=e70]: Light
+              - definition [ref=e71]: "0"
+            - generic [ref=e72]:
+              - term [ref=e73]: Sound
+              - definition [ref=e74]: "0"
+          - group "Event log for Node 1" [ref=e75]:
+            - generic "Runtime log 10 +" [ref=e107] [cursor=pointer]:
+              - generic [ref=e77]: Runtime log
+              - strong [ref=e78]: "10"
+              - text: +
+          - generic [ref=e79]:
+            - generic [ref=e80]:
+              - text: Load code onto Node 1
+              - button "Load code onto Node 1" [ref=e81]
+            - paragraph [ref=e82]: "Assigned: mc_beacon.hex"
+            - paragraph [ref=e98]: "Runtime source: makecode-pxt"
+            - paragraph [ref=e99]:
+              - text: "Editable source:"
+              - strong [ref=e100]: ready to edit
+            - paragraph [ref=e101]:
+              - text: "Runtime:"
+              - strong [ref=e102]: loaded
+        - group "Radio message inspector" [ref=e83]:
+          - generic "Radio inspector 10 +" [ref=e108] [cursor=pointer]:
+            - generic [ref=e85]: Radio inspector
+            - strong [ref=e86]: "10"
+            - text: +
+        - button "Debug" [ref=e88] [cursor=pointer]
+    - dialog "Code editor for Node 1" [ref=e109]:
+      - generic [ref=e110]:
+        - button "Close code editor" [ref=e111] [cursor=pointer]: ×
+        - paragraph [ref=e112]: Code editor
+        - generic [ref=e113]:
+          - strong [ref=e114]: Node 1
+          - generic [ref=e115]: MakeCode main.ts
+        - generic [ref=e116]:
+          - generic [ref=e117]:
+            - generic [ref=e118]: main.ts
+            - generic [ref=e119]: Tab indents. Shift+Tab outdents. Enter keeps indentation.
+          - generic [ref=e120]:
+            - generic: "radio.onReceivedString(function (receivedString) { serial.writeLine(\"mc-receive\") basic.showIcon(IconNames.Surprised) basic.pause(200) }) radio.setGroup(42) basic.showIcon(IconNames.Happy) basic.forever(function () { basic.showArrow(ArrowNames.North) basic.pause(200) basic.clearScreen() radio.sendString(\"ping\") basic.pause(2000) })"
+            - textbox "Editing main.ts for Node 1" [ref=e121]: "radio.onReceivedString(function (receivedString) { serial.writeLine(\"mc-receive\") basic.showIcon(IconNames.Surprised) basic.pause(200) }) radio.setGroup(42) basic.showIcon(IconNames.Happy) basic.forever(function () { basic.showArrow(ArrowNames.North) basic.pause(200) basic.clearScreen() radio.sendString(\"ping\") basic.pause(2000) })"
+        - generic [ref=e122]:
+          - button "Cancel" [ref=e123] [cursor=pointer]
+          - button "Save changes" [ref=e124] [cursor=pointer]

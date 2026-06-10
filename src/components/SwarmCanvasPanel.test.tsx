@@ -70,6 +70,15 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
   }
 
+  function selectedMetricValue(label: string) {
+    const term = screen.getByText(label, { selector: 'dt' });
+    const value = term.parentElement?.querySelector('dd')?.textContent;
+    if (!value) {
+      throw new Error(`Unable to find metric value for ${label}`);
+    }
+    return value;
+  }
+
   function setAddLockedMode(enabled: boolean) {
     openSwarmTools();
     const checkbox = screen.getByRole('checkbox', { name: 'Add locked' });
@@ -750,6 +759,44 @@ describe('SwarmCanvasPanel', () => {
     });
   });
 
+  it('projects runtime sound to nearby devices and shows a volume-scaled radius overlay', async () => {
+    const { container } = render(
+      <SwarmCanvasPanel RuntimeHost={(props) => <TimedSoundEmitterHost {...props} level={255} />} />,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-runtime-sound-radius="device-1"]')).toHaveAttribute('r', '220');
+      expect(container.querySelector('[data-runtime-sound-indicator="device-1"]')).toBeInTheDocument();
+    });
+
+    addDeviceFromSwarmTools();
+
+    await waitFor(() => {
+      expect(selectedMetricValue('Sound')).toBe('144');
+    });
+  });
+
+  it('clears transient runtime sound pickup after the fallback sound window expires', async () => {
+    const { container } = render(
+      <SwarmCanvasPanel RuntimeHost={(props) => <TimedSoundEmitterHost {...props} level={255} />} />,
+    );
+
+    await waitFor(() =>
+      expect(container.querySelector('[data-runtime-sound-radius="device-1"]')).toBeInTheDocument(),
+    );
+
+    addDeviceFromSwarmTools();
+    await waitFor(() => expect(selectedMetricValue('Sound')).toBe('144'));
+
+    await waitFor(
+      () => {
+        expect(container.querySelector('[data-runtime-sound-radius="device-1"]')).not.toBeInTheDocument();
+        expect(selectedMetricValue('Sound')).toBe('0');
+      },
+      { timeout: 2_000 },
+    );
+  });
+
   it('logs sound start once for bursty runtime sound events', async () => {
     render(<SwarmCanvasPanel RuntimeHost={(props) => <BurstSoundEmitterHost {...props} />} />);
 
@@ -1418,6 +1465,22 @@ function BurstSoundEmitterHost({ onSoundOutput }: MicroPythonRuntimeHostProps) {
     onSoundOutput('device-1', 9);
     onSoundOutput('device-1', 9);
   }, [onSoundOutput]);
+
+  return <div aria-label="MicroPython runtime host" />;
+}
+
+function TimedSoundEmitterHost({
+  onSoundOutput,
+  level,
+}: MicroPythonRuntimeHostProps & { level: number }) {
+  const emitted = useRef(false);
+  useEffect(() => {
+    if (emitted.current || !onSoundOutput) {
+      return;
+    }
+    emitted.current = true;
+    onSoundOutput('device-1', level);
+  }, [level, onSoundOutput]);
 
   return <div aria-label="MicroPython runtime host" />;
 }
