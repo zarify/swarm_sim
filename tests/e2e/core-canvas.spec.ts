@@ -81,7 +81,7 @@ async function updateSelectedMakeCodeSource(page: Page, deviceName: string, sour
 async function waitForMakeCodeRuntimeReady(page: Page) {
   await page.getByRole('button', { name: 'Debug' }).click();
   await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
-  await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+  await expect(page.getByLabel('Runtime load results').first()).toContainText(/loaded|prepared/i, {
     timeout: 15_000,
   });
   await expect
@@ -128,6 +128,11 @@ async function addLockedDeviceFromSwarmTools(page: Page) {
 async function addLightFromSwarmTools(page: Page) {
   await openSwarmTools(page);
   await page.getByRole('button', { name: 'Add light' }).click();
+}
+
+async function addSoundFromSwarmTools(page: Page) {
+  await openSwarmTools(page);
+  await page.getByRole('button', { name: 'Add sound' }).click();
 }
 
 async function addMagnetFromSwarmTools(page: Page) {
@@ -330,7 +335,7 @@ test.describe('core canvas workflows', () => {
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
-    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+    await expect(page.getByLabel('Runtime load results').first()).toContainText(/loaded|prepared/i, {
       timeout: 15_000,
     });
     await expect
@@ -413,7 +418,7 @@ test.describe('core canvas workflows', () => {
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
-    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+    await expect(page.getByLabel('Runtime load results', { exact: true })).toContainText(/loaded|prepared/i, {
       timeout: 15_000,
     });
     await expect
@@ -569,6 +574,150 @@ test.describe('core canvas workflows', () => {
     await expect(page.locator('.microbit-node')).toHaveCount(2);
     await expect(getSaveCanvasButton(page)).toContainText('Saved');
     await expect(page.getByText(/Reset restored saved canvas "/)).toBeVisible();
+  });
+
+  test('keeps MakeCode reset reloads bounded after repeated top-level Reset on a restored mixed-runtime canvas', async ({
+    page,
+  }) => {
+    await gotoCanvas(page);
+
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await addDeviceFromSwarmTools(page);
+    await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.locator('.microbit-node')).toHaveCount(2);
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await addDeviceFromSwarmTools(page);
+    await page.getByLabel(/Load code onto Node 3/).setInputFiles(microPythonFixture);
+    await expect(page.locator('.microbit-node')).toHaveCount(3);
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results', { exact: true })).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await expect
+      .poll(() => page.frames().filter((frame) => frame.url().includes('/makecode-patched-runner.html')).length)
+      .toBe(2);
+    await expect
+      .poll(() => page.frames().filter((frame) => frame.url().includes('/makecode-patched-simulator.html')).length)
+      .toBe(2);
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')))
+      .toBe(true);
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+
+    await getSaveCanvasButton(page).click();
+    await expect(getSaveCanvasButton(page)).toContainText('Saved');
+
+    await page.reload();
+    await dismissSplash(page);
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    const makeCodeIframeLocator = page.locator('iframe[title^="MakeCode simulator for "]');
+    await expect
+      .poll(() => page.frames().filter((frame) => frame.url().includes('/makecode-patched-runner.html')).length)
+      .toBe(2);
+    await expect(makeCodeIframeLocator).toHaveCount(2);
+    await makeCodeIframeLocator.evaluateAll((elements) => {
+      elements.forEach((element, index) => {
+        element.setAttribute('data-swarm-reset-marker', `initial-${index}`);
+      });
+    });
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+
+    await page.getByRole('button', { name: 'Reset', exact: true }).first().click();
+    await expect
+      .poll(() => page.frames().filter((frame) => frame.url().includes('/makecode-patched-runner.html')).length, {
+        timeout: 15_000,
+      })
+      .toBe(2);
+    await expect
+      .poll(
+        () =>
+          makeCodeIframeLocator.evaluateAll((elements) =>
+            elements.map((element) => element.getAttribute('data-swarm-reset-marker')),
+          ),
+        { timeout: 15_000 },
+      )
+      .toEqual([null, null]);
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results', { exact: true })).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+    await makeCodeIframeLocator.evaluateAll((elements) => {
+      elements.forEach((element, index) => {
+        element.setAttribute('data-swarm-reset-marker', `after-first-reset-${index}`);
+      });
+    });
+
+    await page.getByRole('button', { name: 'Reset', exact: true }).first().click();
+    await expect
+      .poll(() => page.frames().filter((frame) => frame.url().includes('/makecode-patched-runner.html')).length, {
+        timeout: 15_000,
+      })
+      .toBe(2);
+    await expect
+      .poll(
+        () =>
+          makeCodeIframeLocator.evaluateAll((elements) =>
+            elements.map((element) => element.getAttribute('data-swarm-reset-marker')),
+          ),
+        { timeout: 15_000 },
+      )
+      .toEqual([null, null]);
+  });
+
+  test('restores a dirty mixed-runtime saved canvas without MakeCode load timeouts', async ({ page }) => {
+    await gotoCanvas(page);
+
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await addDeviceFromSwarmTools(page);
+    await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.locator('.microbit-node')).toHaveCount(2);
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await addDeviceFromSwarmTools(page);
+    await page.getByLabel(/Load code onto Node 3/).setInputFiles(microPythonFixture);
+    await expect(page.locator('.microbit-node')).toHaveCount(3);
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results', { exact: true })).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+
+    await getSaveCanvasButton(page).click();
+    await expect(getSaveCanvasButton(page)).toContainText('Saved');
+
+    await selectDeviceNode(page, 0);
+    await dragDeviceNodeBy(page, 0, { x: 80, y: -50 });
+    await expect(getSaveCanvasButton(page)).toContainText('Unsaved');
+
+    await page.getByRole('button', { name: 'Reset', exact: true }).first().click();
+    await expect(getSaveCanvasButton(page)).toContainText('Saved');
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    const runtimeResults = page.getByLabel('Runtime load results', { exact: true });
+    await expect(runtimeResults).toContainText(/loaded|prepared/i, { timeout: 15_000 });
+    await expect(runtimeResults).not.toContainText('failed device-1');
+    await expect(runtimeResults).not.toContainText('failed device-2');
   });
 
   test('shows saved custom instructions again after reload and exposes the header info button', async ({ page }) => {

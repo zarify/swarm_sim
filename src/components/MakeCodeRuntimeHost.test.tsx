@@ -102,6 +102,51 @@ describe('MakeCodeRuntimeHost', () => {
     expect(screen.getByTitle('MakeCode simulator for Alpha')).toBe(initialFrame);
   });
 
+  it('remounts the runner iframe on selected runtime reset when using the default runner adapter', async () => {
+    const loadCalls: string[] = [];
+
+    render(
+      <MakeCodeRuntimeHost
+        project={makeProject()}
+        selectedDeviceId="device-alpha"
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        loadPrograms={async (_project, options) => {
+          loadCalls.push('load');
+          await options.createAdapter?.({
+            device: makeProject().devices[0]!,
+            artifact: makeProject().artifacts[0]!,
+            runtimeSource: 'makecode-pxt',
+            program: {
+              source: 'makecode-pxt',
+              sourceFiles: { 'main.ts': 'radio.sendString("ping")' },
+            },
+          });
+          return [
+            {
+              deviceId: 'device-alpha',
+              artifactId: 'artifact-mc',
+              status: 'loaded' as const,
+              runtimeSource: 'makecode-pxt' as const,
+            },
+          ];
+        }}
+      />,
+    );
+
+    await markRunnerReady('Alpha');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare runtime' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(loadCalls).toHaveLength(1));
+
+    const initialFrame = screen.getByTitle('MakeCode simulator for Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Reset selected runtime' }));
+
+    await waitFor(() => expect(screen.getByTitle('MakeCode simulator for Alpha')).not.toBe(initialFrame));
+    await markRunnerReady('Alpha');
+    await waitFor(() => expect(loadCalls).toHaveLength(2));
+  });
+
   it('forwards MakeCode adapter display, radio, and serial events through host callbacks', async () => {
     const displayChanges: string[] = [];
     const logs: string[] = [];
@@ -800,6 +845,95 @@ describe('MakeCodeRuntimeHost', () => {
     await waitFor(() => expect(hints.filter((hint) => hint === 'device-alpha:42:23:6')).toHaveLength(2));
   });
 
+  it('waits for async reset completion before replaying MakeCode source radio config hints', async () => {
+    const hints: string[] = [];
+    let resolveReset: (() => void) | undefined;
+    const resetStarted = vi.fn();
+    const loadPrograms = async (_project: SwarmProject, options: LoadProjectRuntimeProgramsOptions) => {
+      await options.createAdapter?.({
+        device: makeProject().devices[0]!,
+        artifact: makeProject().artifacts[0]!,
+        runtimeSource: 'makecode-pxt',
+        program: {
+          source: 'makecode-pxt',
+          sourceFiles: {
+            'main.ts': 'radio.sendString("ping")',
+            'custom.ts': 'radio.setGroup(42)\nradio.setFrequencyBand(23)\nradio.setTransmitPower(6)',
+          },
+        },
+      });
+      return [
+        {
+          deviceId: 'device-alpha',
+          artifactId: 'artifact-mc',
+          status: 'loaded' as const,
+          runtimeSource: 'makecode-pxt' as const,
+        },
+      ];
+    };
+
+    const { rerender } = render(
+      <MakeCodeRuntimeHost
+        project={makeProject()}
+        scenarioResetSignal={0}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        createAdapter={() =>
+          makeEventAdapter(
+            () => {},
+            undefined,
+            undefined,
+            () =>
+              new Promise<void>((resolve) => {
+                resetStarted();
+                resolveReset = resolve;
+              }),
+          )
+        }
+        onRadioConfigHint={(deviceId, config) => {
+          hints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
+        }}
+        loadPrograms={loadPrograms}
+      />,
+    );
+
+    await markRunnerReady('Alpha');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Prepare runtime' })).not.toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(hints.filter((hint) => hint === 'device-alpha:42:23:6')).toHaveLength(1));
+
+    rerender(
+      <MakeCodeRuntimeHost
+        project={makeProject()}
+        scenarioResetSignal={1}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        createAdapter={() =>
+          makeEventAdapter(
+            () => {},
+            undefined,
+            undefined,
+            () =>
+              new Promise<void>((resolve) => {
+                resetStarted();
+                resolveReset = resolve;
+              }),
+          )
+        }
+        onRadioConfigHint={(deviceId, config) => {
+          hints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
+        }}
+        loadPrograms={loadPrograms}
+      />,
+    );
+
+    await waitFor(() => expect(resetStarted).toHaveBeenCalledTimes(1));
+    expect(hints.filter((hint) => hint === 'device-alpha:42:23:6')).toHaveLength(1);
+
+    resolveReset?.();
+    await waitFor(() => expect(hints.filter((hint) => hint === 'device-alpha:42:23:6')).toHaveLength(2));
+  });
+
   it('preserves existing runner readiness when adding a second MakeCode device', async () => {
     const loadCalls: DeviceId[][] = [];
     const makeAutoLoadPrograms =
@@ -916,7 +1050,7 @@ function makeEventAdapter(
   subscribe: (listener: (event: RuntimeAdapterEvent) => void) => void,
   onSetButton?: (button: 'A' | 'B', pressed: boolean) => void,
   onSetSensor?: (sensor: RuntimeSensorId, value: number) => void,
-  onReset?: () => void,
+  onReset?: () => void | Promise<void>,
   onPulseButtonAB?: () => void,
 ) {
   return {
@@ -932,7 +1066,7 @@ function makeEventAdapter(
     }),
     flash: async () => {},
     reset: async () => {
-      onReset?.();
+      await onReset?.();
     },
     stop: async () => {},
     setButton: async (button: 'A' | 'B', pressed: boolean) => {

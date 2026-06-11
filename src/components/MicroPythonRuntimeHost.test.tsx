@@ -713,6 +713,65 @@ describe('MicroPythonRuntimeHost', () => {
     expect(disposed).toEqual([]);
   });
 
+  it('waits for async MicroPython reset completion before replaying source radio config hints', async () => {
+    const hints: string[] = [];
+    const resetDevices: string[] = [];
+    const disposed: string[] = [];
+    let resolveReset: (() => void) | undefined;
+    const project = makeProject();
+    const { rerender } = render(
+      <MicroPythonRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        scenarioResetSignal={0}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        onRadioConfigHint={(deviceId, config) => {
+          hints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
+        }}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={(prepared) =>
+          makeResettableAdapter(resetDevices, disposed, prepared.device.id, () =>
+            new Promise<void>((resolve) => {
+              resolveReset = resolve;
+            }),
+          )
+        }
+      />,
+    );
+    dispatchReadyFor('MicroPython simulator for Alpha');
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare runtime' }));
+    await waitFor(() => expect(hints.filter((hint) => hint === 'device-alpha:42:9:6')).toHaveLength(1));
+
+    rerender(
+      <MicroPythonRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        scenarioResetSignal={1}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        onRadioConfigHint={(deviceId, config) => {
+          hints.push(`${deviceId}:${config.group ?? 'none'}:${config.channel ?? 'none'}:${config.signalStrength ?? 'none'}`);
+        }}
+        loadPrograms={loadTargetProjectDevices}
+        createAdapter={(prepared) =>
+          makeResettableAdapter(resetDevices, disposed, prepared.device.id, () =>
+            new Promise<void>((resolve) => {
+              resolveReset = resolve;
+            }),
+          )
+        }
+      />,
+    );
+
+    await waitFor(() => expect(resetDevices).toEqual(['device-alpha']));
+    expect(hints.filter((hint) => hint === 'device-alpha:42:9:6')).toHaveLength(1);
+
+    resolveReset?.();
+    await waitFor(() => expect(hints.filter((hint) => hint === 'device-alpha:42:9:6')).toHaveLength(2));
+    expect(disposed).toEqual([]);
+  });
+
   it('auto-starts MicroPython programs in non-headless mode without request_flash', async () => {
     const project = makeProject();
     const frameLoadStatuses: string[][] = [];
@@ -1127,11 +1186,17 @@ function makeAdapter(flashed: RuntimeProgram[], ready: boolean): MicrobitRuntime
   };
 }
 
-function makeResettableAdapter(resetDevices: string[], disposed: string[], deviceId: string): MicrobitRuntimeAdapter {
+function makeResettableAdapter(
+  resetDevices: string[],
+  disposed: string[],
+  deviceId: string,
+  onReset?: () => Promise<void>,
+): MicrobitRuntimeAdapter {
   return {
     ...makeDisposableAdapter(disposed, [], deviceId),
     reset: async () => {
       resetDevices.push(deviceId);
+      await onReset?.();
     },
   };
 }

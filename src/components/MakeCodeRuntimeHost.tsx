@@ -61,6 +61,7 @@ export function buildMakeCodeRunnerUrl(baseUrl: string, enableTrace: boolean): s
 
 const MAKECODE_SIMULATOR_RUNNER_URL = buildMakeCodeRunnerUrl(import.meta.env.BASE_URL, import.meta.env.DEV);
 const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
+const RESET_RUNNER_READY_TIMEOUT_MS = 8_000;
 const RUNTIME_SENSOR_ORDER: RuntimeSensorId[] = [
   'lightLevel',
   'soundLevel',
@@ -129,6 +130,7 @@ export function MakeCodeRuntimeHost({
   const [loadResults, setLoadResults] = useState<DeviceProgramLoadResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [frameVersion, setFrameVersion] = useState(0);
+  const [frameMountVersions, setFrameMountVersions] = useState<Record<DeviceId, number>>({});
   const [displaySnapshots, setDisplaySnapshots] = useState<Record<DeviceId, number[]>>({});
   const frames = useRef(new Map<DeviceId, HTMLIFrameElement>());
   const adapters = useRef(new Map<DeviceId, MicrobitRuntimeAdapter>());
@@ -146,6 +148,9 @@ export function MakeCodeRuntimeHost({
   const recentSerialOutputs = useRef(new Map<DeviceId, string>());
   const sourceRadioConfigHints = useRef(new Map<DeviceId, RuntimeRadioConfigHint>());
   const lastResetRequestNonce = useRef(0);
+  const pendingResetReloadDeviceIds = useRef(new Set<DeviceId>());
+  const pendingResetReloadVersions = useRef(new Map<DeviceId, number>());
+  const pendingResetReloadTimers = useRef(new Map<DeviceId, number>());
   const callbacks = useRef({
     onRadioPacket,
     onRuntimeLog,
@@ -173,12 +178,15 @@ export function MakeCodeRuntimeHost({
   useEffect(
     () =>
       () =>
-        disposeAdapters(
-          adapters.current,
-          adapterUnsubscribes.current,
-          adapterRadioSinkUnsubscribes.current,
-          adapterArtifactIds.current,
-        ),
+        {
+          clearPendingResetReloadTimers(pendingResetReloadTimers.current);
+          disposeAdapters(
+            adapters.current,
+            adapterUnsubscribes.current,
+            adapterRadioSinkUnsubscribes.current,
+            adapterArtifactIds.current,
+          );
+        },
     [],
   );
 
@@ -278,6 +286,13 @@ export function MakeCodeRuntimeHost({
           devices.find((device) => device.id === result.deviceId)?.programArtifactId === result.artifactId,
       ),
     );
+    for (const pendingDeviceId of [...pendingResetReloadDeviceIds.current]) {
+      if (!activeArtifactIds.has(pendingDeviceId)) {
+        pendingResetReloadDeviceIds.current.delete(pendingDeviceId);
+        pendingResetReloadVersions.current.delete(pendingDeviceId);
+        clearPendingResetReloadTimer(pendingResetReloadTimers.current, pendingDeviceId);
+      }
+    }
     setDisplaySnapshots((current) =>
       Object.fromEntries(
         Object.entries(current).filter(([deviceId]) => activeArtifactIds.has(deviceId)),
@@ -569,6 +584,89 @@ export function MakeCodeRuntimeHost({
   }
 
   function resetRuntimeAdapters(deviceIds: DeviceId[], actionLabel: string) {
+    if (requiresRunnerFrames) {
+      const targetIds = deviceIds.filter((deviceId) =>
+        devices.some((device) => device.id === deviceId && device.programArtifactId),
+      );
+      if (targetIds.length === 0) {
+        return;
+      }
+      for (const deviceId of targetIds) {
+        disposeAdapterForDevice(
+          adapters.current,
+          adapterUnsubscribes.current,
+          adapterRadioSinkUnsubscribes.current,
+          adapterArtifactIds.current,
+          deviceId,
+        );
+        lastSensorValues.current.delete(deviceId);
+        lastButtonValues.current.delete(deviceId);
+        invalidDisplayFrameLogged.current.delete(deviceId);
+        recentRadioPackets.current.delete(deviceId);
+        recentSerialOutputs.current.delete(deviceId);
+      }
+      pendingResetReloadDeviceIds.current = new Set([
+        ...pendingResetReloadDeviceIds.current,
+        ...targetIds,
+      ]);
+      const nextFrameVersions = new Map(
+        targetIds.map((deviceId) => [deviceId, (frameMountVersions[deviceId] ?? 0) + 1] as const),
+      );
+      for (const [deviceId, version] of nextFrameVersions) {
+        pendingResetReloadVersions.current.set(deviceId, version);
+        clearPendingResetReloadTimer(pendingResetReloadTimers.current, deviceId);
+        const artifactId =
+          devices.find((device) => device.id === deviceId)?.programArtifactId ?? '';
+        const timeoutId = globalThis.setTimeout(() => {
+          if (!pendingResetReloadDeviceIds.current.has(deviceId)) {
+            return;
+          }
+          pendingResetReloadDeviceIds.current.delete(deviceId);
+          pendingResetReloadVersions.current.delete(deviceId);
+          pendingResetReloadTimers.current.delete(deviceId);
+          setLoadResults((current) => [
+            ...current.filter((result) => result.deviceId !== deviceId),
+            {
+              deviceId,
+              artifactId,
+              status: 'failed',
+              runtimeSource: 'makecode-pxt',
+              diagnostic: 'Timed out waiting for MakeCode runner to become ready after reset',
+            },
+          ]);
+          callbacks.current.onRuntimeLog(deviceId, 'internal-error', 'Timed out waiting for MakeCode runner to become ready after reset');
+        }, RESET_RUNNER_READY_TIMEOUT_MS);
+        pendingResetReloadTimers.current.set(deviceId, timeoutId);
+      }
+      setDisplaySnapshots((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const deviceId of targetIds) {
+          if (deviceId in next) {
+            delete next[deviceId];
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
+      setLoadResults((current) => current.filter((result) => !targetIds.includes(result.deviceId)));
+      setReadyDeviceIds((current) => {
+        const next = new Set(current);
+        for (const deviceId of targetIds) {
+          next.delete(deviceId);
+        }
+        return next.size === current.size ? current : next;
+      });
+      setFrameMountVersions((current) => {
+        const next = { ...current };
+        for (const [deviceId, version] of nextFrameVersions) {
+          next[deviceId] = version;
+        }
+        return next;
+      });
+      return;
+    }
+
     void Promise.all(
       deviceIds.map(async (deviceId) => {
         const adapter = adapters.current.get(deviceId);
@@ -760,7 +858,46 @@ export function MakeCodeRuntimeHost({
   }, [allFramesReady, isLoading, onRuntimeHostStateChange]);
 
   useEffect(() => {
+    if (pendingResetReloadDeviceIds.current.size === 0 || isLoading) {
+      return;
+    }
+    if (autoPrepare && !prepareEnabled) {
+      return;
+    }
+
+    const targetDevices = devices.filter((device) => pendingResetReloadDeviceIds.current.has(device.id));
+    if (targetDevices.length === 0) {
+      pendingResetReloadDeviceIds.current.clear();
+      pendingResetReloadVersions.current.clear();
+      clearPendingResetReloadTimers(pendingResetReloadTimers.current);
+      return;
+    }
+    if (
+      !targetDevices.every(
+        (device) =>
+          (pendingResetReloadVersions.current.get(device.id) ?? 0) ===
+          (frameMountVersions[device.id] ?? 0),
+      )
+    ) {
+      return;
+    }
+    if (!targetDevices.every((device) => readyDeviceIds.has(device.id))) {
+      return;
+    }
+
+    for (const device of targetDevices) {
+      pendingResetReloadDeviceIds.current.delete(device.id);
+      pendingResetReloadVersions.current.delete(device.id);
+      clearPendingResetReloadTimer(pendingResetReloadTimers.current, device.id);
+    }
+    void loadRuntimes(targetDevices);
+  }, [autoPrepare, prepareEnabled, devices, readyDeviceIds, isLoading, frameMountVersions]);
+
+  useEffect(() => {
     if (!autoPrepare || !prepareEnabled || isLoading || devices.length === 0 || !allFramesReady) {
+      return;
+    }
+    if (pendingResetReloadDeviceIds.current.size > 0) {
       return;
     }
 
@@ -839,7 +976,7 @@ export function MakeCodeRuntimeHost({
       </div>
       <div className={frameGridClassName} data-frame-version={frameVersion}>
         {devices.map((device) => (
-          <article key={device.id} className={frameCardClassName}>
+          <article key={`${device.id}:${frameMountVersions[device.id] ?? 0}`} className={frameCardClassName}>
             <div className="runtime-frame-card__header">
               <strong>{device.name}</strong>
               <span>
@@ -1057,6 +1194,25 @@ function disposeAdapters(
   }
   adapters.clear();
   artifactIds.clear();
+}
+
+function clearPendingResetReloadTimer(
+  timers: Map<DeviceId, number>,
+  deviceId: DeviceId,
+): void {
+  const timerId = timers.get(deviceId);
+  if (timerId === undefined) {
+    return;
+  }
+  globalThis.clearTimeout(timerId);
+  timers.delete(deviceId);
+}
+
+function clearPendingResetReloadTimers(timers: Map<DeviceId, number>): void {
+  for (const timerId of timers.values()) {
+    globalThis.clearTimeout(timerId);
+  }
+  timers.clear();
 }
 
 function disposeRequestAdapters(

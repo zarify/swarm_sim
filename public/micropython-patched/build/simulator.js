@@ -2258,6 +2258,8 @@
         }
         return result != null ? result : id;
       };
+      this.pendingResetAckTimeout = null;
+      this.pendingResetRequestId = void 0;
       this.stopKind = "default" /* Default */;
       const onChange = this.notifications.onStateChange;
       this.display = new Display(Array.from(this.svg.querySelector("#LEDsOn").querySelectorAll("use")), onChange);
@@ -2461,8 +2463,10 @@
       let panicCode;
       try {
         this.displayRunningState();
+        this.schedulePendingResetSuccess();
         await module.start();
       } catch (e) {
+        this.completePendingReset(false, e instanceof Error ? e.message : String(e));
         if (e instanceof PanicError) {
           if (this.stopKind === "default" /* Default */) {
             this.stopKind = "panic" /* Panic */;
@@ -2515,6 +2519,10 @@
     }
     async stop(brief = false) {
       this.audio.boardStopped();
+      if (this.pendingResetAckTimeout) {
+        clearTimeout(this.pendingResetAckTimeout);
+        this.pendingResetAckTimeout = null;
+      }
       if (this.panicTimeout) {
         clearTimeout(this.panicTimeout);
         this.panicTimeout = null;
@@ -2541,8 +2549,40 @@
       return this.runningPromise;
     }
     async reset() {
-      await this.stop(true);
-      this.start();
+      try {
+        await this.stop(true);
+        this.start();
+      } catch (error) {
+        this.completePendingReset(false, error instanceof Error ? error.message : String(error));
+        throw error;
+      }
+    }
+    queueResetCompletion(requestId) {
+      this.pendingResetRequestId = requestId;
+    }
+    schedulePendingResetSuccess() {
+      if (!this.pendingResetRequestId) {
+        return;
+      }
+      if (this.pendingResetAckTimeout) {
+        clearTimeout(this.pendingResetAckTimeout);
+      }
+      this.pendingResetAckTimeout = setTimeout(() => {
+        this.pendingResetAckTimeout = null;
+        this.completePendingReset(true);
+      }, 0);
+    }
+    completePendingReset(ok, error) {
+      if (this.pendingResetAckTimeout) {
+        clearTimeout(this.pendingResetAckTimeout);
+        this.pendingResetAckTimeout = null;
+      }
+      if (!this.pendingResetRequestId) {
+        return;
+      }
+      const requestId = this.pendingResetRequestId;
+      this.pendingResetRequestId = void 0;
+      this.notifications.onResetComplete(requestId, ok, error);
     }
     async flash(filesystem) {
       const flashFileSystem = () => {
@@ -2716,6 +2756,13 @@
       this.onRequestFlash = () => {
         this.postMessage("request_flash", {});
       };
+      this.onResetComplete = (requestId, ok, error) => {
+        this.postMessage("reset_complete", {
+          requestId,
+          ok,
+          ...(typeof error === "string" ? { error } : {})
+        });
+      };
       this.onStateChange = (change) => {
         this.postMessage("state_change", {
           change
@@ -2766,7 +2813,11 @@
           break;
         }
         case "reset": {
-          board2.reset();
+          const { requestId } = data;
+          board2.queueResetCompletion(typeof requestId === "string" ? requestId : "");
+          void board2.reset().catch((error) => {
+            board2.notifications.onInternalError(error);
+          });
           break;
         }
         case "mute": {

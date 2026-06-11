@@ -37,6 +37,18 @@ export interface MicroPythonIframeRuntimeAdapterOptions {
   name?: string;
 }
 
+interface SimulatorResetCompleteMessage {
+  kind: 'reset_complete';
+  requestId?: string;
+  ok?: boolean;
+  error?: string;
+}
+
+interface PendingResetRequest {
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
 const ENABLE_SOUND_DEBUG_LOGS = import.meta.env.DEV;
 
 export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
@@ -60,7 +72,10 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   private pendingDisplayFingerprint?: string;
   private pendingDisplayFlushTimer?: number;
   private recentDisplayFingerprint?: string;
+  private readonly pendingResets = new Map<string, PendingResetRequest>();
   private ready = false;
+  private operationQueue: Promise<void> = Promise.resolve();
+  private resetSequence = 0;
   private resolveReady?: () => void;
   private readonly readyPromise = new Promise<void>((resolve) => {
     this.resolveReady = resolve;
@@ -87,21 +102,44 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   }
 
   async flash(program: RuntimeProgram): Promise<void> {
-    assertMicroPythonProgram(program);
-    this.lastProgram = program;
-    await this.waitUntilReady();
-    if (this.deferFlashUntilRequest) {
-      return;
-    }
-    this.postFlash(program);
+    return this.enqueueOperation(async () => {
+      assertMicroPythonProgram(program);
+      this.lastProgram = program;
+      await this.waitUntilReady();
+      if (this.deferFlashUntilRequest) {
+        return;
+      }
+      this.postFlash(program);
+    });
   }
 
   async reset(): Promise<void> {
-    this.post({ kind: 'reset' });
+    return this.enqueueOperation(async () => {
+      const requestId = `swarm-reset-${++this.resetSequence}`;
+      await new Promise<void>((resolve, reject) => {
+        const timeoutId = globalThis.setTimeout(() => {
+          this.pendingResets.delete(requestId);
+          reject(new Error('Timed out waiting for MicroPython runtime to reset'));
+        }, this.readyTimeoutMs);
+        this.pendingResets.set(requestId, {
+          resolve: () => {
+            globalThis.clearTimeout(timeoutId);
+            resolve();
+          },
+          reject: (error) => {
+            globalThis.clearTimeout(timeoutId);
+            reject(error);
+          },
+        });
+        this.post({ kind: 'reset', requestId });
+      });
+    });
   }
 
   async stop(): Promise<void> {
-    this.post({ kind: 'stop' });
+    return this.enqueueOperation(async () => {
+      this.post({ kind: 'stop' });
+    });
   }
 
   async setButton(button: 'A' | 'B', pressed: boolean): Promise<void> {
@@ -142,6 +180,10 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
     this.listeners.clear();
     this.flushPendingDisplayChange();
     this.flushPendingSerialFragments(true);
+    for (const pending of this.pendingResets.values()) {
+      pending.reject(new Error('MicroPython iframe runtime adapter disposed while reset was pending'));
+    }
+    this.pendingResets.clear();
   }
 
   private postFlash(program: MicroPythonRuntimeProgram): void {
@@ -188,6 +230,9 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
             this.emit({ type: 'internal-error', error: normalizeError(error) });
           }
         }
+        break;
+      case 'reset_complete':
+        this.handleResetComplete(data as unknown as SimulatorResetCompleteMessage);
         break;
       case 'state_change':
         this.flushPendingSerialFragments(true);
@@ -248,6 +293,32 @@ export class MicroPythonIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
       this.flushPendingSerialFragments(true);
       this.emit(event);
     }
+  }
+
+  private handleResetComplete(message: SimulatorResetCompleteMessage): void {
+    const requestId = message.requestId;
+    if (!requestId) {
+      return;
+    }
+    const pending = this.pendingResets.get(requestId);
+    if (!pending) {
+      return;
+    }
+    this.pendingResets.delete(requestId);
+    if (message.ok) {
+      pending.resolve();
+      return;
+    }
+    pending.reject(new Error(message.error || 'MicroPython runtime failed to reset'));
+  }
+
+  private enqueueOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const queued = this.operationQueue.then(operation, operation);
+    this.operationQueue = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
   }
 
   private emitSerialOutput(data: string): void {

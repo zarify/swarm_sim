@@ -129,9 +129,12 @@ display.show(Image.ARROW_N)`),
 
   it('maps buttons, sensors, reset, stop, and MicroPython string radio input to documented simulator messages', async () => {
     const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
     const adapter = new MicroPythonIframeRuntimeAdapter({
       targetWindow,
       targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
     });
     const radioData = encodeMicroPythonRadioString('ping');
 
@@ -143,7 +146,15 @@ display.show(Image.ARROW_N)`),
     await adapter.setSensor('magneticForceY', 45);
     await adapter.setSensor('magneticForceZ', 0);
     await adapter.sendRadio({ data: radioData, signalStrength: -63 });
-    await adapter.reset();
+    const reset = adapter.reset();
+    await waitForMessages(targetWindow, 9);
+    const resetMessage = targetWindow.messages[8]?.message as Record<string, unknown>;
+    eventTarget.dispatchMessage({
+      kind: 'reset_complete',
+      requestId: String(resetMessage?.requestId ?? ''),
+      ok: true,
+    });
+    await reset;
     await adapter.stop();
 
     expect(targetWindow.messages).toEqual([
@@ -158,9 +169,84 @@ display.show(Image.ARROW_N)`),
         message: { kind: 'radio_input', data: radioData, rssi: 63 },
         targetOrigin: 'https://python-simulator.usermbit.org',
       },
-      { message: { kind: 'reset' }, targetOrigin: 'https://python-simulator.usermbit.org' },
+      {
+        message: {
+          kind: 'reset',
+          requestId: expect.any(String),
+        },
+        targetOrigin: 'https://python-simulator.usermbit.org',
+      },
       { message: { kind: 'stop' }, targetOrigin: 'https://python-simulator.usermbit.org' },
     ]);
+  });
+
+  it('waits for reset completion from the simulator', async () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+
+    let resolved = false;
+    const reset = adapter.reset().then(() => {
+      resolved = true;
+    });
+    await waitForMessages(targetWindow, 1);
+    const resetMessage = targetWindow.messages[0]?.message as Record<string, unknown>;
+
+    expect(resetMessage?.kind).toBe('reset');
+    expect(typeof resetMessage?.requestId).toBe('string');
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    eventTarget.dispatchMessage({
+      kind: 'reset_complete',
+      requestId: String(resetMessage?.requestId ?? ''),
+      ok: true,
+    });
+    await reset;
+    expect(resolved).toBe(true);
+  });
+
+  it('serializes repeated reset requests until the prior reset completes', async () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MicroPythonIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://python-simulator.usermbit.org',
+      eventTarget,
+      messageSource: trustedMessageSource,
+    });
+
+    const firstReset = adapter.reset();
+    await waitForMessages(targetWindow, 1);
+    const firstRequest = targetWindow.messages[0]?.message as Record<string, unknown>;
+
+    const secondReset = adapter.reset();
+    await Promise.resolve();
+    expect(targetWindow.messages).toHaveLength(1);
+
+    eventTarget.dispatchMessage({
+      kind: 'reset_complete',
+      requestId: String(firstRequest?.requestId ?? ''),
+      ok: true,
+    });
+    await firstReset;
+    await waitForMessages(targetWindow, 2);
+
+    const secondRequest = targetWindow.messages[1]?.message as Record<string, unknown>;
+    expect(secondRequest?.kind).toBe('reset');
+    expect(secondRequest?.requestId).not.toBe(firstRequest?.requestId);
+
+    eventTarget.dispatchMessage({
+      kind: 'reset_complete',
+      requestId: String(secondRequest?.requestId ?? ''),
+      ok: true,
+    });
+    await secondReset;
   });
 
   it('passes outbound raw radio bytes through to the simulator unchanged', async () => {
@@ -715,6 +801,15 @@ function makeTargetWindow() {
       messages.push({ message, targetOrigin });
     },
   };
+}
+
+async function waitForMessages(
+  targetWindow: { messages: { message: unknown; targetOrigin: string }[] },
+  expectedCount: number,
+): Promise<void> {
+  while (targetWindow.messages.length < expectedCount) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 function getFlashMessage(message: unknown): {

@@ -29,10 +29,22 @@ interface RunnerLoadResultMessage {
   error?: string;
 }
 
+interface RunnerResetResultMessage {
+  type: 'swarm-reset-result';
+  requestId?: string;
+  ok?: boolean;
+  error?: string;
+}
+
 interface RunnerRuntimeEventMessage {
   type: 'swarm-runtime-event';
   eventType?: string;
   payload?: Record<string, unknown>;
+}
+
+interface PendingRunnerRequest {
+  resolve: () => void;
+  reject: (error: Error) => void;
 }
 
 export interface MakeCodeIframeRuntimeAdapterOptions {
@@ -59,15 +71,19 @@ export class MakeCodeIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   private readonly readyTimeoutMs: number;
   private readonly loadTimeoutMs: number;
   private readonly listeners = new Set<(event: RuntimeAdapterEvent) => void>();
-  private readonly pendingLoads = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
+  private readonly pendingLoads = new Map<string, PendingRunnerRequest>();
+  private readonly pendingResets = new Map<string, PendingRunnerRequest>();
   private readonly handleMessage = (event: MessageEvent) => this.receiveMessage(event);
   private ready = false;
   private loadSequence = 0;
+  private resetSequence = 0;
+  private operationQueue: Promise<void> = Promise.resolve();
   private resolveReady?: () => void;
   private readonly readyPromise = new Promise<void>((resolve) => {
     this.resolveReady = resolve;
   });
   private sawInvalidDisplayFrame = false;
+  private disposed = false;
 
   constructor(options: MakeCodeIframeRuntimeAdapterOptions) {
     this.name = options.name ?? 'MakeCode iframe runtime';
@@ -88,41 +104,50 @@ export class MakeCodeIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   }
 
   async flash(program: RuntimeProgram): Promise<void> {
-    assertMakeCodeProgram(program);
-    this.sawInvalidDisplayFrame = false;
-    await this.waitUntilReady();
-    const requestId = `swarm-load-${++this.loadSequence}`;
-    await new Promise<void>((resolve, reject) => {
-      const timeoutId = globalThis.setTimeout(() => {
-        this.pendingLoads.delete(requestId);
-        reject(new Error('Timed out waiting for MakeCode runtime to load program'));
-      }, this.loadTimeoutMs);
-      this.pendingLoads.set(requestId, {
-        resolve: () => {
-          globalThis.clearTimeout(timeoutId);
-          resolve();
-        },
-        reject: (error) => {
-          globalThis.clearTimeout(timeoutId);
-          reject(error);
-        },
-      });
-      this.post({
-        type: 'swarm-load-program',
+    return this.enqueueOperation(async () => {
+      this.assertUsable('loading program');
+      assertMakeCodeProgram(program);
+      this.sawInvalidDisplayFrame = false;
+      await this.waitUntilReady();
+      const requestId = `swarm-load-${++this.loadSequence}`;
+      await this.sendRequest(
+        this.pendingLoads,
         requestId,
-        sourceFiles: program.sourceFiles ?? {},
-      });
+        'Timed out waiting for MakeCode runtime to load program',
+        () =>
+          this.post({
+            type: 'swarm-load-program',
+            requestId,
+            sourceFiles: program.sourceFiles ?? {},
+          }),
+      );
     });
   }
 
   async reset(): Promise<void> {
-    this.sawInvalidDisplayFrame = false;
-    this.post({ type: 'swarm-reset-runtime' });
+    return this.enqueueOperation(async () => {
+      this.assertUsable('resetting runtime');
+      this.sawInvalidDisplayFrame = false;
+      const requestId = `swarm-reset-${++this.resetSequence}`;
+      await this.sendRequest(
+        this.pendingResets,
+        requestId,
+        'Timed out waiting for MakeCode runtime to reset',
+        () =>
+          this.post({
+            type: 'swarm-reset-runtime',
+            requestId,
+          }),
+      );
+    });
   }
 
   async stop(): Promise<void> {
-    this.sawInvalidDisplayFrame = false;
-    this.post({ type: 'swarm-stop-runtime' });
+    return this.enqueueOperation(async () => {
+      this.assertUsable('stopping runtime');
+      this.sawInvalidDisplayFrame = false;
+      this.post({ type: 'swarm-stop-runtime' });
+    });
   }
 
   async setButton(button: 'A' | 'B', pressed: boolean): Promise<void> {
@@ -163,12 +188,17 @@ export class MakeCodeIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
   }
 
   dispose(): void {
+    this.disposed = true;
     this.eventTarget?.removeEventListener('message', this.handleMessage);
     this.listeners.clear();
-    for (const pending of this.pendingLoads.values()) {
-      pending.reject(new Error('MakeCode iframe runtime adapter disposed while load was pending'));
-    }
-    this.pendingLoads.clear();
+    rejectPendingRequests(
+      this.pendingLoads,
+      'MakeCode iframe runtime adapter disposed while load was pending',
+    );
+    rejectPendingRequests(
+      this.pendingResets,
+      'MakeCode iframe runtime adapter disposed while reset was pending',
+    );
   }
 
   private post(message: unknown): void {
@@ -193,26 +223,31 @@ export class MakeCodeIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
       this.handleLoadResult(event.data as unknown as RunnerLoadResultMessage);
       return;
     }
+    if (event.data.type === 'swarm-reset-result') {
+      this.handleResetResult(event.data as unknown as RunnerResetResultMessage);
+      return;
+    }
     if (event.data.type === 'swarm-runtime-event') {
       this.handleRuntimeEvent(event.data as unknown as RunnerRuntimeEventMessage);
     }
   }
 
   private handleLoadResult(message: RunnerLoadResultMessage): void {
-    const requestId = message.requestId;
-    if (!requestId) {
-      return;
-    }
-    const pending = this.pendingLoads.get(requestId);
-    if (!pending) {
-      return;
-    }
-    this.pendingLoads.delete(requestId);
-    if (message.ok) {
-      pending.resolve();
-      return;
-    }
-    pending.reject(new Error(message.error || 'MakeCode runtime failed to load program'));
+    resolvePendingRequest(
+      this.pendingLoads,
+      message.requestId,
+      message.ok,
+      message.error || 'MakeCode runtime failed to load program',
+    );
+  }
+
+  private handleResetResult(message: RunnerResetResultMessage): void {
+    resolvePendingRequest(
+      this.pendingResets,
+      message.requestId,
+      message.ok,
+      message.error || 'MakeCode runtime failed to reset',
+    );
   }
 
   private handleRuntimeEvent(message: RunnerRuntimeEventMessage): void {
@@ -313,6 +348,46 @@ export class MakeCodeIframeRuntimeAdapter implements MicrobitRuntimeAdapter {
         resolve();
       }, reject);
     });
+  }
+
+  private enqueueOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const queued = this.operationQueue.then(operation, operation);
+    this.operationQueue = queued.then(
+      () => undefined,
+      () => undefined,
+    );
+    return queued;
+  }
+
+  private sendRequest(
+    pendingRequests: Map<string, PendingRunnerRequest>,
+    requestId: string,
+    timeoutMessage: string,
+    postRequest: () => void,
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const timeoutId = globalThis.setTimeout(() => {
+        pendingRequests.delete(requestId);
+        reject(new Error(timeoutMessage));
+      }, this.loadTimeoutMs);
+      pendingRequests.set(requestId, {
+        resolve: () => {
+          globalThis.clearTimeout(timeoutId);
+          resolve();
+        },
+        reject: (error) => {
+          globalThis.clearTimeout(timeoutId);
+          reject(error);
+        },
+      });
+      postRequest();
+    });
+  }
+
+  private assertUsable(action: string): void {
+    if (this.disposed) {
+      throw new Error(`MakeCode iframe runtime adapter disposed while ${action}`);
+    }
   }
 }
 
@@ -440,6 +515,37 @@ function normalizeError(value: unknown): Error {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+function resolvePendingRequest(
+  pendingRequests: Map<string, PendingRunnerRequest>,
+  requestId: string | undefined,
+  ok: boolean | undefined,
+  fallbackError: string,
+): void {
+  if (!requestId) {
+    return;
+  }
+  const pending = pendingRequests.get(requestId);
+  if (!pending) {
+    return;
+  }
+  pendingRequests.delete(requestId);
+  if (ok) {
+    pending.resolve();
+    return;
+  }
+  pending.reject(new Error(fallbackError));
+}
+
+function rejectPendingRequests(
+  pendingRequests: Map<string, PendingRunnerRequest>,
+  message: string,
+): void {
+  for (const pending of pendingRequests.values()) {
+    pending.reject(new Error(message));
+  }
+  pendingRequests.clear();
 }
 
 function debugMakeCodeRuntimeSound(event: string, details: Record<string, unknown>): void {

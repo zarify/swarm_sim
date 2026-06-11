@@ -62,6 +62,77 @@ describe('MakeCode iframe runtime adapter', () => {
     await flash;
   });
 
+  it('waits for reset completion from the runner', async () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MakeCodeIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://swarm.local',
+      eventTarget,
+      messageSource: trustedMessageSource,
+      initialReady: true,
+    });
+
+    let resolved = false;
+    const reset = adapter.reset().then(() => {
+      resolved = true;
+    });
+    await waitForMessages(targetWindow, 1);
+
+    const resetMessage = targetWindow.messages[0]?.message as Record<string, unknown>;
+    expect(resetMessage?.type).toBe('swarm-reset-runtime');
+    expect(typeof resetMessage?.requestId).toBe('string');
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    eventTarget.dispatchMessage({
+      type: 'swarm-reset-result',
+      requestId: String(resetMessage?.requestId ?? ''),
+      ok: true,
+    });
+    await reset;
+    expect(resolved).toBe(true);
+  });
+
+  it('serializes repeated reset requests until the prior reset completes', async () => {
+    const targetWindow = makeTargetWindow();
+    const eventTarget = makeMessageEventTarget();
+    const adapter = new MakeCodeIframeRuntimeAdapter({
+      targetWindow,
+      targetOrigin: 'https://swarm.local',
+      eventTarget,
+      messageSource: trustedMessageSource,
+      initialReady: true,
+    });
+
+    const firstReset = adapter.reset();
+    await waitForMessages(targetWindow, 1);
+    const firstRequest = targetWindow.messages[0]?.message as Record<string, unknown>;
+
+    const secondReset = adapter.reset();
+    await Promise.resolve();
+    expect(targetWindow.messages).toHaveLength(1);
+
+    eventTarget.dispatchMessage({
+      type: 'swarm-reset-result',
+      requestId: String(firstRequest?.requestId ?? ''),
+      ok: true,
+    });
+    await firstReset;
+    await waitForMessages(targetWindow, 2);
+
+    const secondRequest = targetWindow.messages[1]?.message as Record<string, unknown>;
+    expect(secondRequest?.type).toBe('swarm-reset-runtime');
+    expect(secondRequest?.requestId).not.toBe(firstRequest?.requestId);
+
+    eventTarget.dispatchMessage({
+      type: 'swarm-reset-result',
+      requestId: String(secondRequest?.requestId ?? ''),
+      ok: true,
+    });
+    await secondReset;
+  });
+
   it('maps runner runtime events into adapter events', () => {
     const targetWindow = makeTargetWindow();
     const eventTarget = makeMessageEventTarget();

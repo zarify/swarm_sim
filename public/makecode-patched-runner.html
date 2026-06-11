@@ -65,6 +65,7 @@
           resolveSimulatorReady: null,
           rejectSimulatorReady: null,
         };
+        let operationQueue = Promise.resolve();
 
         installMakeCodeApiRewrites();
 
@@ -114,13 +115,13 @@
 
           switch (data.type) {
             case 'swarm-load-program':
-              await handleLoadProgram(data);
+              void enqueueOperation(() => handleLoadProgram(data));
               break;
             case 'swarm-reset-runtime':
-              await handleResetRuntime();
+              void enqueueOperation(() => handleResetRuntime(data));
               break;
             case 'swarm-stop-runtime':
-              await handleStopRuntime();
+              void enqueueOperation(() => handleStopRuntime());
               break;
             case 'swarm-set-button':
             case 'swarm-pulse-button-ab':
@@ -143,55 +144,7 @@
           }
 
           try {
-            if (!state.runnerReady) {
-              throw new Error('MakeCode runner is not ready yet');
-            }
-
-            const mainTs = sourceFiles['main.ts'];
-            if (typeof mainTs !== 'string') {
-              throw new Error('MakeCode source is missing main.ts');
-            }
-            const dataLogHints = parseDataLogProgramHints(sourceFiles);
-
-            state.lastSourceFiles = sourceFiles;
-            state.activeSimulatorWindow = null;
-            state.simulatorReady = false;
-            state.runtimeRadioConfig = {};
-            state.outboundRadioSequence = 0;
-            state.recentOutboundRadioFingerprint = null;
-            state.recentSerialFingerprint = null;
-            state.dataLogHeadings = null;
-            state.programUsesDataLogger = dataLogHints.usesDataLogger;
-            state.dataLogMirrorToSerial = dataLogHints.mirrorToSerial;
-            state.lastSoundActive = false;
-            state.lastSoundLevel = 0;
-            state.lastSoundEventMs = 0;
-
-            if (window.pxt?.runner?.stop) {
-              window.pxt.runner.stop();
-            }
-            simulators.innerHTML = '';
-
-            const dependencies = parseDependencies(sourceFiles);
-            const options = {
-              code: mainTs,
-              assets: JSON.stringify(sourceFiles),
-              dependencies,
-              light: true,
-              fullScreen: true,
-              single: true,
-              hideSimButtons: true,
-              autofocus: false,
-            };
-
-            await window.pxt.runner.simulateAsync(simulators, options);
-
-            const simulatorFrame = simulators.querySelector('iframe');
-            if (!simulatorFrame || !simulatorFrame.contentWindow) {
-              throw new Error('MakeCode simulator iframe did not start');
-            }
-            state.activeSimulatorWindow = simulatorFrame.contentWindow;
-            await waitForSimulatorReady();
+            await runLoadProgram(sourceFiles);
 
             postToHost({
               type: 'swarm-load-result',
@@ -208,18 +161,93 @@
           }
         }
 
-        async function handleResetRuntime() {
-          if (!state.lastSourceFiles) {
+        async function handleResetRuntime(message) {
+          const requestId = typeof message.requestId === 'string' ? message.requestId : '';
+          if (!requestId) {
             return;
           }
-          await handleLoadProgram({
-            type: 'swarm-load-program',
-            requestId: `reset-${Date.now()}`,
-            sourceFiles: state.lastSourceFiles,
-          });
+          if (!state.lastSourceFiles) {
+            postToHost({
+              type: 'swarm-reset-result',
+              requestId,
+              ok: true,
+            });
+            return;
+          }
+          try {
+            await runLoadProgram(state.lastSourceFiles);
+            postToHost({
+              type: 'swarm-reset-result',
+              requestId,
+              ok: true,
+            });
+          } catch (error) {
+            postToHost({
+              type: 'swarm-reset-result',
+              requestId,
+              ok: false,
+              error: toErrorMessage(error),
+            });
+          }
         }
 
         async function handleStopRuntime() {
+          stopActiveSimulator();
+        }
+
+        async function runLoadProgram(sourceFiles) {
+          if (!state.runnerReady) {
+            throw new Error('MakeCode runner is not ready yet');
+          }
+
+          const mainTs = sourceFiles['main.ts'];
+          if (typeof mainTs !== 'string') {
+            throw new Error('MakeCode source is missing main.ts');
+          }
+          const dataLogHints = parseDataLogProgramHints(sourceFiles);
+
+          state.lastSourceFiles = sourceFiles;
+          resetRuntimeSession(dataLogHints);
+
+          const dependencies = parseDependencies(sourceFiles);
+          const options = {
+            code: mainTs,
+            assets: JSON.stringify(sourceFiles),
+            dependencies,
+            light: true,
+            fullScreen: true,
+            single: true,
+            hideSimButtons: true,
+            autofocus: false,
+          };
+
+          await window.pxt.runner.simulateAsync(simulators, options);
+
+          const simulatorFrame = simulators.querySelector('iframe');
+          if (!simulatorFrame || !simulatorFrame.contentWindow) {
+            throw new Error('MakeCode simulator iframe did not start');
+          }
+          state.activeSimulatorWindow = simulatorFrame.contentWindow;
+          await waitForSimulatorReady();
+        }
+
+        function resetRuntimeSession(dataLogHints) {
+          stopActiveSimulator();
+          state.runtimeRadioConfig = {};
+          state.outboundRadioSequence = 0;
+          state.recentOutboundRadioFingerprint = null;
+          state.recentSerialFingerprint = null;
+          state.dataLogHeadings = null;
+          state.programUsesDataLogger = Boolean(dataLogHints?.usesDataLogger);
+          state.dataLogMirrorToSerial = Boolean(dataLogHints?.mirrorToSerial);
+          state.lastSoundActive = false;
+          state.lastSoundLevel = 0;
+          state.lastSoundEventMs = 0;
+        }
+
+        function stopActiveSimulator() {
+          state.resolveSimulatorReady = null;
+          state.rejectSimulatorReady = null;
           if (window.pxt?.runner?.stop) {
             window.pxt.runner.stop();
           }
@@ -242,12 +270,25 @@
           return new Promise((resolve, reject) => {
             state.resolveSimulatorReady = resolve;
             state.rejectSimulatorReady = reject;
-            window.setTimeout(() => {
+            const timeoutId = window.setTimeout(() => {
               if (!state.simulatorReady) {
+                state.resolveSimulatorReady = null;
+                state.rejectSimulatorReady = null;
                 reject(new Error('Patched simulator did not become ready in time'));
               }
             }, 5000);
+            const resolveReady = state.resolveSimulatorReady;
+            state.resolveSimulatorReady = () => {
+              window.clearTimeout(timeoutId);
+              resolveReady?.();
+            };
           });
+        }
+
+        function enqueueOperation(operation) {
+          const nextOperation = operationQueue.then(operation, operation);
+          operationQueue = nextOperation.catch(() => {});
+          return nextOperation;
         }
 
         function installMakeCodeApiRewrites() {
