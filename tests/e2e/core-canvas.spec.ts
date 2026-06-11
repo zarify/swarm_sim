@@ -678,6 +678,111 @@ test.describe('core canvas workflows', () => {
       .toEqual([null, null]);
   });
 
+  test('keeps MakeCode reset reloads scoped to the selected device after repeated selection-card Reset', async ({
+    page,
+  }) => {
+    await gotoCanvas(page);
+
+    await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await addDeviceFromSwarmTools(page);
+    await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
+    await expect(page.locator('.microbit-node')).toHaveCount(2);
+    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+
+    await addDeviceFromSwarmTools(page);
+    await page.getByLabel(/Load code onto Node 3/).setInputFiles(microPythonFixture);
+    await expect(page.locator('.microbit-node')).toHaveCount(3);
+    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results', { exact: true })).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await expect
+      .poll(() => page.frames().filter((frame) => frame.url().includes('/makecode-patched-runner.html')).length)
+      .toBe(2);
+    await expect
+      .poll(() => page.frames().filter((frame) => frame.url().includes('/makecode-patched-simulator.html')).length)
+      .toBe(2);
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')))
+      .toBe(true);
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+
+    await getSaveCanvasButton(page).click();
+    await expect(getSaveCanvasButton(page)).toContainText('Saved');
+
+    await page.reload();
+    await dismissSplash(page);
+
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    const alphaIframe = page.locator('iframe[title="MakeCode simulator for Node 1"]');
+    const betaIframe = page.locator('iframe[title="MakeCode simulator for Node 2"]');
+    await expect
+      .poll(() => page.frames().filter((frame) => frame.url().includes('/makecode-patched-runner.html')).length)
+      .toBe(2);
+    await expect(alphaIframe).toHaveCount(1);
+    await expect(betaIframe).toHaveCount(1);
+    await alphaIframe.evaluate((element) => {
+      element.setAttribute('data-swarm-reset-marker', 'alpha-initial');
+    });
+    await betaIframe.evaluate((element) => {
+      element.setAttribute('data-swarm-reset-marker', 'beta-initial');
+    });
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+
+    await selectDeviceNode(page, 0);
+    const selectionResetButton = page
+      .locator('.selection-card')
+      .getByRole('button', { name: 'Reset', exact: true });
+    await expect(selectionResetButton).toBeEnabled();
+    await selectionResetButton.click();
+
+    await expect
+      .poll(() => page.frames().filter((frame) => frame.url().includes('/makecode-patched-runner.html')).length, {
+        timeout: 15_000,
+      })
+      .toBe(2);
+    await expect
+      .poll(() => alphaIframe.getAttribute('data-swarm-reset-marker'), { timeout: 15_000 })
+      .toBeNull();
+    await expect(betaIframe).toHaveAttribute('data-swarm-reset-marker', 'beta-initial');
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel('Runtime load results', { exact: true })).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
+    });
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+    await alphaIframe.evaluate((element) => {
+      element.setAttribute('data-swarm-reset-marker', 'alpha-after-first-reset');
+    });
+    await betaIframe.evaluate((element) => {
+      element.setAttribute('data-swarm-reset-marker', 'beta-after-first-reset');
+    });
+
+    await selectDeviceNode(page, 0);
+    await expect(selectionResetButton).toBeEnabled();
+    await selectionResetButton.click();
+
+    await expect
+      .poll(() => page.frames().filter((frame) => frame.url().includes('/makecode-patched-runner.html')).length, {
+        timeout: 15_000,
+      })
+      .toBe(2);
+    await expect
+      .poll(() => alphaIframe.getAttribute('data-swarm-reset-marker'), { timeout: 15_000 })
+      .toBeNull();
+    await expect(betaIframe).toHaveAttribute('data-swarm-reset-marker', 'beta-after-first-reset');
+  });
+
   test('restores a dirty mixed-runtime saved canvas without MakeCode load timeouts', async ({ page }) => {
     await gotoCanvas(page);
 

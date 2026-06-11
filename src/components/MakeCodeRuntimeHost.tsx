@@ -151,6 +151,7 @@ export function MakeCodeRuntimeHost({
   const pendingResetReloadDeviceIds = useRef(new Set<DeviceId>());
   const pendingResetReloadVersions = useRef(new Map<DeviceId, number>());
   const pendingResetReloadTimers = useRef(new Map<DeviceId, number>());
+  const resetReloadInFlight = useRef(false);
   const callbacks = useRef({
     onRadioPacket,
     onRuntimeLog,
@@ -861,6 +862,9 @@ export function MakeCodeRuntimeHost({
     if (pendingResetReloadDeviceIds.current.size === 0 || isLoading) {
       return;
     }
+    if (resetReloadInFlight.current) {
+      return;
+    }
     if (autoPrepare && !prepareEnabled) {
       return;
     }
@@ -890,14 +894,18 @@ export function MakeCodeRuntimeHost({
       pendingResetReloadVersions.current.delete(device.id);
       clearPendingResetReloadTimer(pendingResetReloadTimers.current, device.id);
     }
-    void loadRuntimes(targetDevices);
+    // Keep auto-prepare blocked until the reset-triggered targeted reload has claimed the work.
+    resetReloadInFlight.current = true;
+    void loadRuntimes(targetDevices).finally(() => {
+      resetReloadInFlight.current = false;
+    });
   }, [autoPrepare, prepareEnabled, devices, readyDeviceIds, isLoading, frameMountVersions]);
 
   useEffect(() => {
     if (!autoPrepare || !prepareEnabled || isLoading || devices.length === 0 || !allFramesReady) {
       return;
     }
-    if (pendingResetReloadDeviceIds.current.size > 0) {
+    if (pendingResetReloadDeviceIds.current.size > 0 || resetReloadInFlight.current) {
       return;
     }
 

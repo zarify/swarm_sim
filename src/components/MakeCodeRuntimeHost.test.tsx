@@ -147,6 +147,97 @@ describe('MakeCodeRuntimeHost', () => {
     await waitFor(() => expect(loadCalls).toHaveLength(2));
   });
 
+  it('keeps auto-prepare reset reloads scoped to the selected MakeCode device', async () => {
+    const project = makeProject({ assignGammaMakeCode: true });
+    const loadCalls: DeviceId[][] = [];
+    const loadPrograms = async (
+      runtimeProject: SwarmProject,
+      options: LoadProjectRuntimeProgramsOptions,
+    ): Promise<DeviceProgramLoadResult[]> => {
+      loadCalls.push(runtimeProject.devices.map((device) => device.id));
+      const artifactsById = new Map(runtimeProject.artifacts.map((artifact) => [artifact.id, artifact]));
+      for (const device of runtimeProject.devices) {
+        if (!device.programArtifactId) {
+          continue;
+        }
+        const artifact = artifactsById.get(device.programArtifactId);
+        if (!artifact) {
+          continue;
+        }
+        await options.createAdapter?.({
+          device,
+          artifact,
+          runtimeSource: 'makecode-pxt',
+          program: {
+            source: 'makecode-pxt',
+            sourceFiles: {
+              'main.ts': `radio.setGroup(42)\nserial.writeLine("${device.id}")`,
+            },
+          },
+        });
+      }
+      return runtimeProject.devices
+        .filter((device) => device.programArtifactId)
+        .map((device) => ({
+          deviceId: device.id,
+          artifactId: device.programArtifactId,
+          status: 'loaded' as const,
+          runtimeSource: 'makecode-pxt' as const,
+        }));
+    };
+
+    const { rerender } = render(
+      <MakeCodeRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        autoPrepare
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        loadPrograms={loadPrograms}
+      />,
+    );
+
+    await markRunnerReady('Alpha');
+    await markRunnerReady('Gamma');
+    await waitFor(() => expect(loadCalls).toEqual([['device-alpha', 'device-gamma']]));
+
+    const initialAlphaFrame = screen.getByTitle('MakeCode simulator for Alpha');
+    const initialGammaFrame = screen.getByTitle('MakeCode simulator for Gamma');
+
+    rerender(
+      <MakeCodeRuntimeHost
+        project={project}
+        selectedDeviceId="device-alpha"
+        autoPrepare
+        resetRequest={{
+          nonce: 1,
+          deviceIds: ['device-alpha'],
+          actionLabel: 'device reset',
+        }}
+        onRadioPacket={() => []}
+        onRuntimeLog={() => {}}
+        loadPrograms={loadPrograms}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTitle('MakeCode simulator for Alpha')).not.toBe(initialAlphaFrame),
+    );
+    expect(screen.getByTitle('MakeCode simulator for Gamma')).toBe(initialGammaFrame);
+
+    await markRunnerReady('Alpha');
+    await waitFor(() =>
+      expect(loadCalls).toEqual([
+        ['device-alpha', 'device-gamma'],
+        ['device-alpha'],
+      ]),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(loadCalls).toHaveLength(2);
+  });
+
   it('forwards MakeCode adapter display, radio, and serial events through host callbacks', async () => {
     const displayChanges: string[] = [];
     const logs: string[] = [];
