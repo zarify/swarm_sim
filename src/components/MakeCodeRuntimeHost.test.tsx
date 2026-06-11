@@ -1182,6 +1182,7 @@ function makeDeviceRuntimeStates(
   soundLevel: number,
   buttons: DeviceRuntimeState['buttons'] = { A: false, B: false },
   magnetic: { x: number; y: number; z: number } = { x: 0, y: 45, z: 0 },
+  temperatureC = 20,
 ): Record<string, DeviceRuntimeState> {
   const magneticFieldStrength = Math.round(
     Math.hypot(magnetic.x, magnetic.y, magnetic.z),
@@ -1196,6 +1197,7 @@ function makeDeviceRuntimeStates(
       sensors: {
         lightLevel,
         soundLevel,
+        temperatureC,
         magneticForceX: magnetic.x,
         magneticForceY: magnetic.y,
         magneticForceZ: magnetic.z,
@@ -1209,6 +1211,7 @@ function expectedSyncedSensors(
   lightLevel: number,
   soundLevel: number,
   magnetic: { x: number; y: number; z: number },
+  temperatureC = 20,
 ): string[] {
   const values: string[] = [];
   if (FEATURE_FLAGS.light) {
@@ -1217,6 +1220,7 @@ function expectedSyncedSensors(
   if (FEATURE_FLAGS.sound) {
     values.push(`soundLevel:${soundLevel}`);
   }
+  values.push(`temperatureC:${temperatureC}`);
   if (FEATURE_FLAGS.magnet) {
     values.push(
       `magneticForceX:${magnetic.x}`,

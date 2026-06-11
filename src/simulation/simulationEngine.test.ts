@@ -203,6 +203,43 @@ describe('simulation engine', () => {
     expect(state.devices['device-e']?.sensors).toMatchObject({ lightLevel: 0, soundLevel: 0 });
   });
 
+  it('projects temperature sources with ambient fallback and most-extreme overlap', () => {
+    const state = createSimulationState({
+      ...makeProject(),
+      devices: [
+        { id: 'device-a', name: 'A', position: { x: 0, y: 0 } },
+        { id: 'device-b', name: 'B', position: { x: 50, y: 0 } },
+        { id: 'device-c', name: 'C', position: { x: 75, y: 0 } },
+        { id: 'device-d', name: 'D', position: { x: 200, y: 0 } },
+      ],
+      environmentSources: [
+        {
+          id: 'temperature-1',
+          type: 'temperature',
+          name: 'Warm zone',
+          position: { x: 0, y: 0 },
+          radius: 100,
+          mode: 'constant',
+          temperatureC: 30,
+        },
+        {
+          id: 'temperature-2',
+          type: 'temperature',
+          name: 'Cool point',
+          position: { x: 100, y: 0 },
+          radius: 100,
+          mode: 'point',
+          temperatureC: -5,
+        },
+      ],
+    });
+
+    expect(state.devices['device-a']?.sensors.temperatureC).toBe(30);
+    expect(state.devices['device-b']?.sensors.temperatureC).toBe(8);
+    expect(state.devices['device-c']?.sensors.temperatureC).toBe(1);
+    expect(state.devices['device-d']?.sensors.temperatureC).toBe(20);
+  });
+
   it('projects transient runtime sound to nearby devices without self-hearing and clears it', () => {
     let state = createSimulationState(makeProject());
 

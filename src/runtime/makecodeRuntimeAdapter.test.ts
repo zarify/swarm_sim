@@ -231,15 +231,24 @@ input.onButtonPressed(Button.B, function () {
   serial.writeValue("light", input.lightLevel())
   radio.sendValue("light", input.lightLevel())
 })
+input.onButtonPressed(Button.AB, function () {
+  serial.writeValue("temp", input.temperature())
+  radio.sendValue("temp", input.temperature())
+})
 radio.setGroup(42)`,
       },
     });
 
     await adapter.setSensor('soundLevel', 200);
     await adapter.setSensor('lightLevel', 80);
+    await adapter.setSensor('temperatureC', 31);
     await adapter.setButton('A', true);
     await adapter.setButton('A', false);
     await adapter.setButton('B', true);
+    await adapter.setButton('B', false);
+    await adapter.setButton('A', true);
+    await adapter.setButton('B', true);
+    await adapter.setButton('A', false);
     await adapter.setButton('B', false);
 
     const serialOutputs = events
@@ -247,12 +256,14 @@ radio.setGroup(42)`,
       .map((event) => (event.type === 'serial-output' ? event.data : ''));
     expect(serialOutputs).toContain('sound:200');
     expect(serialOutputs).toContain('light:80');
+    expect(serialOutputs).toContain('temp:31');
 
     const radioPayloads = events
       .filter((event) => event.type === 'radio-output')
       .map((event) => (event.type === 'radio-output' ? decodeMakeCodeRadioString(event.packet.data) : ''));
     expect(radioPayloads).toContain('sound:200');
     expect(radioPayloads).toContain('light:80');
+    expect(radioPayloads).toContain('temp:31');
 
     const barGraphFrames = events.filter((event) => event.type === 'display-change');
     expect(barGraphFrames.length).toBeGreaterThan(1);

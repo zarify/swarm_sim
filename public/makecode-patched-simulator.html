@@ -60,6 +60,7 @@
         const desiredSensors = {
           lightLevel: 0,
           soundLevel: 0,
+          temperatureC: 20,
           magneticForceX: 0,
           magneticForceY: 45,
           magneticForceZ: 0,
@@ -161,6 +162,8 @@
             desiredSensors.lightLevel = clampByte(Number(message.value));
           } else if (sensor === 'soundLevel') {
             desiredSensors.soundLevel = clampByte(Number(message.value));
+          } else if (sensor === 'temperatureC') {
+            desiredSensors.temperatureC = clampTemperature(Number(message.value));
           } else if (sensor === 'magneticForceX') {
             desiredSensors.magneticForceX = clampMagneticForce(Number(message.value));
           } else if (sensor === 'magneticForceY') {
@@ -188,6 +191,14 @@
             if (currentSound !== desiredSensors.soundLevel) {
               board.microphoneState.setUsed?.();
               board.microphoneState.setLevel?.(desiredSensors.soundLevel);
+              changed = true;
+            }
+          }
+          if (board.thermometerState) {
+            const currentTemperature = clampTemperature(Number(board.thermometerState.temperature ?? 20));
+            if (!board.thermometerState.usesTemperature || currentTemperature !== desiredSensors.temperatureC) {
+              board.thermometerState.usesTemperature = true;
+              board.thermometerState.temperature = desiredSensors.temperatureC;
               changed = true;
             }
           }
@@ -247,6 +258,13 @@
         function headingFromMagneticForce(x, y) {
           const heading = Math.round((Math.atan2(x, -y) * 180) / Math.PI);
           return ((heading % 360) + 360) % 360;
+        }
+
+        function clampTemperature(value) {
+          if (!Number.isFinite(value)) {
+            return 20;
+          }
+          return Math.max(-5, Math.min(50, Math.round(value)));
         }
 
         function patchMagneticForceApi() {

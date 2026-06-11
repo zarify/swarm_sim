@@ -13,6 +13,8 @@ export function isEnvironmentSourceTypeEnabled(type: EnvironmentSource['type']):
       return FEATURE_FLAGS.light;
     case 'sound':
       return FEATURE_FLAGS.sound;
+    case 'temperature':
+      return true;
     case 'magnet':
       return FEATURE_FLAGS.magnet;
     default:
@@ -32,6 +34,9 @@ export function isRuntimeSensorEnabled(sensor: RuntimeSensorId): boolean {
   }
   if (sensor === 'soundLevel') {
     return FEATURE_FLAGS.sound;
+  }
+  if (sensor === 'temperatureC') {
+    return true;
   }
   return FEATURE_FLAGS.magnet;
 }

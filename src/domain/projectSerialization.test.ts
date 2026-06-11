@@ -1,4 +1,4 @@
-import { createBlankProject, type SwarmProject } from './project';
+import { PROJECT_SCHEMA_VERSION, createBlankProject, type SwarmProject } from './project';
 import { deserializeProject, serializeProject } from './projectSerialization';
 
 const now = '2026-05-16T04:20:00.000Z';
@@ -8,7 +8,7 @@ describe('project serialization', () => {
     const project = createBlankProject({ id: 'project-1', name: 'Radio swarm', now });
 
     expect(project).toMatchObject({
-      schemaVersion: 8,
+      schemaVersion: PROJECT_SCHEMA_VERSION,
       id: 'project-1',
       name: 'Radio swarm',
       createdAt: now,
@@ -63,7 +63,7 @@ describe('project serialization', () => {
     };
 
     expect(deserializeProject(JSON.stringify(legacyProject))).toMatchObject({
-      schemaVersion: 8,
+      schemaVersion: PROJECT_SCHEMA_VERSION,
       artifacts: [
         {
           id: 'artifact-legacy',
@@ -75,7 +75,10 @@ describe('project serialization', () => {
   });
 
   it('rejects unsupported schema versions', () => {
-    const serialized = serializeProject(makeProject()).replace('"schemaVersion": 8', '"schemaVersion": 99');
+    const serialized = serializeProject(makeProject()).replace(
+      `"schemaVersion": ${PROJECT_SCHEMA_VERSION}`,
+      '"schemaVersion": 99',
+    );
 
     expect(() => deserializeProject(serialized)).toThrow('Unsupported project schema version: 99');
   });
@@ -101,7 +104,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 1;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(8);
+    expect(deserialized.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
     expect(deserialized.environmentSources[0]?.type).toBe('light');
   });
 
@@ -110,7 +113,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 2;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(8);
+    expect(deserialized.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
     expect(deserialized.devices[0]?.editableProgram).toBeDefined();
   });
 
@@ -119,7 +122,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 3;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(8);
+    expect(deserialized.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
     expect(deserialized.devices[0]?.locked).toBeUndefined();
   });
 
@@ -128,7 +131,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 4;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(8);
+    expect(deserialized.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
     expect(deserialized.devices[0]?.positionPinned).toBeUndefined();
   });
 
@@ -137,7 +140,7 @@ describe('project serialization', () => {
     parsed.schemaVersion = 5;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(8);
+    expect(deserialized.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
   });
 
   it('migrates schema v7 projects to the current schema version with default view options', () => {
@@ -146,7 +149,7 @@ describe('project serialization', () => {
     delete parsed.viewOptions;
 
     const deserialized = deserializeProject(JSON.stringify(parsed));
-    expect(deserialized.schemaVersion).toBe(8);
+    expect(deserialized.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
     expect(deserialized.viewOptions.showRadioRange).toBe(true);
   });
 
@@ -184,6 +187,74 @@ describe('project serialization', () => {
     };
 
     expect(deserializeProject(serializeProject(project))).toEqual(project);
+  });
+
+  it('round-trips temperature sources', () => {
+    const project: SwarmProject = {
+      ...makeProject(),
+      environmentSources: [
+        {
+          id: 'temperature-1',
+          type: 'temperature',
+          name: 'Temperature 1',
+          position: { x: 20, y: 30 },
+          radius: 200,
+          mode: 'constant',
+          temperatureC: 28,
+        },
+        {
+          id: 'temperature-2',
+          type: 'temperature',
+          name: 'Temperature 2',
+          position: { x: 140, y: 120 },
+          radius: 180,
+          mode: 'point',
+          temperatureC: 8,
+        },
+      ],
+    };
+
+    expect(deserializeProject(serializeProject(project))).toEqual(project);
+  });
+
+  it('rejects invalid temperature modes', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as {
+      environmentSources: Array<Record<string, unknown>>;
+    };
+    parsed.environmentSources[0] = {
+      id: 'temperature-1',
+      type: 'temperature',
+      name: 'Temperature 1',
+      position: { x: 20, y: 30 },
+      radius: 200,
+      mode: 'gradient',
+      temperatureC: 28,
+    };
+
+    expect(() => deserializeProject(JSON.stringify(parsed))).toThrow(
+      'Invalid temperature environment source mode: gradient',
+    );
+  });
+
+  it('clamps persisted temperature values to the supported editor range', () => {
+    const parsed = JSON.parse(serializeProject(makeProject())) as {
+      environmentSources: Array<Record<string, unknown>>;
+    };
+    parsed.environmentSources[0] = {
+      id: 'temperature-1',
+      type: 'temperature',
+      name: 'Temperature 1',
+      position: { x: 20, y: 30 },
+      radius: 200,
+      mode: 'constant',
+      temperatureC: 85,
+    };
+
+    const deserialized = deserializeProject(JSON.stringify(parsed));
+    expect(deserialized.environmentSources[0]).toMatchObject({
+      type: 'temperature',
+      temperatureC: 50,
+    });
   });
 
   it('drops persisted editable source from locked devices during deserialization', () => {

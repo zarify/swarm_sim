@@ -1,6 +1,6 @@
 import type { ArtifactKind, RuntimeSource } from '../runtime/types';
 
-export const PROJECT_SCHEMA_VERSION = 8;
+export const PROJECT_SCHEMA_VERSION = 9;
 
 export type ProjectId = string;
 export type DeviceId = string;
@@ -110,13 +110,24 @@ export interface LevelEnvironmentSource extends EnvironmentSourceBase {
   intensity: number;
 }
 
+export type TemperatureEnvironmentSourceMode = 'constant' | 'point';
+
+export interface TemperatureEnvironmentSource extends EnvironmentSourceBase {
+  type: 'temperature';
+  mode: TemperatureEnvironmentSourceMode;
+  temperatureC: number;
+}
+
 export interface MagnetEnvironmentSource extends EnvironmentSourceBase {
   type: 'magnet';
   angleDeg: number;
   strengthMicroTesla: number;
 }
 
-export type EnvironmentSource = LevelEnvironmentSource | MagnetEnvironmentSource;
+export type EnvironmentSource =
+  | LevelEnvironmentSource
+  | TemperatureEnvironmentSource
+  | MagnetEnvironmentSource;
 
 export interface SwarmProject {
   schemaVersion: typeof PROJECT_SCHEMA_VERSION;
@@ -184,7 +195,14 @@ export function defaultDeviceNameForId(deviceId: DeviceId): string {
 }
 
 export function defaultEnvironmentSourceName(source: Pick<EnvironmentSource, 'id' | 'type'>): string {
-  const typeLabel = source.type === 'light' ? 'Light' : source.type === 'sound' ? 'Sound' : 'Magnet';
+  const typeLabel =
+    source.type === 'light'
+      ? 'Light'
+      : source.type === 'sound'
+        ? 'Sound'
+        : source.type === 'temperature'
+          ? 'Temperature'
+          : 'Magnet';
   const suffix = suffixFromId(source.id, `${source.type}-`);
   if (/^\d+$/.test(suffix)) {
     return `${typeLabel} ${suffix}`;

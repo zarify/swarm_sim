@@ -49,6 +49,11 @@ export const SIMULATOR_CANDIDATES: SimulatorCandidate[] = [
         evidence: 'README ready state includes soundLevel and sensor_set can update state values.',
       },
       {
+        id: 'temperature-input',
+        state: 'documented',
+        evidence: 'Simulator board state includes temperature and sensor_set can update it via the iframe API.',
+      },
+      {
         id: 'sound-output',
         state: 'needs-spike',
         evidence: 'README documents mute/unmute but not stable sound output observation for swarm events.',
@@ -126,6 +131,11 @@ export const SIMULATOR_CANDIDATES: SimulatorCandidate[] = [
         id: 'sound-input',
         state: 'documented',
         evidence: 'pxt-microbit DalBoard wires MicrophoneState into the simulator board.',
+      },
+      {
+        id: 'temperature-input',
+        state: 'documented',
+        evidence: 'pxt-microbit DalBoard wires ThermometerState into the simulator board.',
       },
       {
         id: 'sound-output',

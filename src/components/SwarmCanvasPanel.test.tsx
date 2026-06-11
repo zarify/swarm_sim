@@ -341,6 +341,41 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByText('Properties unlocked')).toBeInTheDocument();
   });
 
+  it('shows temperature source controls and device temperature readings', () => {
+    const { container } = render(<SwarmCanvasPanel />);
+
+    expect(screen.getByText('Temp')).toBeInTheDocument();
+    expect(screen.getByText('20 °C')).toBeInTheDocument();
+
+    openSwarmTools();
+    fireEvent.click(screen.getByRole('button', { name: 'Add temperature' }));
+
+    expect(container.querySelectorAll('.source-node--temperature')).toHaveLength(1);
+    expect(screen.getByText('Temperature source')).toBeInTheDocument();
+    expect(screen.getByLabelText('Mode')).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'Temperature (°C)' })).toBeInTheDocument();
+    expect(container.querySelector('.source-radius--temperature-point')).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Mode'), { target: { value: 'point' } });
+    expect(container.querySelector('.source-radius--temperature-point')).toBeInTheDocument();
+
+    const temperatureSlider = screen.getByRole('slider', { name: 'Temperature (°C)' }) as HTMLInputElement;
+    const temperatureValue = screen.getByLabelText('Temperature (°C) value') as HTMLInputElement;
+    fireEvent.change(temperatureValue, { target: { value: '60' } });
+    fireEvent.blur(temperatureValue);
+    expect(temperatureSlider.value).toBe('50');
+    expect(temperatureValue.value).toBe('50');
+
+    fireEvent.change(temperatureValue, { target: { value: '18.7' } });
+    fireEvent.keyDown(temperatureValue, { key: 'Enter' });
+    expect(temperatureSlider.value).toBe('19');
+    expect(temperatureValue.value).toBe('19');
+
+    fireEvent.change(temperatureValue, { target: { value: 'hello' } });
+    expect(temperatureValue).toHaveAttribute('aria-invalid', 'true');
+    expect(temperatureSlider.value).toBe('19');
+  });
+
   it('keeps unlocked source controls editable when the source is pinned', () => {
     if (!FEATURE_FLAGS.light) {
       return;

@@ -13,6 +13,7 @@ export type SimulatorCapabilityId =
   | 'button-input'
   | 'light-input'
   | 'sound-input'
+  | 'temperature-input'
   | 'sound-output'
   | 'radio-output'
   | 'radio-input'
@@ -30,6 +31,7 @@ export const REQUIRED_RUNTIME_CAPABILITY_IDS = [
   'reset-control',
   'light-input',
   'sound-input',
+  'temperature-input',
   'sound-output',
 ] as const satisfies readonly SimulatorCapabilityId[];
 
@@ -45,6 +47,7 @@ export const RUNTIME_CAPABILITY_LABELS: Record<RequiredRuntimeCapabilityId, stri
   'reset-control': 'reset lifecycle',
   'light-input': 'light input',
   'sound-input': 'sound input',
+  'temperature-input': 'temperature input',
   'sound-output': 'sound output',
 };
 
