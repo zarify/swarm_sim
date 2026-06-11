@@ -38,6 +38,7 @@ export interface RuntimeRadioConfig {
 export type RuntimeSensorId =
   | 'lightLevel'
   | 'soundLevel'
+  | 'temperatureC'
   | 'magneticForceX'
   | 'magneticForceY'
   | 'magneticForceZ';

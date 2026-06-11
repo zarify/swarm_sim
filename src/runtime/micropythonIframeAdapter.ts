@@ -14,7 +14,13 @@ import type {
 import type { RuntimeReadiness } from './types';
 
 type ButtonId = 'buttonA' | 'buttonB';
-type SimulatorSensorId = 'lightLevel' | 'soundLevel' | 'compassX' | 'compassY' | 'compassZ';
+type SimulatorSensorId =
+  | 'lightLevel'
+  | 'soundLevel'
+  | 'temperature'
+  | 'compassX'
+  | 'compassY'
+  | 'compassZ';
 
 interface PostMessageTarget {
   postMessage(message: unknown, targetOrigin: string): void;
@@ -1140,6 +1146,8 @@ function toSimulatorRadioRssi(value: number | undefined): number | undefined {
 
 function toMicroPythonSimulatorSensorId(sensor: RuntimeSensorId): SimulatorSensorId {
   switch (sensor) {
+    case 'temperatureC':
+      return 'temperature';
     case 'magneticForceX':
       return 'compassX';
     case 'magneticForceY':

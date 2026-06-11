@@ -27,6 +27,7 @@ export interface DeviceRadioState {
 export interface EnvironmentSensorState {
   lightLevel: number;
   soundLevel: number;
+  temperatureC: number;
   magneticForceX: number;
   magneticForceY: number;
   magneticForceZ: number;
@@ -135,6 +136,7 @@ const DEFAULT_OPTIONS: Required<SimulationOptions> = {
 const DEFAULT_RADIO_GROUP = 0;
 const DEFAULT_RADIO_CHANNEL = 7;
 const SENSOR_MAX_LEVEL = MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel.max;
+const AMBIENT_TEMPERATURE_C = MICROBIT_BUILTIN_SENSOR_DOMAINS.temperatureC.defaultValue;
 const AMBIENT_MAGNETIC_FIELD_MICROTESLA = { x: 0, y: 45 };
 const MAGNET_REFERENCE_DISTANCE_PX = 80;
 const MAGNET_SOFTENING_DISTANCE_PX = 24;
@@ -486,6 +488,8 @@ export function calculateEnvironmentSensors(
   assertPoint(position, 'position');
   let lightLevel = 0;
   let soundLevel = 0;
+  let temperatureC: number = AMBIENT_TEMPERATURE_C;
+  let maxTemperatureDelta = 0;
   let magneticForceX = AMBIENT_MAGNETIC_FIELD_MICROTESLA.x;
   let magneticForceY = AMBIENT_MAGNETIC_FIELD_MICROTESLA.y;
 
@@ -499,6 +503,15 @@ export function calculateEnvironmentSensors(
     } else if (source.type === 'sound') {
       const contribution = calculateSourceContribution(position, source);
       soundLevel = Math.max(soundLevel, contribution);
+    } else if (source.type === 'temperature') {
+      const contribution = calculateTemperatureContribution(position, source);
+      if (contribution !== undefined) {
+        const delta = Math.abs(contribution - AMBIENT_TEMPERATURE_C);
+        if (delta > maxTemperatureDelta) {
+          maxTemperatureDelta = delta;
+          temperatureC = contribution;
+        }
+      }
     } else if (source.type === 'magnet') {
       const contribution = calculateMagnetContribution(position, source);
       magneticForceX += contribution.x;
@@ -526,6 +539,7 @@ export function calculateEnvironmentSensors(
   return {
     lightLevel: clampMicrobitNumericSensor('lightLevel', lightLevel),
     soundLevel: clampMicrobitNumericSensor('soundLevel', soundLevel),
+    temperatureC: clampMicrobitNumericSensor('temperatureC', temperatureC),
     magneticForceX: clampedMagneticForceX,
     magneticForceY: clampedMagneticForceY,
     magneticForceZ: clampedMagneticForceZ,
@@ -848,6 +862,31 @@ function calculateMagnetContribution(
     x: scale * (3 * alignment * direction.x - magnetAxis.x),
     y: scale * (3 * alignment * direction.y - magnetAxis.y),
   };
+}
+
+function calculateTemperatureContribution(
+  position: Point,
+  source: Extract<EnvironmentSource, { type: 'temperature' }>,
+): number | undefined {
+  assertPoint(source.position, `environment source ${source.id} position`);
+  if (!Number.isFinite(source.radius) || source.radius <= 0) {
+    return undefined;
+  }
+  if (!Number.isFinite(source.temperatureC)) {
+    throw new Error(`environment source ${source.id} temperature must be a finite number`);
+  }
+  const distance = distanceBetween(position, source.position);
+  if (distance > source.radius) {
+    return undefined;
+  }
+  if (source.mode === 'constant') {
+    return source.temperatureC;
+  }
+  if (source.mode === 'point') {
+    const falloff = 1 - distance / source.radius;
+    return AMBIENT_TEMPERATURE_C + (source.temperatureC - AMBIENT_TEMPERATURE_C) * falloff;
+  }
+  throw new Error(`environment source ${source.id} mode must be constant or point`);
 }
 
 function resolveOptions(options: SimulationOptions): Required<SimulationOptions> {

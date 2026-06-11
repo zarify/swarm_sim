@@ -1,4 +1,5 @@
 import { evaluateArtifactRuntimeReadiness } from './artifactReadiness';
+import { MICROBIT_BUILTIN_SENSOR_DOMAINS } from './microbitSensorDomains';
 import type {
   MakeCodeRuntimeProgram,
   MicrobitRuntimeAdapter,
@@ -117,9 +118,8 @@ export class MakeCodeRuntimeAdapter implements MicrobitRuntimeAdapter {
     if (!Number.isFinite(value)) {
       return;
     }
-    const min = sensor === 'magneticForceX' || sensor === 'magneticForceY' || sensor === 'magneticForceZ' ? -2000 : 0;
-    const max = sensor === 'magneticForceX' || sensor === 'magneticForceY' || sensor === 'magneticForceZ' ? 2000 : 255;
-    this.sensors[sensor] = Math.max(min, Math.min(max, Math.round(value)));
+    const domain = MICROBIT_BUILTIN_SENSOR_DOMAINS[sensor];
+    this.sensors[sensor] = Math.max(domain.min, Math.min(domain.max, Math.round(value)));
   }
 
   async sendRadio(packet: RuntimeRadioPacket): Promise<void> {
@@ -327,6 +327,7 @@ function makeDefaultSensorValues(): Record<SensorName, number> {
   return {
     lightLevel: 0,
     soundLevel: 0,
+    temperatureC: 20,
     magneticForceX: 0,
     magneticForceY: 45,
     magneticForceZ: 0,
@@ -450,7 +451,8 @@ function parseAllStringLiterals(value: string, pattern: RegExp): string[] {
 
 function parseBarGraphSensors(value: string): SensorName[] {
   const sensors: SensorName[] = [];
-  const pattern = /(led|basic)\.plotBarGraph\(\s*input\.(soundLevel|lightLevel)\(\s*\)\s*,\s*([0-9]+)\s*\)/g;
+  const pattern =
+    /(led|basic)\.plotBarGraph\(\s*input\.(soundLevel|lightLevel|temperature)\(\s*\)\s*,\s*([0-9]+)\s*\)/g;
   for (let match = pattern.exec(value); match; match = pattern.exec(value)) {
     const sensor = toSensorName(match[2]);
     if (!sensor) {
@@ -464,7 +466,7 @@ function parseBarGraphSensors(value: string): SensorName[] {
 function parseValueSensorCalls(value: string, callPattern: RegExp): { name: string; sensor: SensorName }[] {
   const actions: { name: string; sensor: SensorName }[] = [];
   const fullPattern = new RegExp(
-    `${callPattern.source}\\s*\\s*(['"\`])([\\s\\S]*?)\\1\\s*,\\s*input\\.(soundLevel|lightLevel)\\(\\s*\\)\\s*\\)`,
+    `${callPattern.source}\\s*\\s*(['"\`])([\\s\\S]*?)\\1\\s*,\\s*input\\.(soundLevel|lightLevel|temperature)\\(\\s*\\)\\s*\\)`,
     'g',
   );
   for (let match = fullPattern.exec(value); match; match = fullPattern.exec(value)) {
@@ -481,6 +483,9 @@ function parseValueSensorCalls(value: string, callPattern: RegExp): { name: stri
 function toSensorName(value: string | undefined): SensorName | undefined {
   if (value === 'lightLevel' || value === 'soundLevel') {
     return value;
+  }
+  if (value === 'temperature') {
+    return 'temperatureC';
   }
   return undefined;
 }

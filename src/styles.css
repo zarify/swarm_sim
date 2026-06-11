@@ -929,6 +929,16 @@ button:disabled {
   stroke: rgba(105, 247, 255, 0.25);
 }
 
+.source-radius--temperature {
+  fill: rgba(255, 124, 82, 0.09);
+  stroke: rgba(255, 124, 82, 0.28);
+}
+
+.source-radius--temperature-point {
+  fill: url("#temperature-point-glow");
+  stroke: rgba(255, 124, 82, 0.38);
+}
+
 .source-radius--magnet {
   fill: rgba(255, 93, 77, 0.07);
   stroke: rgba(255, 93, 77, 0.28);
@@ -942,6 +952,10 @@ button:disabled {
 
 .source-node--sound .source-core {
   fill: rgba(105, 247, 255, 0.72);
+}
+
+.source-node--temperature .source-core {
+  fill: rgba(255, 124, 82, 0.78);
 }
 
 .source-magnet {
@@ -1661,8 +1675,37 @@ button:disabled {
   align-items: center;
 }
 
+.range-field > label {
+  display: block;
+}
+
 .range-field input {
   accent-color: var(--phosphor);
+}
+
+.range-field__controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 84px;
+  gap: 10px;
+  align-items: center;
+}
+
+.range-field__value {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(110, 215, 255, 0.22);
+  border-radius: 8px;
+  background: rgba(5, 16, 24, 0.72);
+  color: var(--text);
+  font: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.range-field__value[aria-invalid="true"],
+.range-field__value--invalid {
+  border-color: rgba(255, 93, 77, 0.9);
+  box-shadow: 0 0 0 1px rgba(255, 93, 77, 0.35);
 }
 
 @media (max-width: 760px) {

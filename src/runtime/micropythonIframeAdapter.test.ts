@@ -142,13 +142,14 @@ display.show(Image.ARROW_N)`),
     await adapter.setButton('B', false);
     await adapter.setSensor('lightLevel', 200);
     await adapter.setSensor('soundLevel', 64);
+    await adapter.setSensor('temperatureC', 29);
     await adapter.setSensor('magneticForceX', -12);
     await adapter.setSensor('magneticForceY', 45);
     await adapter.setSensor('magneticForceZ', 0);
     await adapter.sendRadio({ data: radioData, signalStrength: -63 });
     const reset = adapter.reset();
-    await waitForMessages(targetWindow, 9);
-    const resetMessage = targetWindow.messages[8]?.message as Record<string, unknown>;
+    await waitForMessages(targetWindow, 10);
+    const resetMessage = targetWindow.messages[9]?.message as Record<string, unknown>;
     eventTarget.dispatchMessage({
       kind: 'reset_complete',
       requestId: String(resetMessage?.requestId ?? ''),
@@ -162,6 +163,7 @@ display.show(Image.ARROW_N)`),
       { message: { kind: 'set_value', id: 'buttonB', value: 0 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'lightLevel', value: 200 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'soundLevel', value: 64 }, targetOrigin: 'https://python-simulator.usermbit.org' },
+      { message: { kind: 'set_value', id: 'temperature', value: 29 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'compassX', value: -12 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'compassY', value: 45 }, targetOrigin: 'https://python-simulator.usermbit.org' },
       { message: { kind: 'set_value', id: 'compassZ', value: 0 }, targetOrigin: 'https://python-simulator.usermbit.org' },
@@ -688,6 +690,7 @@ display.show(Image.ARROW_N)`),
       'MicroPython iframe adapter cannot flash makecode-pxt programs',
     );
     await adapter.setSensor('lightLevel', 300);
+    await adapter.setSensor('temperatureC', 99);
     await adapter.setSensor('magneticForceX', -5000);
     await expect(adapter.setSensor('soundLevel', Number.NaN)).rejects.toThrow(
       'MicroPython simulator sensor value for soundLevel must be finite',
@@ -695,6 +698,10 @@ display.show(Image.ARROW_N)`),
     expect(targetWindow.messages).toEqual([
       {
         message: { kind: 'set_value', id: 'lightLevel', value: 255 },
+        targetOrigin: 'https://python-simulator.usermbit.org',
+      },
+      {
+        message: { kind: 'set_value', id: 'temperature', value: 50 },
         targetOrigin: 'https://python-simulator.usermbit.org',
       },
       {

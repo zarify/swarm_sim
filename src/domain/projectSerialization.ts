@@ -11,6 +11,7 @@ import {
   type VirtualDevice,
 } from './project';
 import type { ArtifactKind, RuntimeSource } from '../runtime/types';
+import { clampMicrobitNumericSensor } from '../runtime/microbitSensorDomains';
 
 export interface SerializedProgramArtifact extends Omit<ProgramArtifact, 'bytes'> {
   bytesBase64?: string;
@@ -55,6 +56,7 @@ function parseSerializedProject(value: unknown): SwarmProject {
     schemaVersion !== 5 &&
     schemaVersion !== 6 &&
     schemaVersion !== 7 &&
+    schemaVersion !== 8 &&
     schemaVersion !== PROJECT_SCHEMA_VERSION
   ) {
     throw new Error(`Unsupported project schema version: ${schemaVersion}`);
@@ -198,11 +200,14 @@ function parseEnvironmentSource(value: unknown, schemaVersion: number): Environm
   const positionPinned =
     expectOptionalBoolean(source.positionPinned, 'environmentSource.positionPinned') ?? false;
 
-  if (type !== 'light' && type !== 'sound' && type !== 'magnet') {
+  if (type !== 'light' && type !== 'sound' && type !== 'temperature' && type !== 'magnet') {
     throw new Error(`Invalid environment source type: ${type}`);
   }
   if (schemaVersion === 1 && type === 'magnet') {
     throw new Error(`Invalid environment source type for schema v1: ${type}`);
+  }
+  if (schemaVersion < 9 && type === 'temperature') {
+    throw new Error(`Invalid environment source type for schema v${schemaVersion}: ${type}`);
   }
 
   const base = {
@@ -229,6 +234,18 @@ function parseEnvironmentSource(value: unknown, schemaVersion: number): Environm
     };
   }
 
+  if (type === 'temperature') {
+    return {
+      ...base,
+      type,
+      mode: parseTemperatureMode(source.mode, 'environmentSource.mode'),
+      temperatureC: clampMicrobitNumericSensor(
+        'temperatureC',
+        expectNumber(source.temperatureC, 'environmentSource.temperatureC'),
+      ),
+    };
+  }
+
   return {
     ...base,
     type,
@@ -244,6 +261,14 @@ function parseCanvasViewOptions(value: unknown, schemaVersion: number) {
   return normalizeCanvasViewOptions({
     showRadioRange: expectOptionalBoolean(viewOptions.showRadioRange, 'viewOptions.showRadioRange'),
   });
+}
+
+function parseTemperatureMode(value: unknown, label: string): 'constant' | 'point' {
+  const mode = expectString(value, label);
+  if (mode === 'constant' || mode === 'point') {
+    return mode;
+  }
+  throw new Error(`Invalid temperature environment source mode: ${mode}`);
 }
 
 function parsePoint(value: unknown, label: string) {

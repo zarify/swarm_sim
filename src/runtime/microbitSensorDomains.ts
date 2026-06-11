@@ -32,14 +32,14 @@ export const MICROBIT_BUILTIN_SENSOR_DOMAINS = {
     unit: 'level',
     notes: 'Microphone level reported by MakeCode input.soundLevel().',
   },
-  // MakeCode input.temperature(): degrees Celsius.
+  // MakeCode input.temperature(): degrees Celsius within the simulator/editor control range.
   temperatureC: {
     kind: 'number',
-    min: -40,
-    max: 85,
+    min: -5,
+    max: 50,
     defaultValue: 20,
     unit: 'degC',
-    notes: 'Board temperature in Celsius as used by input.temperature().',
+    notes: 'Board temperature in Celsius as used by input.temperature() and the MakeCode editor controls.',
   },
   // MakeCode input.compassHeading(): 0..359 degrees.
   compassHeading: {

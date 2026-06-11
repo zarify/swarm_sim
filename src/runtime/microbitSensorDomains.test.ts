@@ -9,6 +9,7 @@ describe('micro:bit sensor domains', () => {
   it('defines documented domains for currently modeled and planned built-in sensors', () => {
     expect(MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel).toMatchObject({ min: 0, max: 255 });
     expect(MICROBIT_BUILTIN_SENSOR_DOMAINS.soundLevel).toMatchObject({ min: 0, max: 255 });
+    expect(MICROBIT_BUILTIN_SENSOR_DOMAINS.temperatureC).toMatchObject({ min: -5, max: 50 });
     expect(MICROBIT_BUILTIN_SENSOR_DOMAINS.compassHeading).toMatchObject({ min: 0, max: 359 });
     expect(MICROBIT_BUILTIN_SENSOR_DOMAINS.magneticForceX).toMatchObject({ min: -2000, max: 2000 });
     expect(MICROBIT_BUILTIN_SENSOR_DOMAINS.accelerationXMg).toMatchObject({ min: -2048, max: 2047 });
@@ -17,6 +18,8 @@ describe('micro:bit sensor domains', () => {
   it('clamps numeric sensor values to domain bounds', () => {
     expect(clampMicrobitNumericSensor('lightLevel', -1)).toBe(0);
     expect(clampMicrobitNumericSensor('lightLevel', 999)).toBe(255);
+    expect(clampMicrobitNumericSensor('temperatureC', -99)).toBe(-5);
+    expect(clampMicrobitNumericSensor('temperatureC', 999)).toBe(50);
     expect(clampMicrobitNumericSensor('compassHeading', 361)).toBe(359);
     expect(clampMicrobitNumericSensor('magneticForceX', -2500)).toBe(-2000);
   });

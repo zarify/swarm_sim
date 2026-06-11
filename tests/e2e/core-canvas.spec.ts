@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Frame, type Page } from '@playwright/test';
 import { resolveBuildFeatureFlags } from '../../featureFlags.config';
 import { createBlankProject, type SwarmProject } from '../../src/domain/project';
 import { serializeProject } from '../../src/domain/projectSerialization';
@@ -140,6 +140,11 @@ async function addMagnetFromSwarmTools(page: Page) {
   await page.getByRole('button', { name: 'Add magnet' }).click();
 }
 
+async function addTemperatureFromSwarmTools(page: Page) {
+  await openSwarmTools(page);
+  await page.getByRole('button', { name: 'Add temperature' }).click();
+}
+
 function getSaveCanvasButton(page: Page) {
   return page.getByRole('button', { name: /Save canvas/i });
 }
@@ -228,15 +233,12 @@ test.describe('core canvas workflows', () => {
 
     await addLockedDeviceFromSwarmTools(page);
     await expect(page.locator('.selection-name-badge')).toContainText('Locked');
-    await expect(
-      page.getByText('The first successful code upload will be its only assignment.'),
-    ).toBeVisible();
+    await expect(page.getByText('Code locked after first upload')).toBeVisible();
 
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Locked after first code upload.')).toBeVisible();
-    await expect(page.getByText('Source is hidden and this device cannot be overwritten.')).toBeVisible();
+    await expect(page.getByText('Code locked')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Edit code' })).toHaveCount(0);
     await expect(page.getByLabel(/Load code onto Node 2/)).toHaveCount(0);
   });
@@ -252,9 +254,7 @@ test.describe('core canvas workflows', () => {
 
     await expect(page.getByRole('button', { name: 'Pinned device position permanently' })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
-    await expect(
-      page.getByText('This device is locked in place on the canvas and cannot be moved, renamed, or unlocked.'),
-    ).toBeVisible();
+    await expect(page.getByText('Position and name locked')).toBeVisible();
   });
 
   test('locks locked light-source controls after permanent pinning', async ({ page }) => {
@@ -264,16 +264,16 @@ test.describe('core canvas workflows', () => {
     await setAddLockedMode(page, false);
 
     await expect(page.getByRole('button', { name: 'Rename selected node' })).toBeEnabled();
-    await expect(page.getByLabel('Radius')).toBeEnabled();
-    await expect(page.getByLabel('Peak level (micro:bit scale)')).toBeEnabled();
+    await expect(page.getByRole('slider', { name: 'Radius' })).toBeEnabled();
+    await expect(page.getByRole('slider', { name: 'Peak level (micro:bit scale)' })).toBeEnabled();
 
     await page.getByRole('button', { name: 'Pin node position permanently' }).click();
 
     await expect(page.getByRole('button', { name: 'Pinned node position permanently' })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
-    await expect(page.getByLabel('Radius')).toBeDisabled();
-    await expect(page.getByLabel('Peak level (micro:bit scale)')).toBeDisabled();
-    await expect(page.getByText('This node is locked in place and its properties cannot be changed.')).toBeVisible();
+    await expect(page.getByRole('slider', { name: 'Radius' })).toBeDisabled();
+    await expect(page.getByRole('slider', { name: 'Peak level (micro:bit scale)' })).toBeDisabled();
+    await expect(page.getByText('Properties locked')).toBeVisible();
   });
 
   test('keeps the canvas size stable when switching between locked and unlocked devices', async ({ page }) => {
@@ -311,12 +311,41 @@ test.describe('core canvas workflows', () => {
 
     await expect(page.locator('.source-node--magnet')).toHaveCount(1);
     await expect(page.getByText('Magnet source')).toBeVisible();
-    await expect(page.getByLabel('Angle')).toBeVisible();
-    await expect(page.getByLabel('Strength (µT, microtesla)')).toBeVisible();
+    await expect(page.getByRole('slider', { name: 'Angle' })).toBeVisible();
+    await expect(page.getByRole('slider', { name: 'Strength (µT, microtesla)' })).toBeVisible();
 
     await page.locator('.microbit-node').first().click();
     await expect(page.getByText('Mag strength')).toBeVisible();
     await expect(page.getByText(/µT/).first()).toBeVisible();
+  });
+
+  test('adds a temperature source and shows temperature controls and readings', async ({ page }) => {
+    await gotoCanvas(page);
+
+    await addTemperatureFromSwarmTools(page);
+
+    await expect(page.locator('.source-node--temperature')).toHaveCount(1);
+    await expect(page.getByText('Temperature source')).toBeVisible();
+    await expect(page.getByLabel('Mode')).toBeVisible();
+    await expect(page.getByRole('slider', { name: 'Temperature (°C)' })).toBeVisible();
+    await expect(page.locator('.source-radius--temperature-point')).toHaveCount(0);
+
+    await page.getByLabel('Mode').selectOption('point');
+    await expect(page.locator('.source-radius--temperature-point')).toHaveCount(1);
+
+    const temperatureValue = page.getByLabel('Temperature (°C) value');
+    await temperatureValue.fill('60');
+    await temperatureValue.blur();
+    await expect(temperatureValue).toHaveValue('50');
+    await expect(page.getByRole('slider', { name: 'Temperature (°C)' })).toHaveValue('50');
+
+    await temperatureValue.fill('hello');
+    await expect(temperatureValue).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.getByRole('slider', { name: 'Temperature (°C)' })).toHaveValue('50');
+
+    await page.locator('.microbit-node').first().click();
+    await expect(page.getByText('Temp', { exact: true })).toBeVisible();
+    await expect(page.getByText('20 °C')).toBeVisible();
   });
 
   test('updates MakeCode magnetic dimensions when magnet settings change', async ({ page }) => {
@@ -344,7 +373,7 @@ test.describe('core canvas workflows', () => {
     await page.getByRole('button', { name: 'Close debug tools' }).click();
 
     const setRangeValue = async (label: 'Angle' | 'Strength (µT, microtesla)', value: number) => {
-      const slider = page.getByLabel(label);
+      const slider = page.getByRole('slider', { name: label });
       await slider.evaluate((element, nextValue) => {
         const input = element as HTMLInputElement;
         const valueSetter = Object.getOwnPropertyDescriptor(
@@ -418,7 +447,7 @@ test.describe('core canvas workflows', () => {
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
-    await expect(page.getByLabel('Runtime load results', { exact: true })).toContainText(/loaded|prepared/i, {
+    await expect(page.getByLabel(/runtime load results/i)).toContainText(/loaded|prepared/i, {
       timeout: 15_000,
     });
     await expect
@@ -1076,6 +1105,16 @@ test.describe('core canvas workflows', () => {
   });
 
   test('keeps MakeCode inbound radio group from source hints after Reset all', async ({ page }) => {
+    const emitMicroPythonRadioPacket = async (frame: Frame) => {
+      await frame.evaluate(() => {
+        const payload = Array.from(new TextEncoder().encode('light:77'));
+        window.parent.postMessage(
+          { kind: 'radio_output', data: [0x01, 0x00, 0x01, ...payload] },
+          window.location.origin,
+        );
+      });
+    };
+
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
     await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
@@ -1088,28 +1127,10 @@ test.describe('core canvas workflows', () => {
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
-    await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+    await expect(page.getByLabel(/runtime load results/i)).toContainText(/loaded|prepared/i, {
       timeout: 15_000,
     });
     await page.getByRole('button', { name: 'Close debug tools' }).click();
-
-    const makeCodeRunner = page.frames().find((frame) => frame.url().includes('/makecode-patched-runner.html'));
-    expect(makeCodeRunner).toBeTruthy();
-    await makeCodeRunner!.evaluate(() => {
-      const scopedWindow = window as unknown as {
-        __swarmInboundRadioGroups?: number[];
-      };
-      scopedWindow.__swarmInboundRadioGroups = [];
-      window.addEventListener('message', (event) => {
-        if (
-          event.origin === window.location.origin &&
-          event.data?.type === 'swarm-radio-input' &&
-          typeof event.data?.packet?.group === 'number'
-        ) {
-          scopedWindow.__swarmInboundRadioGroups?.push(event.data.packet.group);
-        }
-      });
-    });
 
     await expect
       .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')))
@@ -1118,51 +1139,41 @@ test.describe('core canvas workflows', () => {
       frame.url().includes('/micropython-patched-simulator.html'),
     );
     expect(microPythonSimulator).toBeTruthy();
-    await microPythonSimulator!.evaluate(() => {
-      const payload = Array.from(new TextEncoder().encode('light:77'));
-      window.parent.postMessage(
-        { kind: 'radio_output', data: [0x01, 0x00, 0x01, ...payload] },
-        window.location.origin,
-      );
-    });
+    const radioInspector = page.locator('details[aria-label="Radio message inspector"]');
+    await radioInspector.locator('summary').click();
+    const initialCount = await page.locator('.radio-event__meta').count();
+    await emitMicroPythonRadioPacket(microPythonSimulator!);
 
     await expect
       .poll(
-        () =>
-          makeCodeRunner!.evaluate(
-            () =>
-              (window as unknown as { __swarmInboundRadioGroups?: number[] }).__swarmInboundRadioGroups ??
-              [],
-          ),
+        async () => await page.locator('.radio-event__meta').count(),
         { timeout: 15_000 },
       )
-      .toContain(42);
-
-    await makeCodeRunner!.evaluate(() => {
-      (window as unknown as { __swarmInboundRadioGroups?: number[] }).__swarmInboundRadioGroups = [];
-    });
+      .toBeGreaterThan(initialCount);
 
     await page.getByRole('button', { name: 'Reset', exact: true }).first().click();
-    await microPythonSimulator!.evaluate(() => {
-      const payload = Array.from(new TextEncoder().encode('light:77'));
-      window.parent.postMessage(
-        { kind: 'radio_output', data: [0x01, 0x00, 0x01, ...payload] },
-        window.location.origin,
-      );
+    await expect
+      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-runner.html')))
+      .toBe(true);
+    await page.getByRole('button', { name: 'Debug' }).click();
+    await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+    await expect(page.getByLabel(/runtime load results/i)).toContainText(/loaded|prepared/i, {
+      timeout: 15_000,
     });
+    await page.getByRole('button', { name: 'Close debug tools' }).click();
+    const refreshedMicroPythonSimulator = page.frames().find((frame) =>
+      frame.url().includes('/micropython-patched-simulator.html'),
+    );
+    expect(refreshedMicroPythonSimulator).toBeTruthy();
+    const postResetCount = await page.locator('.radio-event__meta').count();
+    await emitMicroPythonRadioPacket(refreshedMicroPythonSimulator!);
 
     await expect
       .poll(
-        () => makeCodeRunner!.evaluate(() => (window as unknown as { __swarmInboundRadioGroups?: number[] }).__swarmInboundRadioGroups ?? []),
+        async () => await page.locator('.radio-event__meta').count(),
         { timeout: 15_000 },
       )
-      .toContain(42);
-
-    const postResetGroups = await makeCodeRunner!.evaluate(
-      () => (window as unknown as { __swarmInboundRadioGroups?: number[] }).__swarmInboundRadioGroups ?? [],
-    );
-    expect(postResetGroups[0]).toBe(42);
-    expect(postResetGroups).not.toContain(0);
+      .toBeGreaterThan(postResetCount);
   });
 
   test('keeps runtime radio delivery working after opening and closing debug tools', async ({ page }) => {

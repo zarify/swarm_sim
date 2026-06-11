@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type ChangeEvent,
@@ -160,6 +161,9 @@ const buttonPulseMs = 110;
 const AB_BUTTONS = ['A', 'B'] as const;
 const MICROBIT_SENSOR_LEVEL_MIN = MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel.min;
 const MICROBIT_SENSOR_LEVEL_MAX = MICROBIT_BUILTIN_SENSOR_DOMAINS.lightLevel.max;
+const MICROBIT_TEMPERATURE_MIN = MICROBIT_BUILTIN_SENSOR_DOMAINS.temperatureC.min;
+const MICROBIT_TEMPERATURE_MAX = MICROBIT_BUILTIN_SENSOR_DOMAINS.temperatureC.max;
+const MICROBIT_TEMPERATURE_DEFAULT = MICROBIT_BUILTIN_SENSOR_DOMAINS.temperatureC.defaultValue;
 const MICROBIT_MAGNETIC_STRENGTH_MIN = 0;
 const MICROBIT_MAGNETIC_STRENGTH_MAX = MICROBIT_BUILTIN_SENSOR_DOMAINS.magneticFieldStrength.max;
 const RADIO_GROUP_MIN = 0;
@@ -647,7 +651,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           ? { x: 220, y: 360 }
           : type === 'sound'
             ? { x: 650, y: 140 }
-            : { x: 640, y: 360 };
+            : type === 'temperature'
+              ? { x: 220, y: 140 }
+              : { x: 640, y: 360 };
       const source: EnvironmentSource =
         type === 'magnet'
           ? {
@@ -659,6 +665,16 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               angleDeg: 0,
               strengthMicroTesla: 160,
             }
+          : type === 'temperature'
+            ? {
+                id,
+                type: 'temperature',
+                name: defaultEnvironmentSourceName({ id, type }),
+                position,
+                radius: 180,
+                mode: 'constant',
+                temperatureC: MICROBIT_TEMPERATURE_DEFAULT + 8,
+              }
           : {
               id,
               type,
@@ -2176,6 +2192,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   Add magnet
                 </button>
               ) : null}
+              <button
+                type="button"
+                onClick={() => addSource('temperature', { locked: isAddLockedEnabled })}
+                title={isAddLockedEnabled ? 'Add locked temperature source' : 'Add temperature source'}
+              >
+                Add temperature
+              </button>
               <label className="toggle-field canvas-state-toggle">
                 <input
                   type="checkbox"
@@ -2350,6 +2373,11 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                 <stop offset="0%" stopColor="rgba(255, 176, 46, 0.28)" />
                 <stop offset="100%" stopColor="rgba(255, 176, 46, 0)" />
               </radialGradient>
+              <radialGradient id="temperature-point-glow">
+                <stop offset="0%" stopColor="rgba(255, 124, 82, 0.42)" />
+                <stop offset="45%" stopColor="rgba(255, 124, 82, 0.18)" />
+                <stop offset="100%" stopColor="rgba(255, 124, 82, 0)" />
+              </radialGradient>
               <radialGradient id="runtime-sound-glow">
                 <stop offset="0%" stopColor="rgba(255, 176, 46, 0.36)" />
                 <stop offset="62%" stopColor="rgba(255, 176, 46, 0.14)" />
@@ -2383,7 +2411,11 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
             {visibleEnvironmentSources.map((source) => (
               <circle
                 key={`${source.id}-radius`}
-                className={`source-radius source-radius--${source.type}`}
+                className={`source-radius source-radius--${source.type}${
+                  source.type === 'temperature' && source.mode === 'point'
+                    ? ' source-radius--temperature-point'
+                    : ''
+                }`}
                 cx={source.position.x}
                 cy={source.position.y}
                 r={source.radius}
@@ -2441,7 +2473,11 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   <>
                     <circle className="source-core" r="16" />
                     <text y="5" textAnchor="middle">
-                      {source.type === 'light' ? 'L' : 'S'}
+                      {source.type === 'light'
+                        ? 'L'
+                        : source.type === 'sound'
+                          ? 'S'
+                          : 'T'}
                     </text>
                   </>
                 )}
@@ -2852,6 +2888,10 @@ function DeviceSelection({
               <dt>Sound</dt>
               <dd>{runtime.sensors.soundLevel}</dd>
             </div>
+            <div>
+              <dt>Temp</dt>
+              <dd>{runtime.sensors.temperatureC} °C</dd>
+            </div>
             {showMagneticReadings ? (
               <>
                 <div>
@@ -2976,7 +3016,7 @@ function SourceSelection({
   onCommitRename: () => void;
   onCancelRename: () => void;
 }) {
-  const peakLevel = source.type === 'magnet' ? 0 : intensityToSensorLevel(source.intensity);
+  const peakLevel = source.type === 'light' || source.type === 'sound' ? intensityToSensorLevel(source.intensity) : 0;
   const locked = source.locked === true;
   const positionPinned = isPositionPinned(source);
   const propertiesLocked = isLockedNodeReadOnly(source);
@@ -3002,7 +3042,13 @@ function SourceSelection({
         renameDisabledTitle="Pinned locked nodes cannot be renamed"
       />
       <p className="hint">
-        {source.type === 'light' ? 'Light source' : source.type === 'sound' ? 'Sound source' : 'Magnet source'}
+        {source.type === 'light'
+          ? 'Light source'
+          : source.type === 'sound'
+            ? 'Sound source'
+            : source.type === 'temperature'
+              ? 'Temperature source'
+              : 'Magnet source'}
       </p>
       <div className="selection-actions">
         <button type="button" onClick={onDeleteNode}>
@@ -3020,67 +3066,174 @@ function SourceSelection({
           <p>{positionPinned ? 'Properties locked' : 'Properties unlocked'}</p>
         </div>
       ) : null}
-      <label className="range-field">
-        Radius
-        <input
-          type="range"
-          min="40"
-          max="280"
-          value={source.radius}
-          disabled={propertiesLocked}
-          onChange={(event) => updateSource(source.id, { radius: Number(event.target.value) })}
-        />
-      </label>
+      <RangeValueField
+        label="Radius"
+        min={40}
+        max={280}
+        step={1}
+        value={source.radius}
+        disabled={propertiesLocked}
+        onValueChange={(radius) => updateSource(source.id, { radius })}
+      />
       {source.type === 'magnet' ? (
         <>
-          <label className="range-field">
-            Angle
-            <input
-              type="range"
-              min="0"
-              max="359"
-              step="1"
-              value={source.angleDeg}
-              disabled={propertiesLocked}
-              onChange={(event) => updateSource(source.id, { angleDeg: Number(event.target.value) })}
-            />
-          </label>
-          <label className="range-field">
-            Strength (µT, microtesla)
-            <input
-              type="range"
-              min={MICROBIT_MAGNETIC_STRENGTH_MIN}
-              max={MICROBIT_MAGNETIC_STRENGTH_MAX}
-              step="1"
-              value={source.strengthMicroTesla}
-              disabled={propertiesLocked}
-              onChange={(event) =>
-                updateSource(source.id, {
-                  strengthMicroTesla: Number(event.target.value),
-                })
-              }
-            />
-          </label>
-        </>
-      ) : (
-        <label className="range-field">
-          Peak level (micro:bit scale)
-          <input
-            type="range"
-            min={MICROBIT_SENSOR_LEVEL_MIN}
-            max={MICROBIT_SENSOR_LEVEL_MAX}
-            step="1"
-            value={peakLevel}
+          <RangeValueField
+            label="Angle"
+            min={0}
+            max={359}
+            step={1}
+            value={source.angleDeg}
             disabled={propertiesLocked}
-            onChange={(event) =>
+            onValueChange={(angleDeg) => updateSource(source.id, { angleDeg })}
+          />
+          <RangeValueField
+            label="Strength (µT, microtesla)"
+            min={MICROBIT_MAGNETIC_STRENGTH_MIN}
+            max={MICROBIT_MAGNETIC_STRENGTH_MAX}
+            step={1}
+            value={source.strengthMicroTesla}
+            disabled={propertiesLocked}
+            onValueChange={(strengthMicroTesla) =>
               updateSource(source.id, {
-                intensity: sensorLevelToIntensity(Number(event.target.value)),
+                strengthMicroTesla,
               })
             }
           />
-        </label>
+        </>
+      ) : source.type === 'temperature' ? (
+        <>
+          <label className="range-field">
+            Mode
+            <select
+              value={source.mode}
+              disabled={propertiesLocked}
+              onChange={(event) =>
+                updateSource(source.id, {
+                  mode: event.target.value === 'point' ? 'point' : 'constant',
+                })
+              }
+            >
+              <option value="constant">Constant zone</option>
+              <option value="point">Point source</option>
+            </select>
+          </label>
+          <RangeValueField
+            label="Temperature (°C)"
+            min={MICROBIT_TEMPERATURE_MIN}
+            max={MICROBIT_TEMPERATURE_MAX}
+            step={1}
+            value={source.temperatureC}
+            disabled={propertiesLocked}
+            onValueChange={(temperatureC) =>
+              updateSource(source.id, {
+                temperatureC,
+              })
+            }
+          />
+        </>
+      ) : (
+        <RangeValueField
+          label="Peak level (micro:bit scale)"
+          min={MICROBIT_SENSOR_LEVEL_MIN}
+          max={MICROBIT_SENSOR_LEVEL_MAX}
+          step={1}
+          value={peakLevel}
+          disabled={propertiesLocked}
+          onValueChange={(level) =>
+            updateSource(source.id, {
+              intensity: sensorLevelToIntensity(level),
+            })
+          }
+        />
       )}
     </>
+  );
+}
+
+function RangeValueField({
+  label,
+  min,
+  max,
+  step,
+  value,
+  disabled = false,
+  onValueChange,
+}: {
+  label: string;
+  min: number;
+  max: number;
+  step: number;
+  value: number;
+  disabled?: boolean;
+  onValueChange: (nextValue: number) => void;
+}) {
+  const rangeId = useId();
+  const expectsInteger = Number.isInteger(step);
+  const [draft, setDraft] = useState(() => formatRangeValue(value, expectsInteger));
+  const [isInvalid, setIsInvalid] = useState(false);
+
+  useEffect(() => {
+    setDraft(formatRangeValue(value, expectsInteger));
+    setIsInvalid(false);
+  }, [expectsInteger, value]);
+
+  function commitDraft(nextDraft: string) {
+    const parsed = parseRangeDraft(nextDraft);
+    if (parsed === undefined) {
+      setDraft(nextDraft);
+      setIsInvalid(nextDraft.trim().length > 0);
+      return;
+    }
+    const normalized = normalizeRangeValue(parsed, min, max, expectsInteger);
+    setDraft(formatRangeValue(normalized, expectsInteger));
+    setIsInvalid(false);
+    if (normalized !== value) {
+      onValueChange(normalized);
+    }
+  }
+
+  return (
+    <div className="range-field">
+      <label htmlFor={rangeId}>{label}</label>
+      <div className="range-field__controls">
+        <input
+          id={rangeId}
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => {
+            const nextValue = normalizeRangeValue(Number(event.target.value), min, max, expectsInteger);
+            setDraft(formatRangeValue(nextValue, expectsInteger));
+            setIsInvalid(false);
+            onValueChange(nextValue);
+          }}
+        />
+        <input
+          className={isInvalid ? 'range-field__value range-field__value--invalid' : 'range-field__value'}
+          type="text"
+          inputMode={expectsInteger ? 'numeric' : 'decimal'}
+          aria-invalid={isInvalid}
+          aria-label={`${label} value`}
+          value={draft}
+          disabled={disabled}
+          onChange={(event) => {
+            const nextDraft = event.target.value;
+            setDraft(nextDraft);
+            setIsInvalid(nextDraft.trim().length > 0 && !isPotentialNumericDraft(nextDraft));
+          }}
+          onBlur={(event) => commitDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commitDraft(draft);
+            }
+          }}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -4343,6 +4496,33 @@ function normalizeRuntimeRadioPacket(
   }
 
   return { packet: normalized, diagnostics };
+}
+
+function formatRangeValue(value: number, expectsInteger: boolean): string {
+  return expectsInteger ? String(Math.round(value)) : String(value);
+}
+
+function parseRangeDraft(value: string): number | undefined {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || !isPotentialNumericDraft(trimmed)) {
+    return undefined;
+  }
+  const numeric = Number(trimmed);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function isPotentialNumericDraft(value: string): boolean {
+  return /^-?(?:\d+\.?\d*|\.\d+)?$/.test(value.trim());
+}
+
+function normalizeRangeValue(
+  value: number,
+  min: number,
+  max: number,
+  expectsInteger: boolean,
+): number {
+  const clamped = clampNumber(value, min, max);
+  return expectsInteger ? Math.round(clamped) : clamped;
 }
 
 function clampNumber(value: number, min: number, max: number): number {

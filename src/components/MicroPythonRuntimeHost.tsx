@@ -39,6 +39,7 @@ const MICRO_PYTHON_DISPLAY_COALESCE_WINDOW_MS = 24;
 const RUNTIME_SENSOR_ORDER: RuntimeSensorId[] = [
   'lightLevel',
   'soundLevel',
+  'temperatureC',
   'magneticForceX',
   'magneticForceY',
   'magneticForceZ',

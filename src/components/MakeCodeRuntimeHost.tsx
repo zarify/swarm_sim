@@ -65,6 +65,7 @@ const RESET_RUNNER_READY_TIMEOUT_MS = 8_000;
 const RUNTIME_SENSOR_ORDER: RuntimeSensorId[] = [
   'lightLevel',
   'soundLevel',
+  'temperatureC',
   'magneticForceX',
   'magneticForceY',
   'magneticForceZ',
