@@ -13,7 +13,7 @@ ARCHIVE_NAME="${PACKAGE_NAME}-v${VERSION}.zip"
 ARCHIVE_PATH="${OUTPUT_DIR}/${ARCHIVE_NAME}"
 TAG="v${VERSION}"
 
-if ! git diff-index --quiet HEAD --; then
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   echo "Refusing to package: worktree has uncommitted tracked changes." >&2
   exit 1
 fi
