@@ -5,7 +5,9 @@ import {
   useState,
   type ChangeEvent,
   type DragEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
+  type ReactNode,
 } from 'react';
 import { flushSync } from 'react-dom';
 import { zipSync } from 'fflate';
@@ -174,7 +176,7 @@ const ENABLE_RADIO_DEBUG_LOGS = import.meta.env.DEV;
 const APP_VERSION_LABEL = `v${__APP_VERSION__}`;
 const APP_REPOSITORY_URL = __APP_REPO_URL__;
 const MAX_CANVAS_NODE_NAME = 11;
-const MAX_SIDEBAR_NODE_NAME = 28;
+const MAX_SELECTION_NODE_NAME = 28;
 const textEncoder = new TextEncoder();
 export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanvasPanelProps = {}) {
   const [model, setModel] = useState<CanvasModel>(() => {
@@ -204,7 +206,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const [artifactUploadIssues, setArtifactUploadIssues] = useState<Record<DeviceId, ArtifactUploadIssue>>({});
   const [artifactUploadState, setArtifactUploadState] = useState<Record<DeviceId, ArtifactUploadState>>({});
   const [runtimeErrorByDevice, setRuntimeErrorByDevice] = useState<Record<DeviceId, string>>({});
-  const [isSidebarDragActive, setIsSidebarDragActive] = useState(false);
+  const [activeCanvasInspector, setActiveCanvasInspector] = useState<'radio' | 'runtime' | null>(null);
+  const [hexDropDeviceId, setHexDropDeviceId] = useState<DeviceId | null>(null);
   const [renameTarget, setRenameTarget] = useState<RenamableSelection | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [editorDeviceId, setEditorDeviceId] = useState<DeviceId | null>(null);
@@ -212,7 +215,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const [hasSavedWorkingCopy, setHasSavedWorkingCopy] = useState(false);
   const [isResetActionPending, setIsResetActionPending] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const sidebarRef = useRef<HTMLElement | null>(null);
+  const canvasWrapRef = useRef<HTMLDivElement | null>(null);
+  const fieldRef = useRef<SVGRectElement | null>(null);
+  const radioInspectorButtonRef = useRef<HTMLButtonElement | null>(null);
+  const runtimeLogButtonRef = useRef<HTMLButtonElement | null>(null);
   const bundleDropAreaRef = useRef<HTMLDivElement | null>(null);
   const modelRef = useRef(model);
   const uploadTokens = useRef(new Map<DeviceId, number>());
@@ -229,6 +235,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
   const nextDeviceNumber = useRef(model.project.devices.length + 1);
   const nextSourceNumber = useRef(nextEnvironmentSourceNumber(model.project.environmentSources));
   const capturedPointerId = useRef<number | null>(null);
+  const dragGrabOffset = useRef<Point | null>(null);
+  const dragStartClient = useRef<Point | null>(null);
   const browserProjectStore = useRef<BrowserProjectStore | undefined>(undefined);
   const browserWorkingCopyStore = useRef<BrowserWorkingCopyStore | undefined>(undefined);
   const hasHydratedWorkingCopy = useRef(false);
@@ -245,6 +253,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     selected.type === 'source'
       ? visibleEnvironmentSources.find((source) => source.id === selected.id)
       : undefined;
+  const selectionPosition = selectedDevice?.position ?? selectedSource?.position;
+  const selectedDeviceLogs = selectedDevice
+    ? simulationState.deviceLogs.filter((log) => log.deviceId === selectedDevice.id)
+    : [];
   const editorDevice =
     editorDeviceId === null
       ? undefined
@@ -365,7 +377,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     function handleWindowFileDrag(event: globalThis.DragEvent) {
       if (
         shouldGuardGlobalFileDrop(event, [
-          sidebarRef.current,
+          canvasWrapRef.current,
           bundleDropAreaRef.current,
         ])
       ) {
@@ -424,6 +436,12 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     window.addEventListener('keydown', handleEscape);
     return () => window.removeEventListener('keydown', handleEscape);
   }, [isInstructionsEditorOpen]);
+
+  useEffect(() => {
+    if (activeCanvasInspector === 'runtime' && !selectedDevice) {
+      setActiveCanvasInspector(null);
+    }
+  }, [activeCanvasInspector, selectedDevice]);
 
   useEffect(() => {
     if (!editorDeviceId) {
@@ -811,18 +829,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     }
   }
 
-  function resetSelectedDevice() {
-    if (!selectedDevice) {
-      return;
-    }
-    const deviceId = selectedDevice.id;
-    const nextNonce = runtimeResetNonce.current + 1;
-    runtimeResetNonce.current = nextNonce;
-    setRuntimeResetRequest({
-      nonce: nextNonce,
-      deviceIds: [deviceId],
-      actionLabel: 'device reset',
-    });
+  /** Transient per-device runtime presentation shared by reset and code unload. */
+  function clearDeviceRuntimePresentation(deviceId: DeviceId) {
     setDisplaySnapshots((current) => removeDisplaySnapshot(current, deviceId));
     setRuntimeActivity((current) => {
       if (!current[deviceId]) {
@@ -855,6 +863,92 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     clearRuntimeSoundEmitterState(deviceId);
   }
 
+  function resetSelectedDevice() {
+    if (!selectedDevice) {
+      return;
+    }
+    const deviceId = selectedDevice.id;
+    const nextNonce = runtimeResetNonce.current + 1;
+    runtimeResetNonce.current = nextNonce;
+    setRuntimeResetRequest({
+      nonce: nextNonce,
+      deviceIds: [deviceId],
+      actionLabel: 'device reset',
+    });
+    clearDeviceRuntimePresentation(deviceId);
+  }
+
+  /**
+   * Remove a device's code assignment without deleting the device. Assignment
+   * changes tear the runtime down through the runtime host; no reset is issued.
+   */
+  function unloadDeviceCode(deviceId: DeviceId): boolean {
+    const isEligible = () => {
+      const candidate = modelRef.current.project.devices.find((device) => device.id === deviceId);
+      return Boolean(
+        candidate &&
+          !candidate.locked &&
+          candidate.programArtifactId &&
+          artifactUploadState[deviceId] !== 'uploading',
+      );
+    };
+    if (!isEligible()) {
+      return false;
+    }
+    const device = modelRef.current.project.devices.find((candidate) => candidate.id === deviceId)!;
+    const filename = artifactName(modelRef.current.project, device.programArtifactId!);
+    if (
+      typeof window !== 'undefined' &&
+      typeof window.confirm === 'function' &&
+      !window.confirm(
+        `Unload ${filename} from ${device.name}? Saved code edits for this device will be removed.`,
+      )
+    ) {
+      return false;
+    }
+    if (!isEligible()) {
+      return false;
+    }
+
+    uploadTokens.current.set(deviceId, (uploadTokens.current.get(deviceId) ?? 0) + 1);
+    updateProject((current) => ({
+      ...current,
+      artifacts: replaceDeviceArtifact(current, deviceId),
+      devices: current.devices.map((candidate) =>
+        candidate.id === deviceId
+          ? { ...candidate, programArtifactId: undefined, editableProgram: undefined }
+          : candidate,
+      ),
+    }));
+    clearDeviceRuntimePresentation(deviceId);
+    setRuntimeLoadResults((current) => current.filter((result) => result.deviceId !== deviceId));
+    setArtifactUploadState((current) => {
+      if (!(deviceId in current)) {
+        return current;
+      }
+      const { [deviceId]: _removed, ...rest } = current;
+      return rest;
+    });
+    setArtifactUploadIssues((current) => {
+      if (!(deviceId in current)) {
+        return current;
+      }
+      const { [deviceId]: _removed, ...rest } = current;
+      return rest;
+    });
+    setRuntimeDataLogs((current) => {
+      if (!(deviceId in current)) {
+        return current;
+      }
+      const { [deviceId]: _removed, ...rest } = current;
+      return rest;
+    });
+    setEditorDeviceId((current) => (current === deviceId ? null : current));
+    pendingRadioConfigHints.current.delete(deviceId);
+    recentRoutedPackets.current.delete(deviceId);
+    return true;
+  }
+
   function toggleDevicePositionPin(deviceId: DeviceId) {
     const device = modelRef.current.project.devices.find((candidate) => candidate.id === deviceId);
     if (!device) {
@@ -866,6 +960,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     const nextPinned = !isPositionPinned(device);
     if (nextPinned) {
       releaseCanvasPointer();
+      dragGrabOffset.current = null;
+      dragStartClient.current = null;
       setDragTarget((current) =>
         current?.type === 'device' && current.id === deviceId ? null : current,
       );
@@ -896,6 +992,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     const nextPinned = !isPositionPinned(source);
     if (nextPinned) {
       releaseCanvasPointer();
+      dragGrabOffset.current = null;
+      dragStartClient.current = null;
       setDragTarget((current) =>
         current?.type === 'source' && current.id === sourceId ? null : current,
       );
@@ -972,19 +1070,23 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     });
   }
 
+  function reportLockedCodeUpload(device: Pick<VirtualDevice, 'id' | 'name'>) {
+    setArtifactUploadIssues((current) => ({
+      ...current,
+      [device.id]: {
+        severity: 'warning',
+        message: `${device.name} is locked after its first successful code upload.`,
+      },
+    }));
+  }
+
   async function uploadArtifactForDevice(deviceId: DeviceId, file: File) {
     const device = modelRef.current.project.devices.find((candidate) => candidate.id === deviceId);
     if (!device) {
       return;
     }
     if (!canAssignDeviceCode(device, artifactUploadState[deviceId])) {
-      setArtifactUploadIssues((current) => ({
-        ...current,
-        [deviceId]: {
-          severity: 'warning',
-          message: `${device.name} is locked after its first successful code upload.`,
-        },
-      }));
+      reportLockedCodeUpload(device);
       return;
     }
     const assignedArtifact = device.programArtifactId
@@ -1621,33 +1723,61 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     buttonPulseTimers.current.set(timerKey, timeoutId);
   }
 
-  function updateDragPosition(clientX: number, clientY: number) {
-    if (!dragTarget || !svgRef.current) {
+  function nodeIsMovable(target: DragTarget): boolean {
+    if (target.type === 'device') {
+      return !isPositionPinned(
+        modelRef.current.project.devices.find((device) => device.id === target.id),
+      );
+    }
+    return !isPositionPinned(
+      modelRef.current.project.environmentSources.find((source) => source.id === target.id),
+    );
+  }
+
+  function updateDragPosition(pointerId: number, clientX: number, clientY: number) {
+    if (!dragTarget) {
       return;
     }
-    if (
-      dragTarget.type === 'device' &&
-      isPositionPinned(
-        modelRef.current.project.devices.find((device) => device.id === dragTarget.id),
-      )
-    ) {
+    if (capturedPointerId.current !== null && pointerId !== capturedPointerId.current) {
+      return;
+    }
+    if (!nodeIsMovable(dragTarget)) {
       endDrag();
       return;
     }
-    if (
-      dragTarget.type === 'source' &&
-      isPositionPinned(
-        modelRef.current.project.environmentSources.find((source) => source.id === dragTarget.id),
-      )
-    ) {
+    // A move event carrying the press coordinates is not movement yet: moving on
+    // it would snap a fractional node onto the rounded grid before the drag starts.
+    const startClient = dragStartClient.current;
+    if (startClient && startClient.x === clientX && startClient.y === clientY) {
+      return;
+    }
+    dragStartClient.current = null;
+    const point = clientPointToCanvasPoint(fieldRef.current, clientX, clientY);
+    if (!point) {
+      return;
+    }
+
+    // Move relative to the grab point so the node never jumps its centre onto the
+    // pointer on the first movement event.
+    const grabOffset = dragGrabOffset.current;
+    const nextPosition = clampPoint({
+      x: point.x + (grabOffset?.x ?? 0),
+      y: point.y + (grabOffset?.y ?? 0),
+    });
+    const target = dragTarget;
+    const currentPosition =
+      target.type === 'device'
+        ? modelRef.current.project.devices.find((device) => device.id === target.id)?.position
+        : modelRef.current.project.environmentSources.find((source) => source.id === target.id)?.position;
+    if (!currentPosition) {
       endDrag();
+      return;
+    }
+    if (currentPosition.x === nextPosition.x && currentPosition.y === nextPosition.y) {
       return;
     }
 
     recordCanvasUserInteraction();
-    const position = clientPointToCanvasPoint(svgRef.current, clientX, clientY);
-    const nextPosition = clampPoint(position);
-    const target = dragTarget;
     setModel((current) => {
       const nextProject = touchProjectUpdatedAt(
         current.project,
@@ -1692,8 +1822,28 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
     capturedPointerId.current = null;
   }
 
+  /**
+   * Start a drag at the pointer's position inside the node. The captured offset
+   * keeps subsequent movement relative, so the node's centre does not snap to
+   * the pointer on the first move.
+   */
+  function beginDrag(target: DragTarget, clientX: number, clientY: number) {
+    const centre =
+      target.type === 'device'
+        ? modelRef.current.project.devices.find((device) => device.id === target.id)?.position
+        : modelRef.current.project.environmentSources.find((source) => source.id === target.id)
+            ?.position;
+    const point = clientPointToCanvasPoint(fieldRef.current, clientX, clientY);
+    dragGrabOffset.current =
+      centre && point ? { x: centre.x - point.x, y: centre.y - point.y } : null;
+    dragStartClient.current = { x: clientX, y: clientY };
+    setDragTarget(target);
+  }
+
   function endDrag() {
     releaseCanvasPointer();
+    dragGrabOffset.current = null;
+    dragStartClient.current = null;
     setDragTarget(null);
   }
 
@@ -1704,46 +1854,101 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
           result.artifactId === selectedDevice.programArtifactId,
       )
     : undefined;
-  const canDropHexToSidebar = Boolean(
-    selectedDevice && canAssignDeviceCode(selectedDevice, artifactUploadState[selectedDevice.id]),
-  );
+  const hexDropDevice = hexDropDeviceId
+    ? project.devices.find((device) => device.id === hexDropDeviceId)
+    : undefined;
 
-  function handleSidebarDragOver(event: DragEvent<HTMLElement>) {
-    if (!canDropHexToSidebar || !event.dataTransfer.types.includes('Files')) {
+  function deviceIdUnderPointer(target: EventTarget | null): DeviceId | undefined {
+    if (!(target instanceof Element)) {
+      return undefined;
+    }
+    const node = target.closest('[data-canvas-device-id]');
+    if (!node || !canvasWrapRef.current?.contains(node)) {
+      return undefined;
+    }
+    return node.getAttribute('data-canvas-device-id') ?? undefined;
+  }
+
+  function hexDropTargetFor(event: DragEvent<HTMLElement>): DeviceId | undefined {
+    const pointerDeviceId = deviceIdUnderPointer(event.target);
+    if (pointerDeviceId !== undefined) {
+      return pointerDeviceId;
+    }
+    return selectedDevice?.id;
+  }
+
+  function isHexDropTargetEligible(deviceId: DeviceId | undefined): boolean {
+    if (!deviceId) {
+      return false;
+    }
+    const device = modelRef.current.project.devices.find((candidate) => candidate.id === deviceId);
+    return Boolean(device && canAssignDeviceCode(device, artifactUploadState[deviceId]));
+  }
+
+  function handleCanvasDragOver(event: DragEvent<HTMLDivElement>) {
+    if (!event.dataTransfer.types.includes('Files')) {
       return;
     }
     event.preventDefault();
-    event.dataTransfer.dropEffect = 'copy';
-    setIsSidebarDragActive(true);
+    const targetId = hexDropTargetFor(event);
+    const eligible = isHexDropTargetEligible(targetId);
+    event.dataTransfer.dropEffect = eligible ? 'copy' : 'none';
+    setHexDropDeviceId(eligible && targetId ? targetId : null);
   }
 
-  function handleSidebarDragLeave(event: DragEvent<HTMLElement>) {
+  function handleCanvasDragLeave(event: DragEvent<HTMLDivElement>) {
     const nextTarget = event.relatedTarget;
     if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
       return;
     }
-    setIsSidebarDragActive(false);
+    setHexDropDeviceId(null);
   }
 
-  function handleSidebarDrop(event: DragEvent<HTMLElement>) {
+  function handleCanvasFileDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
-    setIsSidebarDragActive(false);
-    if (!selectedDevice) {
+    const targetId = hexDropTargetFor(event);
+    setHexDropDeviceId(null);
+    if (targetId === undefined) {
+      return;
+    }
+    const target = modelRef.current.project.devices.find((device) => device.id === targetId);
+    if (!target) {
+      return;
+    }
+    setSelected({ type: 'device', id: target.id });
+    if (artifactUploadState[target.id] === 'uploading') {
+      return;
+    }
+    if (!canAssignDeviceCode(target, artifactUploadState[target.id])) {
+      reportLockedCodeUpload(target);
       return;
     }
     const file = pickFirstHexFile(event.dataTransfer);
     if (!file) {
       setArtifactUploadIssues((current) => ({
         ...current,
-        [selectedDevice.id]: {
+        [target.id]: {
           severity: 'error',
           message: 'Only micro:bit .hex files can be assigned to devices right now',
         },
       }));
-      setArtifactUploadState((current) => ({ ...current, [selectedDevice.id]: 'failed' }));
+      setArtifactUploadState((current) => ({ ...current, [target.id]: 'failed' }));
       return;
     }
-    void uploadArtifactForDevice(selectedDevice.id, file);
+    void uploadArtifactForDevice(target.id, file);
+  }
+
+  function closeCanvasInspector(kind: 'radio' | 'runtime') {
+    setActiveCanvasInspector((current) => (current === kind ? null : current));
+    const trigger =
+      kind === 'radio' ? radioInspectorButtonRef.current : runtimeLogButtonRef.current;
+    if (trigger?.isConnected && !trigger.disabled) {
+      trigger.focus();
+    }
+  }
+
+  function toggleCanvasInspector(kind: 'radio' | 'runtime') {
+    setActiveCanvasInspector((current) => (current === kind ? null : kind));
   }
 
   function setCanvasDirtyState(nextDirtyState: boolean) {
@@ -1773,8 +1978,11 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       recordCanvasUserInteraction();
     }
     releaseCanvasPointer();
+    dragGrabOffset.current = null;
+    dragStartClient.current = null;
     setDragTarget(null);
-    setIsSidebarDragActive(false);
+    setHexDropDeviceId(null);
+    setActiveCanvasInspector(null);
     setIsBundleDropActive(false);
     setIsInstructionsEditorOpen(false);
     setRenameTarget(null);
@@ -2353,16 +2561,83 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
       ) : null}
 
       <div className="swarm-layout">
-        <div className="canvas-wrap">
+        <div
+          ref={canvasWrapRef}
+          className="canvas-wrap"
+          onDragOver={handleCanvasDragOver}
+          onDragLeave={handleCanvasDragLeave}
+          onDrop={handleCanvasFileDrop}
+        >
+          <div className="canvas-hud">
+            {selectionPosition ? (
+              <div className="canvas-hud__coordinates" role="group" aria-label="Node coordinates">
+                X: {formatCanvasCoordinate(selectionPosition.x)} · Y:{' '}
+                {formatCanvasCoordinate(selectionPosition.y)}
+              </div>
+            ) : null}
+            <div className="canvas-hud__diagnostics">
+              <button
+                ref={radioInspectorButtonRef}
+                type="button"
+                className="canvas-control canvas-control--radio"
+                aria-label="Radio inspector"
+                title="Radio inspector"
+                aria-controls="radio-inspector-panel"
+                aria-expanded={activeCanvasInspector === 'radio'}
+                onClick={() => toggleCanvasInspector('radio')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape' && activeCanvasInspector === 'radio') {
+                    event.preventDefault();
+                    closeCanvasInspector('radio');
+                  }
+                }}
+              >
+                <RadioGlyph />
+                <strong>{simulationState.radioEvents.length}</strong>
+              </button>
+              <button
+                ref={runtimeLogButtonRef}
+                type="button"
+                className="canvas-control canvas-control--runtime-log"
+                aria-label="Runtime log"
+                title="Runtime log"
+                aria-controls="runtime-log-panel"
+                aria-expanded={activeCanvasInspector === 'runtime'}
+                disabled={!selectedDevice}
+                onClick={() => toggleCanvasInspector('runtime')}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape' && activeCanvasInspector === 'runtime') {
+                    event.preventDefault();
+                    closeCanvasInspector('runtime');
+                  }
+                }}
+              >
+                <LogGlyph />
+                {selectedDevice ? <strong>{selectedDeviceLogs.length}</strong> : null}
+              </button>
+              <button
+                type="button"
+                className="canvas-control"
+                aria-haspopup="dialog"
+                aria-expanded={isDebugModalOpen}
+                aria-controls="debug-tools-modal"
+                onClick={() => setIsDebugModalOpen(true)}
+              >
+                Debug
+              </button>
+            </div>
+          </div>
           <svg
             ref={svgRef}
             className="swarm-canvas"
             viewBox={`0 0 ${canvasSize.width} ${canvasSize.height}`}
+            preserveAspectRatio="xMidYMid meet"
             role="img"
             aria-label="Draggable micro:bit swarm canvas"
-            onPointerMove={(event) => updateDragPosition(event.clientX, event.clientY)}
+            onPointerMove={(event) => updateDragPosition(event.pointerId, event.clientX, event.clientY)}
             onPointerUp={endDrag}
             onPointerCancel={endDrag}
+            onLostPointerCapture={endDrag}
           >
             <defs>
               <radialGradient id="radio-glow">
@@ -2385,7 +2660,12 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               </radialGradient>
             </defs>
 
-            <rect className="canvas-field" width={canvasSize.width} height={canvasSize.height} />
+            <rect
+              ref={fieldRef}
+              className="canvas-field"
+              width={canvasSize.width}
+              height={canvasSize.height}
+            />
 
             {simulationState.radioLinks
               .filter((link) => link.canCommunicate)
@@ -2453,13 +2733,15 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                 transform={`translate(${source.position.x} ${source.position.y})`}
                 onPointerDown={(event) => {
                   setSelected({ type: 'source', id: source.id });
-                  if (isPositionPinned(source)) {
+                  if (!nodeIsMovable({ type: 'source', id: source.id })) {
                     releaseCanvasPointer();
+                    dragGrabOffset.current = null;
+                    dragStartClient.current = null;
                     setDragTarget(null);
                     return;
                   }
                   captureCanvasPointer(event.pointerId);
-                  setDragTarget({ type: 'source', id: source.id });
+                  beginDrag({ type: 'source', id: source.id }, event.clientX, event.clientY);
                 }}
               >
                 {source.type === 'magnet' ? (
@@ -2501,15 +2783,18 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                   key={device.deviceId}
                   className={`microbit-node ${isSelected ? 'microbit-node--selected' : ''}`}
                   transform={`translate(${device.position.x} ${device.position.y})`}
+                  data-canvas-device-id={device.deviceId}
                   onPointerDown={(event) => {
                     setSelected({ type: 'device', id: device.deviceId });
-                    if (isPositionPinned(projectDevice)) {
+                    if (!nodeIsMovable({ type: 'device', id: device.deviceId })) {
                       releaseCanvasPointer();
+                      dragGrabOffset.current = null;
+                      dragStartClient.current = null;
                       setDragTarget(null);
                       return;
                     }
                     captureCanvasPointer(event.pointerId);
-                    setDragTarget({ type: 'device', id: device.deviceId });
+                    beginDrag({ type: 'device', id: device.deviceId }, event.clientX, event.clientY);
                   }}
                 >
                   <circle
@@ -2618,110 +2903,122 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
               );
             })}
           </svg>
-        </div>
-
-        <aside
-          ref={sidebarRef}
-          className={`swarm-sidebar ${canDropHexToSidebar ? 'swarm-sidebar--drop-enabled' : ''} ${isSidebarDragActive ? 'swarm-sidebar--drag-over' : ''}`}
-          aria-label="Canvas controls and selection details"
-          onDragOver={handleSidebarDragOver}
-          onDragLeave={handleSidebarDragLeave}
-          onDrop={handleSidebarDrop}
-        >
-          {isSidebarDragActive && canDropHexToSidebar ? (
-            <div className="swarm-sidebar-drop-overlay">
-              Drop .hex to load onto <strong>{selectedDevice?.name}</strong>
+          {hexDropDevice ? (
+            <div className="canvas-drop-overlay">
+              Drop .hex to load onto <strong>{hexDropDevice.name}</strong>
             </div>
           ) : null}
+        </div>
 
-          <div className="selection-card">
-            <span className="metric-label">Selection</span>
-            {selectedDevice ? (
-              <>
-                <DeviceSelection
-                  project={project}
-                  runtime={simulationState.devices[selectedDevice.id]}
-                  showMagneticReadings={FEATURE_FLAGS.magnet}
-                  runtimeLoadResult={selectedRuntimeLoadResult}
-                  uploadState={artifactUploadState[selectedDevice.id]}
-                  deviceId={selectedDevice.id}
-                  uploadIssue={artifactUploadIssues[selectedDevice.id]}
-                  runtimeError={runtimeErrorByDevice[selectedDevice.id]}
-                  logs={simulationState.deviceLogs.filter((log) => log.deviceId === selectedDevice.id)}
-                  onResetRuntime={resetSelectedDevice}
-                  onDeleteNode={deleteSelectedNode}
-                  onTogglePositionPin={toggleDevicePositionPin}
-                  onArtifactUpload={uploadArtifactForDevice}
-                  onOpenEditor={openDeviceEditor}
-                  canAssignCode={canAssignDeviceCode(selectedDevice, artifactUploadState[selectedDevice.id])}
-                  isRenaming={renameTarget?.type === 'device' && renameTarget.id === selectedDevice.id}
-                  renameDraft={renameDraft}
-                  onRenameDraftChange={setRenameDraft}
-                  onBeginRename={() => beginRename({ type: 'device', id: selectedDevice.id }, selectedDevice.name)}
-                  onCommitRename={commitRename}
-                  onCancelRename={cancelRename}
-                />
-              </>
-            ) : selectedSource ? (
-              <SourceSelection
-                source={selectedSource}
-                updateSource={updateSource}
-                onDeleteNode={deleteSelectedNode}
-                onTogglePositionPin={toggleSourcePositionPin}
-                isRenaming={renameTarget?.type === 'source' && renameTarget.id === selectedSource.id}
-                renameDraft={renameDraft}
-                onRenameDraftChange={setRenameDraft}
-                onBeginRename={() => beginRename({ type: 'source', id: selectedSource.id }, selectedSource.name)}
-                onCommitRename={commitRename}
-                onCancelRename={cancelRename}
-              />
-            ) : (
-              <p className="hint">Select a node or environmental source.</p>
-            )}
-          </div>
+        <div className="selection-card" aria-label="Canvas controls and selection details">
+          {selectedDevice ? (
+            <DeviceSelection
+              project={project}
+              runtime={simulationState.devices[selectedDevice.id]}
+              showMagneticReadings={FEATURE_FLAGS.magnet}
+              runtimeLoadResult={selectedRuntimeLoadResult}
+              uploadState={artifactUploadState[selectedDevice.id]}
+              deviceId={selectedDevice.id}
+              uploadIssue={artifactUploadIssues[selectedDevice.id]}
+              runtimeError={runtimeErrorByDevice[selectedDevice.id]}
+              onResetRuntime={resetSelectedDevice}
+              onUnloadCode={unloadDeviceCode}
+              onDeleteNode={deleteSelectedNode}
+              onTogglePositionPin={toggleDevicePositionPin}
+              onArtifactUpload={uploadArtifactForDevice}
+              onOpenEditor={openDeviceEditor}
+              canAssignCode={canAssignDeviceCode(selectedDevice, artifactUploadState[selectedDevice.id])}
+              isRenaming={renameTarget?.type === 'device' && renameTarget.id === selectedDevice.id}
+              renameDraft={renameDraft}
+              onRenameDraftChange={setRenameDraft}
+              onBeginRename={() => beginRename({ type: 'device', id: selectedDevice.id }, selectedDevice.name)}
+              onCommitRename={commitRename}
+              onCancelRename={cancelRename}
+            />
+          ) : selectedSource ? (
+            <SourceSelection
+              source={selectedSource}
+              updateSource={updateSource}
+              onDeleteNode={deleteSelectedNode}
+              onTogglePositionPin={toggleSourcePositionPin}
+              isRenaming={renameTarget?.type === 'source' && renameTarget.id === selectedSource.id}
+              renameDraft={renameDraft}
+              onRenameDraftChange={setRenameDraft}
+              onBeginRename={() => beginRename({ type: 'source', id: selectedSource.id }, selectedSource.name)}
+              onCommitRename={commitRename}
+              onCancelRename={cancelRename}
+            />
+          ) : (
+            <p className="hint">Select a node or environmental source.</p>
+          )}
+        </div>
 
-          <details className="radio-inspector-card compact-inspector" aria-label="Radio message inspector">
-            <summary>
-              <span className="metric-label">Radio inspector</span>
-              <strong>{simulationState.radioEvents.length}</strong>
-            </summary>
-            <div className="compact-inspector__body">
-              {simulationState.radioEvents.length === 0 ? (
-                <p className="hint">No packets sent yet.</p>
-              ) : (
-                simulationState.radioEvents
-                  .slice(-6)
-                  .reverse()
-                  .map((event) => {
-                    const senderName =
-                      deviceDisplayNames.get(event.senderId) ?? defaultDeviceNameForId(event.senderId);
-                    return (
-                      <article key={event.id} className="radio-event">
-                        <p className="radio-event__payload">
-                          {formatRadioInspectorPayload(event.data, event.payloadRedacted === true)}
-                        </p>
-                        <p className="radio-event__meta">
-                          {senderName} to {event.recipients.length} received / {event.blockedTargets.length} blocked
-                        </p>
-                      </article>
-                    );
-                  })
-              )}
-            </div>
-          </details>
-          <div className="swarm-sidebar-footer">
-            <button
-              type="button"
-              className="swarm-sidebar-debug-button"
-              aria-haspopup="dialog"
-              aria-expanded={isDebugModalOpen}
-              aria-controls="debug-tools-modal"
-              onClick={() => setIsDebugModalOpen(true)}
-            >
-              Debug
-            </button>
-          </div>
-        </aside>
+        <CanvasInspector
+          id="radio-inspector-panel"
+          label="Radio message inspector"
+          closeLabel="Close radio inspector"
+          open={activeCanvasInspector === 'radio'}
+          onClose={() => closeCanvasInspector('radio')}
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape') {
+              return;
+            }
+            event.preventDefault();
+            closeCanvasInspector('radio');
+          }}
+        >
+          {simulationState.radioEvents.length === 0 ? (
+            <p className="hint">No packets sent yet.</p>
+          ) : (
+            simulationState.radioEvents
+              .slice(-6)
+              .reverse()
+              .map((event) => {
+                const senderName =
+                  deviceDisplayNames.get(event.senderId) ?? defaultDeviceNameForId(event.senderId);
+                return (
+                  <article key={event.id} className="radio-event">
+                    <p className="radio-event__payload">
+                      {formatRadioInspectorPayload(event.data, event.payloadRedacted === true)}
+                    </p>
+                    <p className="radio-event__meta">
+                      {senderName} to {event.recipients.length} received / {event.blockedTargets.length} blocked
+                    </p>
+                  </article>
+                );
+              })
+          )}
+        </CanvasInspector>
+
+        <CanvasInspector
+          id="runtime-log-panel"
+          label="Runtime log"
+          closeLabel="Close runtime log"
+          open={activeCanvasInspector === 'runtime'}
+          subtitle={selectedDevice?.name}
+          onClose={() => closeCanvasInspector('runtime')}
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape') {
+              return;
+            }
+            event.preventDefault();
+            closeCanvasInspector('runtime');
+          }}
+        >
+          {selectedDeviceLogs.length === 0 ? (
+            <p className="hint">No device events yet.</p>
+          ) : (
+            selectedDeviceLogs
+              .slice(-6)
+              .reverse()
+              .map((log) => (
+                <p key={log.id} className="device-log__line">
+                  <span className="device-log__type">{formatDeviceLogType(log.type)}</span>
+                  <span>{formatRuntimeLogMessage(log.message, deviceDisplayNames)}</span>
+                </p>
+              ))
+          )}
+        </CanvasInspector>
       </div>
       <div
         id="debug-tools-modal"
@@ -2788,8 +3085,8 @@ function DeviceSelection({
   uploadState,
   uploadIssue,
   runtimeError,
-  logs,
   onResetRuntime,
+  onUnloadCode,
   onDeleteNode,
   onTogglePositionPin,
   onArtifactUpload,
@@ -2810,8 +3107,8 @@ function DeviceSelection({
   uploadState?: ArtifactUploadState;
   uploadIssue?: ArtifactUploadIssue;
   runtimeError?: string;
-  logs: SimulationState['deviceLogs'];
   onResetRuntime: () => void;
+  onUnloadCode: (deviceId: DeviceId) => boolean;
   onDeleteNode: () => void;
   onTogglePositionPin: (deviceId: DeviceId) => void;
   onArtifactUpload: (deviceId: DeviceId, file: File) => void;
@@ -2824,61 +3121,151 @@ function DeviceSelection({
   onCommitRename: () => void;
   onCancelRename: () => void;
 }) {
+  const uploadButtonRef = useRef<HTMLButtonElement | null>(null);
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const device = project.devices.find((candidate) => candidate.id === deviceId);
   if (!device) {
     return <p className="hint">Device missing from project.</p>;
   }
-  const runtimeLogNames = new Map(project.devices.map((candidate) => [candidate.id, candidate.name] as const));
-  const assignedArtifact = device.programArtifactId
-    ? project.artifacts.find((artifact) => artifact.id === device.programArtifactId)
-    : undefined;
   const editableProgram = getActiveEditableProgram(device);
   const locked = device.locked === true;
   const positionPinned = isPositionPinned(device);
   const renameLocked = isLockedNodeReadOnly(device);
   const pinControl = describePositionPinControl('device', locked, positionPinned);
+  const assignedName = device.programArtifactId
+    ? artifactName(project, device.programArtifactId)
+    : undefined;
+  const uploading = uploadState === 'uploading';
+  const showUpload = canAssignCode || uploading;
+  const showUnload = !locked && Boolean(device.programArtifactId);
+  const failureMessage = uploadIssue
+    ? uploadIssue.message
+    : runtimeError
+      ? runtimeError
+      : runtimeLoadResult?.status === 'failed'
+        ? runtimeLoadResult.diagnostic ?? 'Code could not run.'
+        : undefined;
+  const statusMessage = uploading ? 'Loading…' : failureMessage;
 
   return (
-    <>
-      <SelectionNameEditor
-        displayName={device.name}
-        badge={
-          locked ? (
-            <span className="selection-name-badge" aria-label="Locked device">
-              <span aria-hidden="true">🔒</span> Locked
-            </span>
-          ) : undefined
-        }
-        isRenaming={isRenaming}
-        renameDraft={renameDraft}
-        onRenameDraftChange={onRenameDraftChange}
-        onBeginRename={onBeginRename}
-        onCommitRename={onCommitRename}
-        onCancelRename={onCancelRename}
-        renameDisabled={renameLocked}
-        renameDisabledTitle="Pinned locked nodes cannot be renamed"
-      />
-      <div className="selection-actions">
-        <button type="button" onClick={onResetRuntime} disabled={!device.programArtifactId}>
-          <span aria-hidden="true">↺</span> Reset
-        </button>
-        <button type="button" onClick={onDeleteNode}>
-          <span aria-hidden="true">🗑</span> Delete
-        </button>
-        <PositionPinButton
-          title={pinControl.title}
-          active={positionPinned}
-          disabled={pinControl.disabled}
-          onClick={() => onTogglePositionPin(device.id)}
+    <div className="selection-tracks">
+      <div className="selection-track selection-track--identity">
+        <SelectionNameEditor
+          displayName={device.name}
+          badge={
+            locked ? (
+              <span
+                className="selection-name-badge"
+                aria-label="Locked device: code uploads and edits stay locked"
+                title="Locked after a code upload: uploads and code edits stay locked."
+              >
+                <span aria-hidden="true">🔒</span> Locked
+              </span>
+            ) : undefined
+          }
+          isRenaming={isRenaming}
+          renameDraft={renameDraft}
+          onRenameDraftChange={onRenameDraftChange}
+          onBeginRename={onBeginRename}
+          onCommitRename={onCommitRename}
+          onCancelRename={onCancelRename}
+          renameDisabled={renameLocked}
+          renameDisabledTitle="Pinned locked nodes cannot be renamed"
         />
-        {!locked ? (
-          <button type="button" onClick={() => onOpenEditor(device.id)} disabled={!editableProgram}>
-            <span aria-hidden="true">✎</span> Edit code
+        <div className="selection-actions selection-actions--node">
+          <button type="button" onClick={onDeleteNode} aria-label="Delete node" title="Delete node">
+            <span aria-hidden="true">🗑</span>
           </button>
-        ) : null}
+          <PositionPinButton
+            title={pinControl.title}
+            active={positionPinned}
+            disabled={pinControl.disabled}
+            onClick={() => onTogglePositionPin(device.id)}
+          />
+        </div>
+        <div className="selection-code">
+          <span className="metric-label">Code</span>
+          {showUpload ? (
+            <button
+              ref={uploadButtonRef}
+              type="button"
+              className="selection-code__action"
+              aria-label="Upload code"
+              title="Upload code"
+              aria-busy={uploading}
+              disabled={uploading}
+              onClick={() => uploadInputRef.current?.click()}
+            >
+              <UploadGlyph />
+            </button>
+          ) : null}
+          <span
+            className={
+              assignedName
+                ? 'selection-code__name'
+                : 'selection-code__name selection-code__name--empty'
+            }
+            title={assignedName ?? 'No code'}
+          >
+            {assignedName ?? 'No code'}
+          </span>
+          {editableProgram ? (
+            <button
+              type="button"
+              className="selection-code__action"
+              aria-label="Edit code"
+              title="Edit code"
+              onClick={() => onOpenEditor(device.id)}
+            >
+              <EditGlyph />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="selection-code__action"
+            aria-label="Reset device"
+            title="Reset device"
+            disabled={!device.programArtifactId || uploading}
+            onClick={onResetRuntime}
+          >
+            <ResetGlyph />
+          </button>
+          {showUnload ? (
+            <button
+              type="button"
+              className="selection-code__action selection-code__action--danger"
+              aria-label="Unload code"
+              title="Unload code"
+              disabled={uploading}
+              onClick={() => {
+                if (onUnloadCode(device.id)) {
+                  uploadButtonRef.current?.focus();
+                }
+              }}
+            >
+              <TrashGlyph />
+            </button>
+          ) : null}
+          {showUpload ? (
+            <input
+              ref={uploadInputRef}
+              type="file"
+              accept=".hex"
+              hidden
+              aria-label={`Load code onto ${device.name}`}
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  void onArtifactUpload(device.id, file);
+                }
+                event.currentTarget.value = '';
+              }}
+            />
+          ) : null}
+        </div>
       </div>
       {runtime ? (
-        <>
+        <div className="selection-track selection-track--details">
           <dl className="radio-summary">
             <div>
               <dt>Light</dt>
@@ -2909,87 +3296,21 @@ function DeviceSelection({
               </>
             ) : null}
           </dl>
-        </>
-      ) : null}
-      <details className="device-log compact-inspector" aria-label={`Event log for ${device.name}`}>
-        <summary>
-          <span className="metric-label">Runtime log</span>
-          <strong>{logs.length}</strong>
-        </summary>
-        <div className="compact-inspector__body">
-          {logs.length === 0 ? (
-            <p className="hint">No device events yet.</p>
-          ) : (
-            logs
-              .slice(-6)
-              .reverse()
-              .map((log) => (
-                <p key={log.id} className="device-log__line">
-                  <span className="device-log__type">{formatDeviceLogType(log.type)}</span>
-                  <span>{formatRuntimeLogMessage(log.message, runtimeLogNames)}</span>
-                </p>
-              ))
-          )}
         </div>
-      </details>
-      <div className="selection-artifact-block">
-        {locked ? (
-          <p>{device.programArtifactId ? 'Code locked' : 'Code locked after first upload'}</p>
-        ) : null}
-        {locked && positionPinned ? (
-          <div className="selection-position-lock">
-            <p>Position and name locked</p>
-          </div>
-        ) : null}
-        {canAssignCode ? (
-          <label className="artifact-field artifact-field--compact">
-            Load code onto {device.name}
-            <input
-              type="file"
-              accept=".hex"
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) {
-                  void onArtifactUpload(device.id, file);
-                }
-                event.currentTarget.value = '';
-              }}
-            />
-          </label>
-        ) : null}
-        <p>{device.programArtifactId ? `Assigned: ${artifactName(project, device.programArtifactId)}` : 'No code assigned yet'}</p>
-        {assignedArtifact ? <p>Runtime source: {assignedArtifact.runtimeSource}</p> : null}
-        {editableProgram ? (
-          <p>
-            Editable source: <strong>{editableProgram.revision > 0 ? 'saved changes ready' : 'ready to edit'}</strong>
-          </p>
-        ) : null}
-        {uploadIssue ? (
-          <p className={uploadIssue.severity === 'error' ? 'hint hint--error' : 'hint'}>
-            {uploadIssue.message}
-          </p>
-        ) : null}
-        {uploadState === 'uploading' ? (
-          <p>
-            Runtime: <strong>loading</strong>
-          </p>
-        ) : null}
-        {runtimeLoadResult ? (
-          <p>
-            Runtime: <strong>{runtimeLoadResult.status}</strong>
-          </p>
-        ) : device.programArtifactId && uploadState !== 'uploading' ? (
-          <p>
-            Runtime: <strong>pending</strong>
-          </p>
-        ) : null}
-        {runtimeError ? (
-          <p className="hint hint--error">
-            Runtime: <strong>something went wrong</strong> — {runtimeError}
-          </p>
-        ) : null}
-      </div>
-    </>
+      ) : null}
+      {statusMessage ? (
+        <p
+          className={
+            uploading
+              ? 'selection-status'
+              : `selection-status selection-status--${uploadIssue?.severity ?? 'error'}`
+          }
+          role="status"
+        >
+          {statusMessage}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -3022,131 +3343,134 @@ function SourceSelection({
   const propertiesLocked = isLockedNodeReadOnly(source);
   const pinControl = describePositionPinControl('source', locked, positionPinned);
   return (
-    <>
-      <SelectionNameEditor
-        displayName={source.name}
-        badge={
-          locked ? (
-            <span className="selection-name-badge" aria-label="Locked node">
-              <span aria-hidden="true">🔒</span> Locked
-            </span>
-          ) : undefined
-        }
-        isRenaming={isRenaming}
-        renameDraft={renameDraft}
-        onRenameDraftChange={onRenameDraftChange}
-        onBeginRename={onBeginRename}
-        onCommitRename={onCommitRename}
-        onCancelRename={onCancelRename}
-        renameDisabled={propertiesLocked}
-        renameDisabledTitle="Pinned locked nodes cannot be renamed"
-      />
-      <p className="hint">
-        {source.type === 'light'
-          ? 'Light source'
-          : source.type === 'sound'
-            ? 'Sound source'
-            : source.type === 'temperature'
-              ? 'Temperature source'
-              : 'Magnet source'}
-      </p>
-      <div className="selection-actions">
-        <button type="button" onClick={onDeleteNode}>
-          <span aria-hidden="true">🗑</span> Delete
-        </button>
-        <PositionPinButton
-          title={pinControl.title}
-          active={positionPinned}
-          disabled={pinControl.disabled}
-          onClick={() => onTogglePositionPin(source.id)}
+    <div className="selection-tracks">
+      <div className="selection-track selection-track--identity">
+        <SelectionNameEditor
+          displayName={source.name}
+          badge={
+            locked ? (
+              <span
+                className="selection-name-badge"
+                aria-label="Locked node: source properties stay locked"
+                title="Locked: source properties stay locked."
+              >
+                <span aria-hidden="true">🔒</span> Locked
+              </span>
+            ) : undefined
+          }
+          isRenaming={isRenaming}
+          renameDraft={renameDraft}
+          onRenameDraftChange={onRenameDraftChange}
+          onBeginRename={onBeginRename}
+          onCommitRename={onCommitRename}
+          onCancelRename={onCancelRename}
+          renameDisabled={propertiesLocked}
+          renameDisabledTitle="Pinned locked nodes cannot be renamed"
         />
-      </div>
-      {locked ? (
-        <div className="selection-position-lock">
-          <p>{positionPinned ? 'Properties locked' : 'Properties unlocked'}</p>
+        <span className="selection-source-type">
+          {source.type === 'light'
+            ? 'Light source'
+            : source.type === 'sound'
+              ? 'Sound source'
+              : source.type === 'temperature'
+                ? 'Temperature source'
+                : 'Magnet source'}
+        </span>
+        <div className="selection-actions selection-actions--node">
+          <button type="button" onClick={onDeleteNode} aria-label="Delete node" title="Delete node">
+            <span aria-hidden="true">🗑</span>
+          </button>
+          <PositionPinButton
+            title={pinControl.title}
+            active={positionPinned}
+            disabled={pinControl.disabled}
+            onClick={() => onTogglePositionPin(source.id)}
+          />
         </div>
-      ) : null}
-      <RangeValueField
-        label="Radius"
-        min={40}
-        max={280}
-        step={1}
-        value={source.radius}
-        disabled={propertiesLocked}
-        onValueChange={(radius) => updateSource(source.id, { radius })}
-      />
-      {source.type === 'magnet' ? (
-        <>
-          <RangeValueField
-            label="Angle"
-            min={0}
-            max={359}
-            step={1}
-            value={source.angleDeg}
-            disabled={propertiesLocked}
-            onValueChange={(angleDeg) => updateSource(source.id, { angleDeg })}
-          />
-          <RangeValueField
-            label="Strength (µT, microtesla)"
-            min={MICROBIT_MAGNETIC_STRENGTH_MIN}
-            max={MICROBIT_MAGNETIC_STRENGTH_MAX}
-            step={1}
-            value={source.strengthMicroTesla}
-            disabled={propertiesLocked}
-            onValueChange={(strengthMicroTesla) =>
-              updateSource(source.id, {
-                strengthMicroTesla,
-              })
-            }
-          />
-        </>
-      ) : source.type === 'temperature' ? (
-        <>
-          <label className="range-field">
-            Mode
-            <select
-              value={source.mode}
+      </div>
+      <div className="selection-track selection-track--details">
+        <RangeValueField
+          label="Radius"
+          min={40}
+          max={280}
+          step={1}
+          value={source.radius}
+          disabled={propertiesLocked}
+          onValueChange={(radius) => updateSource(source.id, { radius })}
+        />
+        {source.type === 'magnet' ? (
+          <>
+            <RangeValueField
+              label="Angle"
+              min={0}
+              max={359}
+              step={1}
+              value={source.angleDeg}
               disabled={propertiesLocked}
-              onChange={(event) =>
+              onValueChange={(angleDeg) => updateSource(source.id, { angleDeg })}
+            />
+            <RangeValueField
+              label="Strength (µT, microtesla)"
+              min={MICROBIT_MAGNETIC_STRENGTH_MIN}
+              max={MICROBIT_MAGNETIC_STRENGTH_MAX}
+              step={1}
+              value={source.strengthMicroTesla}
+              disabled={propertiesLocked}
+              onValueChange={(strengthMicroTesla) =>
                 updateSource(source.id, {
-                  mode: event.target.value === 'point' ? 'point' : 'constant',
+                  strengthMicroTesla,
                 })
               }
-            >
-              <option value="constant">Constant zone</option>
-              <option value="point">Point source</option>
-            </select>
-          </label>
+            />
+          </>
+        ) : source.type === 'temperature' ? (
+          <>
+            <label className="range-field">
+              Mode
+              <select
+                value={source.mode}
+                disabled={propertiesLocked}
+                onChange={(event) =>
+                  updateSource(source.id, {
+                    mode: event.target.value === 'point' ? 'point' : 'constant',
+                  })
+                }
+              >
+                <option value="constant">Constant zone</option>
+                <option value="point">Point source</option>
+              </select>
+            </label>
+            <RangeValueField
+              label="Temperature (°C)"
+              min={MICROBIT_TEMPERATURE_MIN}
+              max={MICROBIT_TEMPERATURE_MAX}
+              step={1}
+              value={source.temperatureC}
+              disabled={propertiesLocked}
+              onValueChange={(temperatureC) =>
+                updateSource(source.id, {
+                  temperatureC,
+                })
+              }
+            />
+          </>
+        ) : (
           <RangeValueField
-            label="Temperature (°C)"
-            min={MICROBIT_TEMPERATURE_MIN}
-            max={MICROBIT_TEMPERATURE_MAX}
+            label="Peak level (micro:bit scale)"
+            min={MICROBIT_SENSOR_LEVEL_MIN}
+            max={MICROBIT_SENSOR_LEVEL_MAX}
             step={1}
-            value={source.temperatureC}
+            value={peakLevel}
             disabled={propertiesLocked}
-            onValueChange={(temperatureC) =>
+            onValueChange={(level) =>
               updateSource(source.id, {
-                temperatureC,
+                intensity: sensorLevelToIntensity(level),
               })
             }
           />
-        </>
-      ) : (
-        <RangeValueField
-          label="Peak level (micro:bit scale)"
-          min={MICROBIT_SENSOR_LEVEL_MIN}
-          max={MICROBIT_SENSOR_LEVEL_MAX}
-          step={1}
-          value={peakLevel}
-          disabled={propertiesLocked}
-          onValueChange={(level) =>
-            updateSource(source.id, {
-              intensity: sensorLevelToIntensity(level),
-            })
-          }
-        />
-      )}
-    </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -3285,11 +3609,11 @@ function SelectionNameEditor({
     );
   }
 
-  const sidebarName = truncatePreview(displayName, MAX_SIDEBAR_NODE_NAME);
+  const selectionName = truncatePreview(displayName, MAX_SELECTION_NODE_NAME);
   return (
     <div className="selection-name-row">
       <strong className="selection-name" title={displayName}>
-        {sidebarName}
+        {selectionName}
       </strong>
       {badge}
       <button
@@ -3336,6 +3660,99 @@ function PinGlyph() {
   return (
     <svg className="pin-glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
       <path d="M5.25 1.5A1.25 1.25 0 0 0 4 2.75v2.13c0 .33-.13.65-.37.88l-1.18 1.18a.75.75 0 0 0 .53 1.28h4.27v4.53a.75.75 0 0 0 1.5 0V8.22h4.27a.75.75 0 0 0 .53-1.28l-1.18-1.18a1.25 1.25 0 0 1-.37-.88V2.75A1.25 1.25 0 0 0 10.75 1.5z" />
+    </svg>
+  );
+}
+
+function CanvasInspector({
+  id,
+  label,
+  closeLabel,
+  open,
+  subtitle,
+  onClose,
+  onKeyDown,
+  children,
+}: {
+  id: string;
+  label: string;
+  closeLabel: string;
+  open: boolean;
+  subtitle?: string;
+  onClose: () => void;
+  onKeyDown: (event: ReactKeyboardEvent<HTMLElement>) => void;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      id={id}
+      className="canvas-inspector"
+      aria-label={label}
+      hidden={!open}
+      onKeyDown={onKeyDown}
+    >
+      {open ? (
+        <>
+          <div className="canvas-inspector__header">
+            <p className="metric-label">{label}</p>
+            <button type="button" className="canvas-inspector__close" onClick={onClose}>
+              {closeLabel}
+            </button>
+          </div>
+          {subtitle ? <p className="canvas-inspector__subtitle">{subtitle}</p> : null}
+          <div className="canvas-inspector__body">{children}</div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function RadioGlyph() {
+  return (
+    <svg className="canvas-control__glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 12.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+      <path d="M8.4 6.9a6.4 6.4 0 0 0 0 8.2M15.6 6.9a6.4 6.4 0 0 1 0 8.2M5.7 4.2a10.2 10.2 0 0 0 0 13.6M18.3 4.2a10.2 10.2 0 0 1 0 13.6" />
+    </svg>
+  );
+}
+
+function LogGlyph() {
+  return (
+    <svg className="canvas-control__glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M5 5.5h14M5 12h14M5 18.5h14" />
+      <path d="M2.6 5.5h.01M2.6 12h.01M2.6 18.5h.01" />
+    </svg>
+  );
+}
+
+function UploadGlyph() {
+  return (
+    <svg className="selection-code__glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M12 16V4M7.5 8.5 12 4l4.5 4.5M4.5 15v4.5h15V15" />
+    </svg>
+  );
+}
+
+function EditGlyph() {
+  return (
+    <svg className="selection-code__glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4.5 19.5h4l10-10-4-4-10 10zM13 7l4 4" />
+    </svg>
+  );
+}
+
+function ResetGlyph() {
+  return (
+    <svg className="selection-code__glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M19 12a7 7 0 1 1-2.1-5M19 4.5V10h-5.5" />
+    </svg>
+  );
+}
+
+function TrashGlyph() {
+  return (
+    <svg className="selection-code__glyph" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M4.5 7h15M9.5 7V4.5h5V7M6.5 7l1 12.5h9l1-12.5M10 11v5M14 11v5" />
     </svg>
   );
 }
@@ -4186,27 +4603,25 @@ function makeArtifactId(deviceId: DeviceId, filename: string, timestamp: string)
 function replaceDeviceArtifact(
   project: SwarmProject,
   deviceId: DeviceId,
-  nextArtifact: SwarmProject['artifacts'][number],
+  nextArtifact?: SwarmProject['artifacts'][number],
 ): SwarmProject['artifacts'] {
   const targetDevice = project.devices.find((device) => device.id === deviceId);
   if (!targetDevice) {
     return project.artifacts;
   }
   const previousArtifactId = targetDevice.programArtifactId;
-  return [
-    ...project.artifacts.filter((artifact) => {
-      if (artifact.id === nextArtifact.id) {
-        return false;
-      }
-      if (artifact.id !== previousArtifactId) {
-        return true;
-      }
-      return project.devices.some(
-        (device) => device.id !== deviceId && device.programArtifactId === artifact.id,
-      );
-    }),
-    nextArtifact,
-  ];
+  const artifacts = project.artifacts.filter((artifact) => {
+    if (nextArtifact && artifact.id === nextArtifact.id) {
+      return false;
+    }
+    if (artifact.id !== previousArtifactId) {
+      return true;
+    }
+    return project.devices.some(
+      (device) => device.id !== deviceId && device.programArtifactId === artifact.id,
+    );
+  });
+  return nextArtifact ? [...artifacts, nextArtifact] : artifacts;
 }
 
 function hasDevice(project: SwarmProject, deviceId: DeviceId): boolean {
@@ -4301,8 +4716,18 @@ function moveProjectObject(project: SwarmProject, target: DragTarget, position: 
   };
 }
 
-function clientPointToCanvasPoint(svg: SVGSVGElement, clientX: number, clientY: number): Point {
-  const rect = svg.getBoundingClientRect();
+function clientPointToCanvasPoint(
+  field: SVGRectElement | null,
+  clientX: number,
+  clientY: number,
+): Point | null {
+  if (!field) {
+    return null;
+  }
+  const rect = field.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) {
+    return null;
+  }
   return {
     x: ((clientX - rect.left) / rect.width) * canvasSize.width,
     y: ((clientY - rect.top) / rect.height) * canvasSize.height,
@@ -4345,8 +4770,8 @@ function nextEnvironmentSourceNumber(
 
 function clampPoint(point: Point): Point {
   return {
-    x: Math.min(canvasSize.width - 42, Math.max(42, point.x)),
-    y: Math.min(canvasSize.height - 42, Math.max(42, point.y)),
+    x: Math.round(Math.min(canvasSize.width - 42, Math.max(42, point.x))),
+    y: Math.round(Math.min(canvasSize.height - 42, Math.max(42, point.y))),
   };
 }
 
@@ -4500,6 +4925,13 @@ function normalizeRuntimeRadioPacket(
 
 function formatRangeValue(value: number, expectsInteger: boolean): string {
   return expectsInteger ? String(Math.round(value)) : String(value);
+}
+
+function formatCanvasCoordinate(value: number): string {
+  if (!Number.isFinite(value)) {
+    return '0';
+  }
+  return String(Number(value.toFixed(2)));
 }
 
 function parseRangeDraft(value: string): number | undefined {

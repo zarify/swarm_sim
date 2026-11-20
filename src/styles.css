@@ -253,7 +253,8 @@ h2 {
 .code-editor-modal__card {
   position: relative;
   width: min(980px, calc(100% - 32px));
-  max-height: calc(100vh - 72px);
+  height: min(calc(100dvh - 48px), 780px);
+  max-height: calc(100dvh - 48px);
   overflow: hidden;
   border: 1px solid rgba(105, 247, 255, 0.36);
   padding: 20px;
@@ -368,7 +369,8 @@ h2 {
 
 .code-editor-modal__editor {
   display: grid;
-  min-height: min(62vh, 600px);
+  flex: 1 1 auto;
+  min-height: 0;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 8px;
 }
@@ -515,14 +517,6 @@ h2 {
 .artifact-field input:focus {
   border-color: var(--cyan);
   box-shadow: 0 0 0 4px rgba(105, 247, 255, 0.12);
-}
-
-.artifact-field--compact {
-  margin-top: 0;
-}
-
-.artifact-field--compact input {
-  padding: 12px;
 }
 
 .hint {
@@ -872,20 +866,21 @@ button:disabled {
 
 .swarm-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
   margin-top: 28px;
 }
 
 .canvas-wrap {
-  min-height: 420px;
+  position: relative;
+  min-width: 0;
 }
 
 .swarm-canvas {
   display: block;
   width: 100%;
-  height: min(60vw, 560px);
-  min-height: 420px;
+  height: auto;
+  aspect-ratio: 860 / 520;
   touch-action: none;
   border: 1px solid rgba(105, 247, 255, 0.24);
   background:
@@ -893,6 +888,95 @@ button:disabled {
     linear-gradient(0deg, rgba(105, 247, 255, 0.06) 1px, transparent 1px),
     rgba(0, 0, 0, 0.2);
   background-size: 36px 36px;
+}
+
+/* One overlay row: coordinates read out on the left, the inspector/diagnostic
+   buttons sit upper right. Only the buttons intercept pointer events. */
+.canvas-hud {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.canvas-hud__coordinates {
+  padding: 3px 8px;
+  border: 1px solid rgba(105, 247, 255, 0.24);
+  background: rgba(5, 13, 15, 0.78);
+  color: var(--phosphor);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+
+.canvas-hud__diagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+  pointer-events: none;
+}
+
+.canvas-hud__diagnostics > * {
+  pointer-events: auto;
+}
+
+.canvas-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border: 1px solid rgba(105, 247, 255, 0.34);
+  background: rgba(5, 13, 15, 0.88);
+  color: var(--cyan);
+  font-size: 0.66rem;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.canvas-control strong {
+  color: var(--ink);
+}
+
+.canvas-control__glyph {
+  width: 1.05rem;
+  height: 1.05rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.7;
+}
+
+.canvas-control--radio .canvas-control__glyph path:first-child {
+  fill: currentColor;
+  stroke: none;
+}
+
+.canvas-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  border: 2px dashed rgba(105, 247, 255, 0.65);
+  background: rgba(5, 13, 15, 0.88);
+  color: var(--cyan);
+  text-align: center;
+  font-size: 0.86rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  pointer-events: none;
 }
 
 .canvas-field {
@@ -1137,61 +1221,28 @@ button:disabled {
   pointer-events: none;
 }
 
-.swarm-sidebar {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  position: relative;
-}
-
-.swarm-sidebar-footer {
-  margin-top: auto;
-}
-
-.swarm-sidebar-debug-button {
-  width: 100%;
-}
-
-.swarm-sidebar--drop-enabled {
-  outline: 1px dashed rgba(105, 247, 255, 0.18);
-  outline-offset: 4px;
-}
-
-.swarm-sidebar--drag-over {
-  outline-color: rgba(105, 247, 255, 0.62);
-}
-
-.swarm-sidebar-drop-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  display: grid;
-  place-items: center;
-  border: 2px dashed rgba(105, 247, 255, 0.65);
-  background: rgba(5, 13, 15, 0.9);
-  color: var(--cyan);
-  text-align: center;
-  font-size: 0.86rem;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  pointer-events: none;
-}
-
 .toolbar-card,
 .selection-card,
 .telemetry-card,
-.radio-inspector-card,
 .runtime-host-card {
   border: 1px solid rgba(147, 169, 134, 0.24);
   padding: 16px;
   background: rgba(0, 0, 0, 0.22);
 }
 
+/* The selection strip is contiguous with the canvas (no grid gap) and shares its
+   bottom border, so device controls read as part of the field, not a second card. */
+.selection-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 10px;
+  border-top: 0;
+}
+
 .toolbar-card .metric-label,
 .selection-card .metric-label,
 .telemetry-card .metric-label,
-.radio-inspector-card .metric-label,
 .runtime-host-card .metric-label {
   flex-basis: 100%;
   margin-bottom: 2px;
@@ -1204,6 +1255,143 @@ button:disabled {
   color: var(--phosphor);
   font-size: 1.45rem;
   text-transform: uppercase;
+}
+
+.selection-tracks {
+  display: grid;
+  gap: 4px;
+}
+
+.selection-track {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  min-width: 0;
+}
+
+.selection-track > * {
+  min-width: 0;
+}
+
+.selection-track--identity .selection-name-row {
+  flex: 1 1 12rem;
+  flex-wrap: nowrap;
+  margin-top: 0;
+}
+
+.selection-track--identity .selection-actions {
+  margin-top: 0;
+}
+
+.selection-track--details {
+  align-items: start;
+}
+
+.selection-track--details > .radio-summary {
+  flex: 1 1 220px;
+  margin: 0;
+}
+
+.selection-track--details > .range-field {
+  flex: 1 1 12rem;
+  width: auto;
+  min-width: 0;
+  margin-top: 0;
+}
+
+.selection-source-type {
+  flex: 0 1 auto;
+  color: var(--muted);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Code group: identity and code functions wrap as units, and only the filename
+   shrinks — glyph targets keep their 32px minimum size. */
+.selection-code {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+}
+
+.selection-code > .metric-label {
+  flex: 0 0 auto;
+  margin: 0 4px 0 0;
+}
+
+.selection-code__action {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--cyan);
+  cursor: pointer;
+}
+
+.selection-code__action:hover:not(:disabled) {
+  border-color: rgba(105, 247, 255, 0.36);
+  background: rgba(105, 247, 255, 0.08);
+}
+
+.selection-code__action:focus-visible {
+  outline: 2px solid var(--cyan);
+  outline-offset: 1px;
+}
+
+.selection-code__action--danger {
+  color: var(--danger);
+}
+
+.selection-code__glyph {
+  width: 1.05rem;
+  height: 1.05rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.6;
+}
+
+.selection-code__name {
+  min-width: 0;
+  max-width: 13rem;
+  overflow: hidden;
+  color: var(--phosphor);
+  font-size: 0.8rem;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.selection-code__name--empty {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.selection-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.selection-status--warning {
+  color: var(--amber);
+}
+
+.selection-status--error {
+  color: var(--danger);
 }
 
 .selection-name-row {
@@ -1264,8 +1452,7 @@ button:disabled {
 }
 
 .selection-card p,
-.telemetry-card p,
-.radio-inspector-card p {
+.telemetry-card p {
   margin: 10px 0 0;
   color: var(--muted);
 }
@@ -1283,6 +1470,12 @@ button:disabled {
   gap: 6px;
   padding: 7px 10px;
   font-size: 0.7rem;
+}
+
+.selection-actions--node button {
+  justify-content: center;
+  min-width: 32px;
+  min-height: 32px;
 }
 
 .selection-action-pin {
@@ -1304,111 +1497,85 @@ button:disabled {
   fill: currentColor;
 }
 
-.selection-artifact-block {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(147, 169, 134, 0.2);
-  display: grid;
-  gap: 6px;
-}
-
-.selection-artifact-block p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.selection-position-lock {
-  display: grid;
-  gap: 6px;
-}
-
-.selection-position-lock button {
-  justify-self: start;
-  padding: 7px 10px;
-  font-size: 0.72rem;
-}
-
-
-
+/* Readings: a wrapping row of label/value pairs that never split mid-pair. */
 .radio-summary {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  margin: 14px 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  margin: 0;
+  min-width: 0;
 }
 
 .radio-summary div {
-  border: 1px solid rgba(183, 255, 74, 0.16);
-  padding: 8px;
-  background: rgba(183, 255, 74, 0.04);
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  border: 0;
+  padding: 0;
+  background: none;
+  white-space: nowrap;
 }
 
 .radio-summary dt {
   color: var(--muted);
-  font-size: 0.68rem;
+  font-size: 0.66rem;
   font-weight: 900;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
 .radio-summary dd {
-  margin: 4px 0 0;
+  margin: 0;
   color: var(--phosphor);
-  font-size: 1.1rem;
+  font-size: 0.82rem;
   font-weight: 900;
 }
 
-.device-log {
-  margin-top: 16px;
-  border-top: 1px solid rgba(147, 169, 134, 0.2);
-  padding-top: 12px;
-}
-
-.compact-inspector {
-  padding: 0;
+/* Non-modal inspector docked under the selection strip: it never covers the
+   field or changes the canvas size. */
+.canvas-inspector {
+  border: 1px solid rgba(147, 169, 134, 0.24);
+  border-top: 0;
+  padding: 8px 10px 10px;
+  background: rgba(0, 0, 0, 0.22);
   font-size: 0.76rem;
 }
 
-.compact-inspector summary {
+.canvas-inspector[hidden] {
+  display: none;
+}
+
+.canvas-inspector__header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
-  cursor: pointer;
-  list-style: none;
 }
 
-.compact-inspector summary::-webkit-details-marker {
-  display: none;
+.canvas-inspector__header .metric-label {
+  margin: 0;
 }
 
-.compact-inspector summary::after {
-  content: "+";
-  color: var(--cyan);
+.canvas-inspector__close {
+  padding: 5px 9px;
+  font-size: 0.68rem;
+}
+
+.canvas-inspector__subtitle {
+  margin: 6px 0 0;
+  color: var(--phosphor);
+  font-size: 0.76rem;
   font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.compact-inspector[open] summary::after {
-  content: "-";
-}
-
-.compact-inspector summary > strong {
-  display: inline-grid;
-  min-width: 2.1rem;
-  min-height: 2.1rem;
-  place-items: center;
-  border: 1px solid rgba(105, 247, 255, 0.28);
-  color: var(--cyan);
-  font-size: 0.82rem;
-}
-
-.compact-inspector__body {
+.canvas-inspector__body {
   max-height: 200px;
-  overflow: auto;
+  margin-top: 8px;
+  padding-top: 8px;
   border-top: 1px solid rgba(147, 169, 134, 0.18);
-  padding: 8px 12px 12px;
+  overflow-y: auto;
 }
 
 .device-log__line,
@@ -1710,8 +1877,27 @@ button:disabled {
 
 @media (max-width: 760px) {
   .readiness-grid,
-  .capability-list,
-  .swarm-layout {
+  .capability-list {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Below 480px the overlay becomes a normal-flow toolbar above the field:
+   diagnostics right-aligned on the first row, coordinates on the second. */
+@media (max-width: 480px) {
+  .canvas-hud {
+    position: static;
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(105, 247, 255, 0.16);
+  }
+
+  .canvas-hud__diagnostics {
+    order: -1;
+    margin-left: auto;
+  }
+
+  .canvas-hud__coordinates {
+    order: 0;
+    flex: 1 0 100%;
   }
 }

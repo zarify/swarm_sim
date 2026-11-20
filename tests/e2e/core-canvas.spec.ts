@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { expect, test, type Frame, type Page } from '@playwright/test';
 import { resolveBuildFeatureFlags } from '../../featureFlags.config';
 import { createBlankProject, type SwarmProject } from '../../src/domain/project';
@@ -75,7 +76,9 @@ async function updateSelectedMakeCodeSource(page: Page, deviceName: string, sour
   await expect(sourceField).toBeVisible();
   await sourceField.fill(source);
   await page.getByRole('button', { name: 'Save changes' }).click();
-  await expect(page.getByText(/Editable source:/)).toContainText('saved changes ready');
+  await page.getByRole('button', { name: 'Edit code' }).click();
+  await expect(page.getByLabel(`Editing main.ts for ${deviceName}`)).toHaveValue(source);
+  await page.getByRole('button', { name: 'Close code editor' }).click();
 }
 
 async function waitForMakeCodeRuntimeReady(page: Page) {
@@ -147,6 +150,56 @@ async function addTemperatureFromSwarmTools(page: Page) {
 
 function getSaveCanvasButton(page: Page) {
   return page.getByRole('button', { name: /Save canvas/i });
+}
+
+function selectionStrip(page: Page) {
+  return page.getByLabel('Canvas controls and selection details');
+}
+
+async function expectDeviceCode(page: Page, filename: string) {
+  await expect(selectionStrip(page).getByText(filename, { exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
+}
+
+async function expectDeviceRuntimeSource(
+  page: Page,
+  deviceName: string,
+  runtimeSource: 'micropython' | 'makecode-pxt',
+) {
+  const simulator = runtimeSource === 'micropython' ? 'MicroPython' : 'MakeCode';
+  await expect(page.getByTitle(`${simulator} simulator for ${deviceName}`)).toHaveCount(1, {
+    timeout: 15_000,
+  });
+}
+
+async function openRadioInspector(page: Page) {
+  const trigger = page.getByRole('button', { name: 'Radio inspector', exact: true });
+  if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
+    await trigger.click();
+  }
+  return page.getByRole('region', { name: 'Radio message inspector' });
+}
+
+async function openRuntimeLog(page: Page) {
+  const trigger = page.getByRole('button', { name: 'Runtime log', exact: true });
+  if ((await trigger.getAttribute('aria-expanded')) !== 'true') {
+    await trigger.click();
+  }
+  return page.getByRole('region', { name: 'Runtime log' });
+}
+
+async function hexFileDataTransfer(page: Page, fixturePath: string, filename: string) {
+  const bytes = (await readFile(fixturePath)).toString('base64');
+  return page.evaluateHandle(
+    ({ base64, name }) => {
+      const binary = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+      const transfer = new DataTransfer();
+      transfer.items.add(new File([binary], name, { type: 'application/octet-stream' }));
+      return transfer;
+    },
+    { base64: bytes, name: filename },
+  );
 }
 
 async function readMakeCodeMagneticReadings(page: Page): Promise<{
@@ -233,14 +286,78 @@ test.describe('core canvas workflows', () => {
 
     await addLockedDeviceFromSwarmTools(page);
     await expect(page.locator('.selection-name-badge')).toContainText('Locked');
-    await expect(page.getByText('Code locked after first upload')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Upload code' })).toBeEnabled();
 
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Code locked')).toBeVisible();
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 2', 'micropython');
     await expect(page.getByRole('button', { name: 'Edit code' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Upload code' })).toHaveCount(0);
     await expect(page.getByLabel(/Load code onto Node 2/)).toHaveCount(0);
+  });
+
+  test('loads, replaces, and unloads device code from the canvas workbench', async ({ page }) => {
+    await gotoCanvas(page);
+
+    const chooserPromise = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: 'Upload code' }).click();
+    const chooser = await chooserPromise;
+    expect(chooser.isMultiple()).toBe(false);
+    await chooser.setFiles(microPythonFixture);
+
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expect(page.getByRole('button', { name: 'Edit code' })).toBeVisible();
+    await expect(page.getByTitle('MicroPython simulator for Node 1')).toHaveCount(1);
+
+    await addDeviceFromSwarmTools(page);
+    const nodeTwoDrop = await hexFileDataTransfer(page, microPythonFixture, 'mp_beacon.hex');
+    await page
+      .locator('.microbit-node')
+      .nth(1)
+      .locator('.microbit-body')
+      .dispatchEvent('drop', { dataTransfer: nodeTwoDrop });
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expect(page.getByRole('group', { name: 'Node coordinates' })).toContainText('X:');
+
+    await selectDeviceNode(page, 0);
+    await expectDeviceCode(page, 'mp_beacon.hex');
+
+    await selectDeviceNode(page, 1);
+    const replacementDrop = await hexFileDataTransfer(page, makeCodeBeaconFixture, 'mc_beacon.hex');
+    page.once('dialog', (dialog) => dialog.dismiss());
+    await page.locator('.canvas-field').dispatchEvent('drop', { dataTransfer: replacementDrop });
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expect(selectionStrip(page).getByText('mc_beacon.hex', { exact: true })).toHaveCount(0);
+
+    await selectDeviceNode(page, 0);
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: 'Unload code' }).click();
+    await expect(selectionStrip(page).getByText('No code', { exact: true })).toBeVisible();
+    await expect(page.getByTitle('MicroPython simulator for Node 1')).toHaveCount(0);
+    await expect(page.getByTitle('MicroPython simulator for Node 2')).toHaveCount(1);
+
+    await selectDeviceNode(page, 1);
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('button', { name: 'Unload code' }).click();
+    await expect(selectionStrip(page).getByText('No code', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Upload code' })).toBeFocused();
+    await expect(page.getByTitle('MicroPython simulator for Node 2')).toHaveCount(0);
+
+    await getSaveCanvasButton(page).click();
+    await expect(getSaveCanvasButton(page)).toContainText('Saved');
+    await page.reload();
+    await dismissSplash(page);
+
+    await expect(page.locator('.microbit-node')).toHaveCount(2);
+    await selectDeviceNode(page, 0);
+    await expect(selectionStrip(page).getByText('No code', { exact: true })).toBeVisible();
+
+    const reloadChooserPromise = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: 'Upload code' }).click();
+    const reloadChooser = await reloadChooserPromise;
+    await reloadChooser.setFiles(microPythonFixture);
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expect(page.getByRole('button', { name: 'Edit code' })).toBeVisible();
   });
 
   test('lets locked devices be fixed in place permanently from device configuration', async ({ page }) => {
@@ -254,7 +371,7 @@ test.describe('core canvas workflows', () => {
 
     await expect(page.getByRole('button', { name: 'Pinned device position permanently' })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
-    await expect(page.getByText('Position and name locked')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Unload code' })).toHaveCount(0);
   });
 
   test('locks locked light-source controls after permanent pinning', async ({ page }) => {
@@ -273,7 +390,6 @@ test.describe('core canvas workflows', () => {
     await expect(page.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
     await expect(page.getByRole('slider', { name: 'Radius' })).toBeDisabled();
     await expect(page.getByRole('slider', { name: 'Peak level (micro:bit scale)' })).toBeDisabled();
-    await expect(page.getByText('Properties locked')).toBeVisible();
   });
 
   test('keeps the canvas size stable when switching between locked and unlocked devices', async ({ page }) => {
@@ -359,8 +475,8 @@ test.describe('core canvas workflows', () => {
     await page.locator('.microbit-node').first().click();
 
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'makecode-pxt');
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
@@ -442,8 +558,8 @@ test.describe('core canvas workflows', () => {
     await page.locator('.microbit-node').first().click();
 
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'makecode-pxt');
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
@@ -461,7 +577,7 @@ test.describe('core canvas workflows', () => {
     await gotoCanvas(page);
 
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
     await expect(page.getByRole('button', { name: 'Edit code' })).toBeEnabled();
 
     await page.getByRole('button', { name: 'Edit code' }).click();
@@ -471,7 +587,6 @@ test.describe('core canvas workflows', () => {
     await sourceField.fill('from microbit import *\ndisplay.scroll("edited")\n');
     await page.getByRole('button', { name: 'Save changes' }).click();
 
-    await expect(page.getByText(/Editable source:/)).toContainText('saved changes ready');
     await page.getByRole('button', { name: 'Edit code' }).click();
     await expect(page.getByLabel('Editing main.py for Node 1')).toHaveValue(
       'from microbit import *\ndisplay.scroll("edited")\n',
@@ -483,7 +598,7 @@ test.describe('core canvas workflows', () => {
     await gotoCanvas(page);
 
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
     await page.getByRole('button', { name: 'Edit code' }).click();
 
     const sourceField = page.getByLabel('Editing main.py for Node 1');
@@ -611,18 +726,18 @@ test.describe('core canvas workflows', () => {
     await gotoCanvas(page);
 
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'makecode-pxt');
 
     await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
     await expect(page.locator('.microbit-node')).toHaveCount(2);
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceRuntimeSource(page, 'Node 2', 'makecode-pxt');
 
     await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 3/).setInputFiles(microPythonFixture);
     await expect(page.locator('.microbit-node')).toHaveCount(3);
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceRuntimeSource(page, 'Node 3', 'micropython');
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
@@ -707,24 +822,24 @@ test.describe('core canvas workflows', () => {
       .toEqual([null, null]);
   });
 
-  test('keeps MakeCode reset reloads scoped to the selected device after repeated selection-card Reset', async ({
+  test('keeps MakeCode reset reloads scoped to the selected device after repeated selection Reset', async ({
     page,
   }) => {
     await gotoCanvas(page);
 
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'makecode-pxt');
 
     await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
     await expect(page.locator('.microbit-node')).toHaveCount(2);
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceRuntimeSource(page, 'Node 2', 'makecode-pxt');
 
     await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 3/).setInputFiles(microPythonFixture);
     await expect(page.locator('.microbit-node')).toHaveCount(3);
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceRuntimeSource(page, 'Node 3', 'micropython');
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
@@ -769,9 +884,7 @@ test.describe('core canvas workflows', () => {
     await page.getByRole('button', { name: 'Close debug tools' }).click();
 
     await selectDeviceNode(page, 0);
-    const selectionResetButton = page
-      .locator('.selection-card')
-      .getByRole('button', { name: 'Reset', exact: true });
+    const selectionResetButton = page.getByRole('button', { name: 'Reset device' });
     await expect(selectionResetButton).toBeEnabled();
     await selectionResetButton.click();
 
@@ -816,18 +929,18 @@ test.describe('core canvas workflows', () => {
     await gotoCanvas(page);
 
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'makecode-pxt');
 
     await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
     await expect(page.locator('.microbit-node')).toHaveCount(2);
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceRuntimeSource(page, 'Node 2', 'makecode-pxt');
 
     await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 3/).setInputFiles(microPythonFixture);
     await expect(page.locator('.microbit-node')).toHaveCount(3);
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceRuntimeSource(page, 'Node 3', 'micropython');
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
@@ -881,14 +994,14 @@ test.describe('core canvas workflows', () => {
     await gotoCanvas(page);
 
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
 
     await getSaveCanvasButton(page).click();
     await expect(getSaveCanvasButton(page)).toContainText('Saved');
 
     await page.reload();
 
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
     await expect(getSaveCanvasButton(page)).toContainText('Saved');
   });
 
@@ -921,7 +1034,7 @@ test.describe('core canvas workflows', () => {
     await expect(downloadLogsButton).toBeDisabled();
 
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
     await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
@@ -958,8 +1071,8 @@ test.describe('core canvas workflows', () => {
     await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(microPythonDataLogFixture);
 
-    await expect(page.getByText('Assigned: mp_datalog.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_datalog.hex');
+    await expectDeviceRuntimeSource(page, 'Node 2', 'micropython');
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
@@ -977,8 +1090,8 @@ test.describe('core canvas workflows', () => {
     await expect(downloadLogsButton).toBeDisabled();
 
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeDataLogFixture);
-    await expect(page.getByText('Assigned: mc_datalog.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_datalog.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'makecode-pxt');
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
@@ -1061,8 +1174,8 @@ test.describe('core canvas workflows', () => {
 
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
 
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'micropython');
     await expect(page.locator('[aria-label="MicroPython runtime host"]')).toHaveCount(0);
     await expect
       .poll(
@@ -1084,24 +1197,48 @@ test.describe('core canvas workflows', () => {
     await page.getByLabel('Edit node name').press('Enter');
 
     await page.getByLabel(/Load code onto Sensors/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
 
     await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(microPythonFixture);
     await expect(page.locator('.microbit-node')).toHaveCount(2);
 
-    const radioInspector = page.locator('details[aria-label="Radio message inspector"]');
-    await radioInspector.locator('summary').click();
+    const radioInspector = await openRadioInspector(page);
 
     await expect
       .poll(
         async () => {
-          const metaLines = await page.locator('.radio-event__meta').allTextContents();
+          const metaLines = await radioInspector.locator('.radio-event__meta').allTextContents();
           return metaLines.some((line) => /sensors\s+to\s+1\s+received/i.test(line));
         },
         { timeout: 15_000 },
       )
       .toBe(true);
+    await expect(radioInspector.locator('.radio-event__payload').first()).not.toBeEmpty();
+
+    const radioTrigger = page.getByRole('button', { name: 'Radio inspector', exact: true });
+    await radioTrigger.focus();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('region', { name: 'Radio message inspector' })).toHaveCount(0);
+    await expect(radioTrigger).toHaveAttribute('aria-expanded', 'false');
+
+    await selectDeviceNode(page, 1);
+    const runtimeLog = await openRuntimeLog(page);
+    await expect(runtimeLog).toContainText('Received radio packet from Sensors');
+    const closeRuntimeLog = runtimeLog.getByRole('button', { name: 'Close runtime log' });
+    await closeRuntimeLog.focus();
+    await closeRuntimeLog.click();
+    await expect(page.getByRole('button', { name: 'Runtime log', exact: true })).toBeFocused();
+    await expect(page.getByRole('region', { name: 'Runtime log' })).toHaveCount(0);
+  });
+
+  test('disables the runtime log for environment sources', async ({ page }) => {
+    await gotoCanvas(page);
+    await addTemperatureFromSwarmTools(page);
+
+    await expect(page.getByRole('button', { name: 'Runtime log', exact: true })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Radio inspector', exact: true })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Debug' })).toBeEnabled();
   });
 
   test('keeps MakeCode inbound radio group from source hints after Reset all', async ({ page }) => {
@@ -1117,13 +1254,13 @@ test.describe('core canvas workflows', () => {
 
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'micropython');
 
     await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 2', 'makecode-pxt');
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
@@ -1139,14 +1276,13 @@ test.describe('core canvas workflows', () => {
       frame.url().includes('/micropython-patched-simulator.html'),
     );
     expect(microPythonSimulator).toBeTruthy();
-    const radioInspector = page.locator('details[aria-label="Radio message inspector"]');
-    await radioInspector.locator('summary').click();
-    const initialCount = await page.locator('.radio-event__meta').count();
+    const radioInspector = await openRadioInspector(page);
+    const initialCount = await radioInspector.locator('.radio-event__meta').count();
     await emitMicroPythonRadioPacket(microPythonSimulator!);
 
     await expect
       .poll(
-        async () => await page.locator('.radio-event__meta').count(),
+        async () => await radioInspector.locator('.radio-event__meta').count(),
         { timeout: 15_000 },
       )
       .toBeGreaterThan(initialCount);
@@ -1165,12 +1301,13 @@ test.describe('core canvas workflows', () => {
       frame.url().includes('/micropython-patched-simulator.html'),
     );
     expect(refreshedMicroPythonSimulator).toBeTruthy();
-    const postResetCount = await page.locator('.radio-event__meta').count();
+    const refreshedRadioInspector = await openRadioInspector(page);
+    const postResetCount = await refreshedRadioInspector.locator('.radio-event__meta').count();
     await emitMicroPythonRadioPacket(refreshedMicroPythonSimulator!);
 
     await expect
       .poll(
-        async () => await page.locator('.radio-event__meta').count(),
+        async () => await refreshedRadioInspector.locator('.radio-event__meta').count(),
         { timeout: 15_000 },
       )
       .toBeGreaterThan(postResetCount);
@@ -1179,13 +1316,13 @@ test.describe('core canvas workflows', () => {
   test('keeps runtime radio delivery working after opening and closing debug tools', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'micropython');
 
     await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 2', 'makecode-pxt');
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
@@ -1268,12 +1405,11 @@ test.describe('core canvas workflows', () => {
   test('coalesces fragmented MicroPython serial output into one runtime log line', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'micropython');
     await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
 
-    const eventLog = page.getByLabel('Event log for Node 1');
-    await eventLog.locator('summary').click();
+    await openRuntimeLog(page);
 
     await expect.poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html'))).toBe(true);
     const simulatorFrame = page.frames().find((frame) => frame.url().includes('/micropython-patched-simulator.html'));
@@ -1295,8 +1431,8 @@ test.describe('core canvas workflows', () => {
   test('shows per-device sound feedback for MicroPython runtime sound markers', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'micropython');
     await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
 
     await expect
@@ -1309,8 +1445,7 @@ test.describe('core canvas workflows', () => {
     });
 
     await expect(page.locator('[data-runtime-sound-indicator="device-1"]')).toBeVisible();
-    const eventLog = page.getByLabel('Event log for Node 1');
-    await eventLog.locator('summary').click();
+    await openRuntimeLog(page);
     const soundLine = page.locator('.device-log__line', { hasText: 'Sound output started' });
     await expect(soundLine).toHaveCount(1);
     await expect(soundLine.locator('.device-log__type')).toHaveText('snd');
@@ -1319,8 +1454,8 @@ test.describe('core canvas workflows', () => {
   test('logs a later MicroPython sound marker again after the transient window expires', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'micropython');
     await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
 
     await expect
@@ -1332,8 +1467,7 @@ test.describe('core canvas workflows', () => {
       window.parent.postMessage({ kind: 'serial_output', data: '\x1eSWARM_SOUND:180\n' }, window.location.origin);
     });
 
-    const eventLog = page.getByLabel('Event log for Node 1');
-    await eventLog.locator('summary').click();
+    await openRuntimeLog(page);
     await expect(page.locator('.device-log__line', { hasText: 'Sound output started (level 180)' })).toHaveCount(1);
 
     await page.waitForTimeout(800);
@@ -1347,8 +1481,8 @@ test.describe('core canvas workflows', () => {
   test('shows per-device sound feedback for MakeCode runtime sound events', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'makecode-pxt');
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
@@ -1377,8 +1511,7 @@ test.describe('core canvas workflows', () => {
 
     await expect(page.locator('[data-runtime-sound-indicator="device-1"]')).toBeVisible();
     await page.getByRole('button', { name: 'Close debug tools' }).click();
-    const eventLog = page.getByLabel('Event log for Node 1');
-    await eventLog.locator('summary').click();
+    await openRuntimeLog(page);
     const soundLine = page.locator('.device-log__line', { hasText: 'Sound output started' });
     await expect(soundLine).toHaveCount(1);
     await expect(soundLine.locator('.device-log__type')).toHaveText('snd');
@@ -1394,8 +1527,8 @@ test.describe('core canvas workflows', () => {
 
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'makecode-pxt');
     await waitForMakeCodeRuntimeReady(page);
 
     expect(
@@ -1409,13 +1542,13 @@ test.describe('core canvas workflows', () => {
   test('keeps MakeCode continuous sound active at the configured volume until stopAllSounds', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'makecode-pxt');
 
     await addDeviceFromSwarmTools(page);
     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 2', 'makecode-pxt');
 
     await selectDeviceNode(page, 0);
     await updateSelectedMakeCodeSource(page, 'Node 1', makeCodeContinuousSoundProgram);
@@ -1432,8 +1565,7 @@ test.describe('core canvas workflows', () => {
     await expect(page.locator('[data-runtime-sound-radius="device-1"]')).toBeVisible();
 
     await selectDeviceNode(page, 0);
-    const eventLog = page.getByLabel('Event log for Node 1');
-    await eventLog.locator('summary').click();
+    await openRuntimeLog(page);
     await expect(page.locator('.device-log__line', { hasText: 'Sound output started (level 127)' })).toHaveCount(1);
 
     await selectDeviceNode(page, 1);
@@ -1448,8 +1580,8 @@ test.describe('core canvas workflows', () => {
   test('keeps muted MakeCode sound from emitting runtime sound activity', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'makecode-pxt');
 
     await updateSelectedMakeCodeSource(page, 'Node 1', makeCodeMutedContinuousSoundProgram);
     await waitForMakeCodeRuntimeReady(page);
@@ -1458,16 +1590,15 @@ test.describe('core canvas workflows', () => {
     await page.waitForTimeout(800);
     await expect(page.locator('[data-runtime-sound-radius="device-1"]')).toHaveCount(0);
 
-    const eventLog = page.getByLabel('Event log for Node 1');
-    await eventLog.locator('summary').click();
+    await openRuntimeLog(page);
     await expect(page.locator('.device-log__line', { hasText: 'Sound output started' })).toHaveCount(0);
   });
 
   test('lets nearby devices pick up transient runtime sound from another micro:bit', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'micropython');
     await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
 
     await addDeviceFromSwarmTools(page);
@@ -1492,8 +1623,8 @@ test.describe('core canvas workflows', () => {
   test('surfaces runtime internal errors as device error state and clears on reset', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'micropython');
     await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
 
     await expect
@@ -1523,8 +1654,8 @@ test.describe('core canvas workflows', () => {
 
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'micropython');
 
     await page.getByRole('button', { name: 'Swarm tools' }).click();
     await page.getByRole('button', { name: 'Save to browser' }).click({ force: true });
@@ -1536,8 +1667,8 @@ test.describe('core canvas workflows', () => {
 
     await loadButton.click();
     await expect(page.locator('.microbit-node')).toHaveCount(1);
-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mp_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'micropython');
   });
 
   test('supports permanent A+B canvas button control with linked indicator lines', async ({ page }) => {
@@ -1547,8 +1678,7 @@ test.describe('core canvas workflows', () => {
     await expect(abButton).toBeVisible();
     await expect(page.locator('[data-device-button-combo-link="device-1"]')).toBeVisible();
 
-    const eventLog = page.getByLabel('Event log for Node 1');
-    await eventLog.locator('summary').click();
+    await openRuntimeLog(page);
     await abButton.click();
 
     await expect(page.locator('.device-log__line', { hasText: 'Button A pressed' })).toHaveCount(1);
@@ -1558,8 +1688,8 @@ test.describe('core canvas workflows', () => {
   test('sends one MakeCode AB click event per canvas A+B press', async ({ page }) => {
     await gotoCanvas(page);
     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
+    await expectDeviceCode(page, 'mc_beacon.hex');
+    await expectDeviceRuntimeSource(page, 'Node 1', 'makecode-pxt');
 
     await page.getByRole('button', { name: 'Debug' }).click();
     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();

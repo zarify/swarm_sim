@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { unzipSync } from 'fflate';
 import { useEffect, useRef } from 'react';
 import { vi } from 'vitest';
@@ -49,7 +49,7 @@ import {
   shouldGuardGlobalFileDrop,
   translateRuntimeRadioPacketForRecipient,
 } from './SwarmCanvasPanel';
-import { createBlankProject, type SwarmProject } from '../domain/project';
+import { createBlankProject, type ProgramArtifact, type SwarmProject } from '../domain/project';
 import { serializeProject } from '../domain/projectSerialization';
 import { FEATURE_FLAGS } from '../runtime/featureFlags';
 import {
@@ -109,8 +109,53 @@ describe('SwarmCanvasPanel', () => {
     setAddLockedMode(false);
   }
 
-  function stubCanvasGeometry(canvas: SVGElement) {
-    Object.defineProperty(canvas, 'getBoundingClientRect', {
+  function getSelectionStrip() {
+    return screen.getByLabelText('Canvas controls and selection details');
+  }
+
+  function selectionText(text: string | RegExp) {
+    return within(getSelectionStrip()).getByText(text);
+  }
+
+  function querySelectionText(text: string | RegExp) {
+    return within(getSelectionStrip()).queryByText(text);
+  }
+
+  function getRadioInspectorButton() {
+    return screen.getByRole('button', { name: 'Radio inspector' });
+  }
+
+  function getRuntimeLogButton() {
+    return screen.getByRole('button', { name: 'Runtime log' });
+  }
+
+  function getRadioInspectorRegion() {
+    const panel = document.getElementById('radio-inspector-panel');
+    if (!panel) {
+      throw new Error('Radio inspector panel is not mounted');
+    }
+    return panel;
+  }
+
+  function getRuntimeLogRegion() {
+    const panel = document.getElementById('runtime-log-panel');
+    if (!panel) {
+      throw new Error('Runtime log panel is not mounted');
+    }
+    return panel;
+  }
+
+  function openRadioInspector() {
+    fireEvent.click(getRadioInspectorButton());
+  }
+
+  function openRuntimeLog() {
+    fireEvent.click(getRuntimeLogButton());
+  }
+
+  function stubCanvasGeometry(container: HTMLElement) {
+    const field = container.querySelector('.canvas-field') as SVGRectElement;
+    Object.defineProperty(field, 'getBoundingClientRect', {
       configurable: true,
       value: () => ({
         x: 0,
@@ -124,9 +169,11 @@ describe('SwarmCanvasPanel', () => {
         toJSON: () => ({}),
       }),
     });
+    const canvas = container.querySelector('.swarm-canvas') as SVGSVGElement;
     Object.defineProperty(canvas, 'setPointerCapture', { configurable: true, value: vi.fn() });
     Object.defineProperty(canvas, 'releasePointerCapture', { configurable: true, value: vi.fn() });
     Object.defineProperty(canvas, 'hasPointerCapture', { configurable: true, value: () => false });
+    return canvas;
   }
 
   it('renders the spatial canvas with reset-only runtime controls', () => {
@@ -259,7 +306,10 @@ describe('SwarmCanvasPanel', () => {
 
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
     expect(screen.getByText('Locked', { selector: '.selection-name-badge' })).toBeInTheDocument();
-    expect(screen.getByText('Code locked after first upload')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Upload code' })).toBeEnabled();
+    expect(screen.queryByRole('button', { name: 'Edit code' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unload code' })).not.toBeInTheDocument();
+    expect(selectionText('No code')).toBeInTheDocument();
   });
 
   it('supports toggleable pinning for regular devices and permanent pinning for locked devices', () => {
@@ -281,23 +331,27 @@ describe('SwarmCanvasPanel', () => {
 
     expect(screen.getByRole('button', { name: 'Pinned device position permanently' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
-    expect(screen.getByText('Position and name locked')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unload code' })).not.toBeInTheDocument();
     expect(
       screen.queryByText('This device is locked in place on the canvas and cannot be moved, renamed, or unlocked.'),
     ).not.toBeInTheDocument();
   });
 
-  it('shows concise code lock copy for locked devices before their first upload', () => {
+  it('keeps a locked device uploadable until its first assignment', () => {
     render(<SwarmCanvasPanel />);
 
     addLockedDeviceFromSwarmTools();
 
-    expect(screen.getByText('Code locked after first upload')).toBeInTheDocument();
+    expect(screen.getByText('Locked', { selector: '.selection-name-badge' })).toHaveAttribute(
+      'title',
+      'Locked after a code upload: uploads and code edits stay locked.',
+    );
+    expect(screen.getByRole('button', { name: 'Upload code' })).toBeEnabled();
     expect(screen.queryByText('The first successful code upload will be its only assignment.')).not.toBeInTheDocument();
     expect(screen.queryByText('Locked after first code upload.')).not.toBeInTheDocument();
   });
 
-  it('shows concise property lock copy for locked light sources', () => {
+  it('keeps locked source properties editable until the position pin is applied', () => {
     if (!FEATURE_FLAGS.light) {
       return;
     }
@@ -310,7 +364,6 @@ describe('SwarmCanvasPanel', () => {
 
     expect(container.querySelectorAll('.source-node--light')).toHaveLength(1);
     expect(screen.getByText('Locked', { selector: '.selection-name-badge' })).toBeInTheDocument();
-    expect(screen.getByText('Properties unlocked')).toBeInTheDocument();
     expect(screen.getByLabelText('Radius')).toBeEnabled();
     expect(screen.getByLabelText('Peak level (micro:bit scale)')).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeEnabled();
@@ -321,13 +374,12 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByLabelText('Radius')).toBeDisabled();
     expect(screen.getByLabelText('Peak level (micro:bit scale)')).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
-    expect(screen.getByText('Properties locked')).toBeInTheDocument();
     expect(screen.queryByText('Keep this locked node fixed in place on the canvas.')).not.toBeInTheDocument();
     expect(screen.queryByText('This is permanent once applied.')).not.toBeInTheDocument();
     expect(screen.queryByText('This node is locked in place and its properties cannot be changed.')).not.toBeInTheDocument();
   });
 
-  it('shows concise property lock copy for locked sound sources', () => {
+  it('keeps locked sound source properties editable before pinning', () => {
     if (!FEATURE_FLAGS.sound) {
       return;
     }
@@ -338,7 +390,8 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add sound' }));
     setAddLockedMode(false);
 
-    expect(screen.getByText('Properties unlocked')).toBeInTheDocument();
+    expect(screen.getByLabelText('Radius')).toBeEnabled();
+    expect(screen.getByLabelText('Peak level (micro:bit scale)')).toBeEnabled();
   });
 
   it('shows temperature source controls and device temperature readings', () => {
@@ -486,15 +539,72 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.queryByText('Cancelled name')).not.toBeInTheDocument();
   });
 
-  it('keeps device interaction honest and inspection panels compact', () => {
+  it('keeps device interaction honest and inspector panes collapsed', () => {
     render(<SwarmCanvasPanel />);
 
     expect(screen.queryByRole('button', { name: /Press A|Press B|Send ping/ })).not.toBeInTheDocument();
     expect(screen.queryByText('Runtime group')).not.toBeInTheDocument();
     expect(screen.queryByText('Runtime channel')).not.toBeInTheDocument();
     expect(screen.queryByText('Not exposed')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Event log for Node 1')).not.toHaveAttribute('open');
-    expect(screen.getByLabelText('Radio message inspector')).not.toHaveAttribute('open');
+    expect(getRadioInspectorButton()).toHaveAttribute('aria-expanded', 'false');
+    expect(getRuntimeLogButton()).toHaveAttribute('aria-expanded', 'false');
+    expect(getRadioInspectorRegion()).not.toBeVisible();
+    expect(getRuntimeLogRegion()).not.toBeVisible();
+  });
+
+  it('toggles one inspector pane at a time and returns focus to its trigger', () => {
+    render(<SwarmCanvasPanel />);
+
+    const radioButton = getRadioInspectorButton();
+    radioButton.focus();
+    fireEvent.click(radioButton);
+    expect(radioButton).toHaveAttribute('aria-expanded', 'true');
+    expect(getRadioInspectorRegion()).toBeVisible();
+    expect(screen.getByRole('region', { name: 'Radio message inspector' })).toBe(
+      getRadioInspectorRegion(),
+    );
+    expect(radioButton).toHaveFocus();
+
+    const closeButton = within(getRadioInspectorRegion()).getByRole('button', {
+      name: 'Close radio inspector',
+    });
+    fireEvent.keyDown(closeButton, { key: 'Escape' });
+    expect(getRadioInspectorRegion()).not.toBeVisible();
+    expect(radioButton).toHaveFocus();
+
+    openRadioInspector();
+    fireEvent.click(
+      within(getRadioInspectorRegion()).getByRole('button', { name: 'Close radio inspector' }),
+    );
+    expect(getRadioInspectorRegion()).not.toBeVisible();
+    expect(radioButton).toHaveFocus();
+
+    openRadioInspector();
+    openRuntimeLog();
+    expect(getRadioInspectorRegion()).not.toBeVisible();
+    expect(getRuntimeLogRegion()).toBeVisible();
+    fireEvent.click(getRuntimeLogButton());
+    expect(getRuntimeLogRegion()).not.toBeVisible();
+  });
+
+  it('disables the runtime log for sources and hides the readout without a selection', () => {
+    const { container } = render(<SwarmCanvasPanel />);
+
+    expect(getRuntimeLogButton().querySelector('strong')).not.toBeNull();
+
+    openSwarmTools();
+    fireEvent.click(screen.getByRole('button', { name: 'Add temperature' }));
+
+    expect(getRuntimeLogButton()).toBeDisabled();
+    expect(getRuntimeLogButton().querySelector('strong')).toBeNull();
+    expect(getRadioInspectorButton()).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Debug' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete node' }));
+    expect(container.querySelectorAll('.source-node')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete node' }));
+    expect(container.querySelectorAll('.microbit-node')).toHaveLength(0);
+    expect(screen.queryByRole('group', { name: 'Node coordinates' })).not.toBeInTheDocument();
   });
 
   it('assigns uploaded code to the selected device without showing MicroPython host chrome', async () => {
@@ -505,8 +615,8 @@ describe('SwarmCanvasPanel', () => {
       target: { files: [file] },
     });
 
-    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
-    expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
+    await waitFor(() => expect(selectionText('mp.hex')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTitle('MicroPython simulator for Node 1')).toBeInTheDocument());
     expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('MakeCode runtime host')).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /^Reset$/ })[0]!).toBeEnabled();
@@ -520,7 +630,7 @@ describe('SwarmCanvasPanel', () => {
       target: { files: [file] },
     });
 
-    await waitFor(() => expect(screen.getByText('Runtime source: makecode-pxt')).toBeInTheDocument(), {
+    await waitFor(() => expect(screen.getByTitle('MakeCode simulator for Node 1')).toBeInTheDocument(), {
       timeout: 12000,
     });
     expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
@@ -547,7 +657,8 @@ describe('SwarmCanvasPanel', () => {
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: 'Code editor for Node 1' })).not.toBeInTheDocument(),
     );
-    expect(screen.getByText(/Editable source:/)).toHaveTextContent('saved changes ready');
+    expect(screen.queryByText(/Editable source:/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Edit code' })).toBeEnabled();
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
     expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("edited")\n');
@@ -573,7 +684,7 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
       target: { files: [sharedFile] },
     });
-    await waitFor(() => expect(screen.getByText('Assigned: shared.hex')).toBeInTheDocument());
+    await waitFor(() => expect(selectionText('shared.hex')).toBeInTheDocument());
 
     fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[0]!, {
       button: 0,
@@ -584,7 +695,7 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [sharedFile] },
     });
-    await waitFor(() => expect(screen.getByText('Assigned: shared.hex')).toBeInTheDocument());
+    await waitFor(() => expect(selectionText('shared.hex')).toBeInTheDocument());
 
     fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[1]!, {
       button: 0,
@@ -610,6 +721,84 @@ describe('SwarmCanvasPanel', () => {
     expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("shared")');
   });
 
+  it('unloads device code without deleting the node or the peer assignment', async () => {
+    const projects: SwarmProject[] = [];
+    const { container } = render(
+      <SwarmCanvasPanel
+        RuntimeHost={(props) => (
+          <ProjectSnapshotHost {...props} onProject={(project) => projects.push(project)} />
+        )}
+      />,
+    );
+    addDeviceFromSwarmTools();
+
+    const sharedFile = makeUploadFile('shared.hex', makeMicroPythonHex('radio.send("shared")'));
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
+      target: { files: [sharedFile] },
+    });
+    await waitFor(() => expect(selectionText('shared.hex')).toBeInTheDocument());
+
+    fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[0]!, {
+      button: 0,
+      pointerId: 21,
+      clientX: 430,
+      clientY: 260,
+    });
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+      target: { files: [sharedFile] },
+    });
+    await waitFor(() => expect(selectionText('shared.hex')).toBeInTheDocument());
+
+    fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[1]!, {
+      button: 0,
+      pointerId: 22,
+      clientX: 0,
+      clientY: 0,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
+    fireEvent.change(screen.getByLabelText('Editing main.py for Node 2'), {
+      target: { value: 'radio.send("node-2")\n' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+
+    const nodeTwoTransform = container.querySelectorAll('.microbit-node')[1]!.getAttribute('transform');
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Unload code' }));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      'Unload shared.hex from Node 2? Saved code edits for this device will be removed.',
+    );
+    expect(selectionText('shared.hex')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
+    expect(screen.getByLabelText('Editing main.py for Node 2')).toHaveValue('radio.send("node-2")\n');
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    confirmSpy.mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Unload code' }));
+    await waitFor(() => expect(selectionText('No code')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Upload code' })).toHaveFocus();
+    expect(container.querySelectorAll('.microbit-node')[1]).toHaveAttribute(
+      'transform',
+      nodeTwoTransform!,
+    );
+    expect(projects.at(-1)?.artifacts).toHaveLength(1);
+
+    fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[0]!, {
+      button: 0,
+      pointerId: 23,
+      clientX: 430,
+      clientY: 260,
+    });
+    expect(selectionText('shared.hex')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
+    expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("shared")');
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Unload code' }));
+    await waitFor(() => expect(selectionText('No code')).toBeInTheDocument());
+    await waitFor(() => expect(projects.at(-1)?.artifacts).toHaveLength(0));
+    expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
+  });
+
   it('rejects unextractable HEX uploads', async () => {
     render(<SwarmCanvasPanel />);
 
@@ -623,9 +812,9 @@ describe('SwarmCanvasPanel', () => {
         screen.getByText('No embedded MicroPython or MakeCode source found in HEX artifact'),
       ).toBeInTheDocument(),
     );
-    expect(screen.getByText('No code assigned yet')).toBeInTheDocument();
+    expect(selectionText('No code')).toBeInTheDocument();
     expect(
-      screen.queryByText('Assigned: unknown.hex'),
+      querySelectionText('unknown.hex'),
     ).not.toBeInTheDocument();
   });
 
@@ -639,38 +828,67 @@ describe('SwarmCanvasPanel', () => {
       target: { files: [makeUploadFile('fast.hex', makeMicroPythonHex('radio.send("fast")'))] },
     });
 
-    await waitFor(() => expect(screen.getByText('Assigned: fast.hex')).toBeInTheDocument());
+    await waitFor(() => expect(selectionText('fast.hex')).toBeInTheDocument());
     slowUpload.resolve(makeMicroPythonHex('radio.send("slow")'));
 
-    await waitFor(() => expect(screen.getByText('Assigned: fast.hex')).toBeInTheDocument());
-    expect(screen.queryByText('Assigned: slow.hex')).not.toBeInTheDocument();
+    await waitFor(() => expect(selectionText('fast.hex')).toBeInTheDocument());
+    expect(querySelectionText('slow.hex')).not.toBeInTheDocument();
   });
 
-  it('supports dropping a .hex file anywhere in the right sidebar for the selected device', async () => {
-    render(<SwarmCanvasPanel />);
+  it('loads a dropped .hex onto the selected device when the field background receives it', async () => {
+    const { container } = render(<SwarmCanvasPanel />);
 
-    fireEvent.drop(screen.getByLabelText('Canvas controls and selection details'), {
+    fireEvent.drop(container.querySelector('.canvas-wrap')!, {
       dataTransfer: {
         files: [makeUploadFile('dropped.hex', makeMicroPythonHex('radio.send("drop")'))],
         types: ['Files'],
       },
     });
 
-    await waitFor(() => expect(screen.getByText('Assigned: dropped.hex')).toBeInTheDocument());
-    expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
+    await waitFor(() => expect(selectionText('dropped.hex')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTitle('MicroPython simulator for Node 1')).toBeInTheDocument());
+  });
+
+  it('loads a dropped .hex onto the device under the pointer instead of the selected device', async () => {
+    const { container } = render(<SwarmCanvasPanel />);
+
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+      target: { files: [makeUploadFile('first.hex', makeMicroPythonHex('radio.send("one")'))] },
+    });
+    await waitFor(() => expect(selectionText('first.hex')).toBeInTheDocument());
+
+    addDeviceFromSwarmTools();
+    expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0);
+
+    const secondNode = container.querySelectorAll('.microbit-node')[1] as SVGGElement;
+    fireEvent.drop(secondNode, {
+      dataTransfer: {
+        files: [makeUploadFile('second.hex', makeMicroPythonHex('radio.send("two")'))],
+        types: ['Files'],
+      },
+    });
+
+    await waitFor(() => expect(selectionText('second.hex')).toBeInTheDocument());
+    fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[0]!, {
+      button: 0,
+      pointerId: 7,
+      clientX: 430,
+      clientY: 260,
+    });
+    expect(selectionText('first.hex')).toBeInTheDocument();
   });
 
   it('prompts before overwriting existing code on a device', async () => {
     render(<SwarmCanvasPanel />);
     const input = screen.getByLabelText(/Load code onto Node 1/);
     fireEvent.change(input, { target: { files: [makeUploadFile('first.hex', makeMicroPythonHex('radio.send("one")'))] } });
-    await waitFor(() => expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument());
+    await waitFor(() => expect(selectionText('first.hex')).toBeInTheDocument());
 
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
     fireEvent.change(input, { target: { files: [makeUploadFile('second.hex', makeMicroPythonHex('radio.send("two")'))] } });
     await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
-    expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument();
-    expect(screen.queryByText('Assigned: second.hex')).not.toBeInTheDocument();
+    expect(selectionText('first.hex')).toBeInTheDocument();
+    expect(querySelectionText('second.hex')).not.toBeInTheDocument();
     confirmSpy.mockRestore();
   });
 
@@ -682,26 +900,26 @@ describe('SwarmCanvasPanel', () => {
       target: { files: [makeUploadFile('mystery.hex', makeMicroPythonHex('radio.send("mystery")'))] },
     });
 
-    await waitFor(() => expect(screen.getByText('Assigned: mystery.hex')).toBeInTheDocument());
-    expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
+    await waitFor(() => expect(selectionText('mystery.hex')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTitle('MicroPython simulator for Node 2')).toBeInTheDocument());
     expect(screen.queryByRole('button', { name: 'Edit code' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Load code onto Node 2/)).not.toBeInTheDocument();
-    expect(screen.getByText('Code locked')).toBeInTheDocument();
-    expect(screen.queryByText('Code locked after first upload')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upload code' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unload code' })).not.toBeInTheDocument();
     expect(screen.queryByText('Locked after first code upload.')).not.toBeInTheDocument();
     expect(screen.queryByText('Source is hidden and this device cannot be overwritten.')).not.toBeInTheDocument();
   });
 
-  it('blocks later overwrite attempts on locked devices through sidebar drop', async () => {
-    render(<SwarmCanvasPanel />);
+  it('blocks later overwrite attempts on locked devices through canvas drop', async () => {
+    const { container } = render(<SwarmCanvasPanel />);
 
     addLockedDeviceFromSwarmTools();
     fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
       target: { files: [makeUploadFile('first.hex', makeMicroPythonHex('radio.send("one")'))] },
     });
-    await waitFor(() => expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument());
+    await waitFor(() => expect(selectionText('first.hex')).toBeInTheDocument());
 
-    fireEvent.drop(screen.getByLabelText('Canvas controls and selection details'), {
+    fireEvent.drop(container.querySelector('.canvas-wrap')!, {
       dataTransfer: {
         files: [makeUploadFile('second.hex', makeMicroPythonHex('radio.send("two")'))],
         types: ['Files'],
@@ -711,20 +929,79 @@ describe('SwarmCanvasPanel', () => {
     await waitFor(() =>
       expect(screen.getByText('Node 2 is locked after its first successful code upload.')).toBeInTheDocument(),
     );
-    expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument();
-    expect(screen.queryByText('Assigned: second.hex')).not.toBeInTheDocument();
+    expect(selectionText('first.hex')).toBeInTheDocument();
+    expect(querySelectionText('second.hex')).not.toBeInTheDocument();
+  });
+
+  it('keeps invalid files from replacing assigned code', async () => {
+    const { container } = render(<SwarmCanvasPanel />);
+
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+      target: { files: [makeUploadFile('first.hex', makeMicroPythonHex('radio.send("one")'))] },
+    });
+    await waitFor(() => expect(selectionText('first.hex')).toBeInTheDocument());
+
+    fireEvent.drop(container.querySelector('.canvas-wrap')!, {
+      dataTransfer: {
+        files: [makeUploadFile('notes.txt', 'not a hex file')],
+        types: ['Files'],
+      },
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Only micro:bit .hex files can be assigned to devices right now'),
+      ).toBeInTheDocument(),
+    );
+    expect(selectionText('first.hex')).toBeInTheDocument();
+  });
+
+  it('does not fall through to the selected device when the pointer is over a blocked locked device', async () => {
+    const { container } = render(<SwarmCanvasPanel />);
+
+    addLockedDeviceFromSwarmTools();
+    fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
+      target: { files: [makeUploadFile('first.hex', makeMicroPythonHex('radio.send("one")'))] },
+    });
+    await waitFor(() => expect(selectionText('first.hex')).toBeInTheDocument());
+
+    fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[0]!, {
+      button: 0,
+      pointerId: 8,
+      clientX: 430,
+      clientY: 260,
+    });
+    expect(screen.getByText('Node 1', { selector: '.selection-name' })).toBeInTheDocument();
+
+    fireEvent.drop(container.querySelectorAll('.microbit-node')[1]!, {
+      dataTransfer: {
+        files: [makeUploadFile('second.hex', makeMicroPythonHex('radio.send("two")'))],
+        types: ['Files'],
+      },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByText('Node 2 is locked after its first successful code upload.')).toBeInTheDocument(),
+    );
+    expect(selectionText('first.hex')).toBeInTheDocument();
+    fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[0]!, {
+      button: 0,
+      pointerId: 9,
+      clientX: 430,
+      clientY: 260,
+    });
+    expect(selectionText('No code')).toBeInTheDocument();
   });
 
   it('deletes the selected device node from the canvas', () => {
     const { container } = render(<SwarmCanvasPanel />);
-    fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete node' }));
     expect(container.querySelectorAll('.microbit-node')).toHaveLength(0);
   });
 
   it('keeps regular devices draggable while preventing movement on pinned locked devices', () => {
     const { container } = render(<SwarmCanvasPanel />);
-    const canvas = container.querySelector('.swarm-canvas') as SVGElement;
-    stubCanvasGeometry(canvas);
+    const canvas = stubCanvasGeometry(container);
 
     const regularNode = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
     fireEvent.click(screen.getByRole('button', { name: 'Pin device position' }));
@@ -752,11 +1029,112 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.pointerUp(canvas, { pointerId: 3, clientX: 160, clientY: 160 });
 
     expect(screen.getByRole('button', { name: 'Pinned device position permanently' })).toBeDisabled();
-    expect(screen.getByText('Position and name locked')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
     expect(
       screen.queryByText('This device is locked in place on the canvas and cannot be moved, renamed, or unlocked.'),
     ).not.toBeInTheDocument();
     expect(fixedLockedNode).toHaveAttribute('transform', fixedLockedTransform!);
+  });
+
+  it('moves a grabbed node relative to the pointer and rounds the landed position', () => {
+    const { container } = render(<SwarmCanvasPanel />);
+    const canvas = stubCanvasGeometry(container);
+    const node = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
+    const coordinates = () => screen.getByRole('group', { name: 'Node coordinates' });
+
+    expect(node).toHaveAttribute('transform', 'translate(430 260)');
+    expect(coordinates()).toHaveTextContent('X: 430 · Y: 260');
+
+    fireEvent.pointerDown(node, { pointerId: 11, clientX: 415, clientY: 285 });
+    fireEvent.pointerMove(canvas, { pointerId: 11, clientX: 415, clientY: 285 });
+    expect(node).toHaveAttribute('transform', 'translate(430 260)');
+
+    fireEvent.pointerMove(canvas, { pointerId: 11, clientX: 450.4, clientY: 303.2 });
+    fireEvent.pointerUp(canvas, { pointerId: 11, clientX: 450.4, clientY: 303.2 });
+
+    expect(node).toHaveAttribute('transform', 'translate(465 278)');
+    expect(coordinates()).toHaveTextContent('X: 465 · Y: 278');
+  });
+
+  it('moves environment sources with the same grab-relative pointer maths', () => {
+    const { container } = render(<SwarmCanvasPanel />);
+    const canvas = stubCanvasGeometry(container);
+
+    openSwarmTools();
+    fireEvent.click(screen.getByRole('button', { name: 'Add temperature' }));
+    const source = container.querySelector('.source-node--temperature') as SVGGElement;
+    expect(source).toHaveAttribute('transform', 'translate(220 140)');
+
+    fireEvent.pointerDown(source, { pointerId: 12, clientX: 208, clientY: 128 });
+    fireEvent.pointerMove(canvas, { pointerId: 12, clientX: 258.6, clientY: 180.4 });
+    fireEvent.pointerUp(canvas, { pointerId: 12, clientX: 258.6, clientY: 180.4 });
+
+    expect(source).toHaveAttribute('transform', 'translate(271 192)');
+    expect(screen.getByRole('group', { name: 'Node coordinates' })).toHaveTextContent('X: 271 · Y: 192');
+  });
+
+  it('selects a pinned node and updates the readout without moving it', () => {
+    const { container } = render(<SwarmCanvasPanel />);
+    const canvas = stubCanvasGeometry(container);
+    const node = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pin device position' }));
+    fireEvent.pointerDown(node, { pointerId: 13, clientX: 430, clientY: 260 });
+    fireEvent.pointerMove(canvas, { pointerId: 13, clientX: 120, clientY: 120 });
+    fireEvent.pointerUp(canvas, { pointerId: 13, clientX: 120, clientY: 120 });
+
+    expect(node).toHaveAttribute('transform', 'translate(430 260)');
+    expect(screen.getByRole('group', { name: 'Node coordinates' })).toHaveTextContent('X: 430 · Y: 260');
+  });
+
+  it('keeps imported fractional positions until the node is actually dragged', async () => {
+    const { container } = render(<SwarmCanvasPanel />);
+    stubCanvasGeometry(container);
+    fireEvent.click(screen.getByRole('button', { name: 'Swarm tools' }));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    const importedProject: SwarmProject = {
+      ...createBlankProject({ id: 'fractional', name: 'Fractional field', now: '2026-06-01T00:00:00.000Z' }),
+      devices: [{ id: 'device-1', name: 'Node 1', position: { x: 430.25, y: 260.75 } }],
+      environmentSources: [
+        {
+          id: 'temperature-1',
+          type: 'temperature',
+          name: 'Temperature 1',
+          position: { x: 120.5, y: 400.5 },
+          radius: 180,
+          mode: 'constant',
+          temperatureC: 22,
+        },
+      ],
+    };
+
+    fireEvent.change(screen.getByLabelText('Upload bundle'), {
+      target: { files: [makeSwarmBundleFile(importedProject)] },
+    });
+
+    await waitFor(() =>
+      expect(container.querySelector('.source-node--temperature')).toBeInTheDocument(),
+    );
+    fireEvent.keyDown(window, { key: 'Escape' });
+
+    const node = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
+    expect(node).toHaveAttribute('transform', 'translate(430.25 260.75)');
+    expect(screen.getByRole('group', { name: 'Node coordinates' })).toHaveTextContent(
+      'X: 430.25 · Y: 260.75',
+    );
+
+    const source = container.querySelector('.source-node--temperature') as SVGGElement;
+    fireEvent.pointerDown(source, { pointerId: 31, clientX: 120, clientY: 400 });
+    expect(source).toHaveAttribute('transform', 'translate(120.5 400.5)');
+    expect(screen.getByRole('group', { name: 'Node coordinates' })).toHaveTextContent(
+      'X: 120.5 · Y: 400.5',
+    );
+
+    fireEvent.pointerUp(source, { pointerId: 31, clientX: 120, clientY: 400 });
+    fireEvent.pointerDown(node, { pointerId: 32, clientX: 430, clientY: 260 });
+    fireEvent.pointerUp(node, { pointerId: 32, clientX: 430, clientY: 260 });
+    expect(node).toHaveAttribute('transform', 'translate(430.25 260.75)');
   });
 
   it('keeps runtime hosts hidden until devices have assigned runtime artifacts', () => {
@@ -775,13 +1153,13 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
     });
-    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
+    await waitFor(() => expect(selectionText('mp.hex')).toBeInTheDocument());
 
     addDeviceFromSwarmTools();
     fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
       target: { files: [makeUploadFile('mc_beacon.hex', makeMakeCodeHex({ 'main.ts': 'radio.sendString("ping")' }))] },
     });
-    await waitFor(() => expect(screen.getByText('Runtime source: makecode-pxt')).toBeInTheDocument(), {
+    await waitFor(() => expect(screen.getByTitle('MakeCode simulator for Node 2')).toBeInTheDocument(), {
       timeout: 12000,
     });
 
@@ -851,15 +1229,14 @@ describe('SwarmCanvasPanel', () => {
   it('logs sound start once for bursty runtime sound events', async () => {
     render(<SwarmCanvasPanel RuntimeHost={(props) => <BurstSoundEmitterHost {...props} />} />);
 
-    const deviceLog = screen.getByLabelText('Event log for Node 1');
-    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
+    openRuntimeLog();
 
     await waitFor(() =>
-      expect(screen.getByText('Sound output started (level 9)')).toBeInTheDocument(),
+      expect(getRuntimeLogRegion()).toHaveTextContent('Sound output started (level 9)'),
     );
-    expect(screen.getAllByText('Sound output started (level 9)')).toHaveLength(1);
+    expect(within(getRuntimeLogRegion()).getAllByText(/Sound output started \(level 9\)/)).toHaveLength(1);
     expect(
-      screen
+      within(getRuntimeLogRegion())
         .getByText('Sound output started (level 9)')
         .closest('.device-log__line')
         ?.querySelector('.device-log__type'),
@@ -878,9 +1255,9 @@ describe('SwarmCanvasPanel', () => {
     });
     expect(screen.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeInTheDocument();
 
-    const deviceLog = screen.getByLabelText('Event log for Node 1');
-    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
-    const diagnostic = await screen.findByText('Ignored invalid runtime radio signal strength: -52');
+    const deviceLog = getRuntimeLogRegion();
+    openRuntimeLog();
+    const diagnostic = await within(deviceLog).findByText('Ignored invalid runtime radio signal strength: -52');
     expect(diagnostic.closest('.device-log__line')?.querySelector('.device-log__type')).toHaveTextContent('err');
   });
 
@@ -903,12 +1280,12 @@ describe('SwarmCanvasPanel', () => {
   it('shows serial output in runtime logs and renders compact radio packet previews', async () => {
     render(<SwarmCanvasPanel RuntimeHost={(props) => <SerialAndRadioEmitterHost {...props} />} />);
 
-    const deviceLog = screen.getByLabelText('Event log for Node 1');
-    const radioInspector = screen.getByLabelText('Radio message inspector');
-    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
-    fireEvent.click(radioInspector.querySelector('summary') as HTMLElement);
+    openRuntimeLog();
+    await waitFor(() => expect(getRuntimeLogRegion()).toHaveTextContent('sound:13'));
 
-    await waitFor(() => expect(screen.getAllByText('sound:13').length).toBeGreaterThanOrEqual(2));
+    openRadioInspector();
+    await waitFor(() => expect(getRadioInspectorRegion()).toHaveTextContent('sound:13'));
+    expect(getRuntimeLogRegion()).not.toBeVisible();
   });
 
   it('applies runtime radio config hints before routing immediate packets', async () => {
@@ -917,8 +1294,7 @@ describe('SwarmCanvasPanel', () => {
     addDeviceFromSwarmTools();
     await waitFor(() => expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0));
 
-    const deviceLog = screen.getByLabelText('Event log for Node 2');
-    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
+    openRuntimeLog();
 
     await waitFor(() => expect(screen.getByText('Received radio packet from Node 1')).toBeInTheDocument());
     expect(screen.queryByText('Blocked radio packet from Node 1: group-mismatch')).not.toBeInTheDocument();
@@ -935,8 +1311,7 @@ describe('SwarmCanvasPanel', () => {
     addDeviceFromSwarmTools();
     await waitFor(() => expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0));
 
-    const deviceLog = screen.getByLabelText('Event log for Node 2');
-    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
+    openRuntimeLog();
 
     await waitFor(() => expect(screen.getByText('Received radio packet from sensors')).toBeInTheDocument());
   });
@@ -952,8 +1327,7 @@ describe('SwarmCanvasPanel', () => {
     addDeviceFromSwarmTools();
     await waitFor(() => expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0));
 
-    const radioInspector = screen.getByLabelText('Radio message inspector');
-    fireEvent.click(radioInspector.querySelector('summary') as HTMLElement);
+    openRadioInspector();
 
     await waitFor(() => expect(screen.getByText(/sensors to 1 received/i)).toBeInTheDocument());
   });
@@ -965,16 +1339,15 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
       target: { files: [makeUploadFile('locked.hex', makeMicroPythonHex('radio.send("hidden")'))] },
     });
-    await waitFor(() => expect(screen.getByText('Assigned: locked.hex')).toBeInTheDocument());
+    await waitFor(() => expect(selectionText('locked.hex')).toBeInTheDocument());
 
-    const radioInspector = screen.getByLabelText('Radio message inspector');
-    fireEvent.click(radioInspector.querySelector('summary') as HTMLElement);
+    openRadioInspector();
 
     await waitFor(() => expect(screen.getByText('Broadcast hidden for locked device')).toBeInTheDocument());
     expect(screen.getByText(/Node 2 to 1 received/i)).toBeInTheDocument();
     expect(screen.queryByText('secret lesson')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete node' }));
 
     expect(screen.getByText('Broadcast hidden for locked device')).toBeInTheDocument();
     expect(screen.queryByText('secret lesson')).not.toBeInTheDocument();
@@ -997,10 +1370,10 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.change(renameInput, { target: { value: 'Alpha' } });
     fireEvent.keyDown(renameInput, { key: 'Enter' });
 
-    const renamedDeviceLog = screen.getByLabelText('Event log for Alpha');
-    fireEvent.click(renamedDeviceLog.querySelector('summary') as HTMLElement);
+    const renamedDeviceLog = getRuntimeLogRegion();
+    openRuntimeLog();
 
-    await waitFor(() => expect(screen.getByText('Received radio packet from Node 1')).toBeInTheDocument());
+    await waitFor(() => expect(within(renamedDeviceLog).getByText('Received radio packet from Node 1')).toBeInTheDocument());
   });
 
   it('deduplicates immediate identical runtime radio packets before routing', async () => {
@@ -1009,13 +1382,13 @@ describe('SwarmCanvasPanel', () => {
     addDeviceFromSwarmTools();
     await waitFor(() => expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0));
 
-    const deviceLog = screen.getByLabelText('Event log for Node 2');
-    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
+    const deviceLog = getRuntimeLogRegion();
+    openRuntimeLog();
 
     await waitFor(() =>
-      expect(screen.getByText('Received radio packet from Node 1')).toBeInTheDocument(),
+      expect(within(deviceLog).getByText('Received radio packet from Node 1')).toBeInTheDocument(),
     );
-    expect(screen.getAllByText('Received radio packet from Node 1')).toHaveLength(1);
+    expect(within(deviceLog).getAllByText('Received radio packet from Node 1')).toHaveLength(1);
   });
 
   it('translates MakeCode packets into simplified MicroPython byte payloads', async () => {
@@ -1090,12 +1463,14 @@ describe('SwarmCanvasPanel', () => {
 
   it('keeps sender runtime group when translating MicroPython text packets for MakeCode recipients', async () => {
     const deliveredPackets: RoutedRadioDelivery[][] = [];
+    const receivedProjects: SwarmProject[] = [];
     const { container } = render(
       <SwarmCanvasPanel
         RuntimeHost={(props) => (
           <MicroPythonToMakeCodeDeliveryProbeHost
             {...props}
             onDeliveries={(deliveries) => deliveredPackets.push(deliveries)}
+            onProject={(project) => receivedProjects.push(project)}
           />
         )}
       />,
@@ -1104,15 +1479,18 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
     });
-    await waitFor(() => expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument());
+    await waitFor(() =>
+      expect(deviceArtifactRuntimeSource(receivedProjects.at(-1), 'device-1')).toBe('micropython'),
+    );
 
     addDeviceFromSwarmTools();
     fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
       target: { files: [makeUploadFile('mc_beacon.hex', makeMakeCodeHex({ 'main.ts': 'radio.sendString("ping")' }))] },
     });
-    await waitFor(() => expect(screen.getByText('Runtime source: makecode-pxt')).toBeInTheDocument(), {
-      timeout: 12000,
-    });
+    await waitFor(
+      () => expect(deviceArtifactRuntimeSource(receivedProjects.at(-1), 'device-2')).toBe('makecode-pxt'),
+      { timeout: 12000 },
+    );
 
     await waitFor(() => expect(deliveredPackets.length).toBeGreaterThan(0));
     const firstDelivery = deliveredPackets.at(-1)?.[0];
@@ -1127,8 +1505,7 @@ describe('SwarmCanvasPanel', () => {
     const canvas = container.querySelector('.swarm-canvas') as SVGElement;
     Object.defineProperty(canvas, 'setPointerCapture', { value: vi.fn(), configurable: true });
     fireEvent.pointerDown(alphaNode as Element);
-    const senderDeviceLog = screen.getByLabelText('Event log for Node 1');
-    fireEvent.click(senderDeviceLog.querySelector('summary') as HTMLElement);
+    openRuntimeLog();
     await waitFor(() => expect(screen.getByText('Sent radio packet to 1 recipient(s)')).toBeInTheDocument());
     expect(
       screen.queryByText(/Translated MicroPython radio payload for MakeCode recipient:/i),
@@ -1143,12 +1520,12 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
     });
-    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
+    await waitFor(() => expect(selectionText('mp.hex')).toBeInTheDocument());
 
     await waitFor(() =>
       expect(container.querySelector('[data-runtime-state="device-1:error"]')).toBeInTheDocument(),
     );
-    expect(screen.getByText(/something went wrong/i)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent('Simulated runtime crash');
 
     fireEvent.click(screen.getAllByRole('button', { name: /^Reset$/ })[0]!);
     await waitFor(() =>
@@ -1164,7 +1541,7 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
     });
-    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
+    await waitFor(() => expect(selectionText('mp.hex')).toBeInTheDocument());
 
     fireEvent.click(getSaveCanvasButton());
     await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
@@ -1189,6 +1566,16 @@ describe('SwarmCanvasPanel', () => {
       <SwarmCanvasPanel RuntimeHost={(props) => <ButtonProbeHost {...props} buttonStates={buttonStates} />} />,
     );
 
+    openRuntimeLog();
+    fireEvent.pointerDown(screen.getByTestId('device-button-device-1-AB'));
+
+    await waitFor(() => expect(buttonStates).toContain('true:true'));
+    await waitFor(() => expect(buttonStates).toContain('false:false'));
+    expect(container.querySelector('[data-device-button-combo-link="device-1"]')).toBeInTheDocument();
+    expect(getRuntimeLogRegion()).toBeVisible();
+    expect(within(getRuntimeLogRegion()).getAllByText('Button A pressed')).toHaveLength(1);
+    expect(within(getRuntimeLogRegion()).getAllByText('Button B pressed')).toHaveLength(1);
+
     fireEvent.pointerDown(screen.getByTestId('device-button-device-1-A'));
 
     await waitFor(() => expect(buttonStates).toContain('true:false'));
@@ -1198,12 +1585,6 @@ describe('SwarmCanvasPanel', () => {
 
     await waitFor(() => expect(buttonStates).toContain('false:true'));
     await waitFor(() => expect(buttonStates).toContain('false:false'));
-
-    fireEvent.pointerDown(screen.getByTestId('device-button-device-1-AB'));
-
-    await waitFor(() => expect(buttonStates).toContain('true:true'));
-    await waitFor(() => expect(buttonStates).toContain('false:false'));
-    expect(container.querySelector('[data-device-button-combo-link="device-1"]')).toBeInTheDocument();
   });
 
   it('saves a layout to browser storage and can load it back from the canvas-state menu', async () => {
@@ -1316,7 +1697,7 @@ describe('SwarmCanvasPanel', () => {
       target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("persist")'))] },
     });
 
-    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
+    await waitFor(() => expect(selectionText('mp.hex')).toBeInTheDocument());
     fireEvent.click(getSaveCanvasButton());
 
     await waitFor(() =>
@@ -1339,9 +1720,8 @@ describe('SwarmCanvasPanel', () => {
 
   it('restores the saved canvas on Reset without confirmation when only positions changed', async () => {
     const { container } = render(<SwarmCanvasPanel />);
-    const canvas = container.querySelector('.swarm-canvas') as SVGElement;
+    const canvas = stubCanvasGeometry(container);
     const firstNode = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
-    stubCanvasGeometry(canvas);
 
     fireEvent.click(getSaveCanvasButton());
     await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
@@ -1388,7 +1768,7 @@ describe('SwarmCanvasPanel', () => {
     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
       target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
     });
-    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
+    await waitFor(() => expect(selectionText('mp.hex')).toBeInTheDocument());
 
     fireEvent.click(getSaveCanvasButton());
     await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
@@ -1398,7 +1778,9 @@ describe('SwarmCanvasPanel', () => {
       target: { value: 'radio.send("edited")\n' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
-    await waitFor(() => expect(screen.getByText(/Editable source:/)).toHaveTextContent('saved changes ready'));
+    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
+    expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("edited")\n');
+    fireEvent.keyDown(window, { key: 'Escape' });
 
     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
     fireEvent.click(getHeaderResetButton());
@@ -1406,7 +1788,6 @@ describe('SwarmCanvasPanel', () => {
     await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
     expect(confirmSpy.mock.calls[0]?.[0]).toContain('restore saved code');
     await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
-    expect(screen.getByText(/Editable source:/)).toHaveTextContent('ready to edit');
 
     fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
     expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("ping")');
@@ -1571,6 +1952,25 @@ describe('SwarmCanvasPanel', () => {
 
 });
 
+function ProjectSnapshotHost({
+  project,
+  onProject,
+}: MicroPythonRuntimeHostProps & { onProject: (project: SwarmProject) => void }) {
+  useEffect(() => {
+    onProject(project);
+  }, [onProject, project]);
+  return <div aria-label="MicroPython runtime host" />;
+}
+
+function deviceArtifactRuntimeSource(
+  project: SwarmProject | undefined,
+  deviceId: string,
+): ProgramArtifact['runtimeSource'] | undefined {
+  const device = project?.devices.find((candidate) => candidate.id === deviceId);
+  return project?.artifacts.find((artifact) => artifact.id === device?.programArtifactId)
+    ?.runtimeSource;
+}
+
 function DisplayEmitterHost({
   onDisplayChange,
   pixels,
@@ -1664,13 +2064,12 @@ function InvalidSignalStrengthHost({ onRadioPacket }: MicroPythonRuntimeHostProp
       return;
     }
     emitted.current = true;
-    const timerId = globalThis.setTimeout(() => {
+    globalThis.setTimeout(() => {
       onRadioPacket('device-1', {
         data: new Uint8Array([0x01]),
         signalStrength: -52,
       });
     }, 0);
-    return () => globalThis.clearTimeout(timerId);
   }, [onRadioPacket]);
 
   return <div aria-label="MicroPython runtime host" />;
@@ -1702,10 +2101,9 @@ function SignalStrengthHintHost({ onRadioConfigHint }: MicroPythonRuntimeHostPro
       return;
     }
     emitted.current = true;
-    const timerId = globalThis.setTimeout(() => {
+    globalThis.setTimeout(() => {
       onRadioConfigHint?.('device-1', { signalStrength: 7 });
     }, 0);
-    return () => globalThis.clearTimeout(timerId);
   }, [onRadioConfigHint]);
 
   return <div aria-label="MicroPython runtime host" />;
@@ -1739,11 +2137,10 @@ function SerialAndRadioEmitterHost({ onRadioPacket, onRuntimeLog }: MicroPythonR
       return;
     }
     emitted.current = true;
-    const timerId = globalThis.setTimeout(() => {
+    globalThis.setTimeout(() => {
       onRuntimeLog('device-1', 'serial-output', 'sound:13');
       onRadioPacket('device-1', { data: makeMakeCodeValuePacket('sound', 13) });
     }, 0);
-    return () => globalThis.clearTimeout(timerId);
   }, [onRadioPacket, onRuntimeLog]);
 
   return <div aria-label="MicroPython runtime host" />;
@@ -1756,12 +2153,11 @@ function RadioConfigThenPacketHost({ project, onRadioConfigHint, onRadioPacket }
       return;
     }
     emitted.current = true;
-    const timerId = globalThis.setTimeout(() => {
+    globalThis.setTimeout(() => {
       onRadioConfigHint?.('device-1', { group: 42 });
       onRadioConfigHint?.('device-2', { group: 42 });
       onRadioPacket('device-1', { data: new Uint8Array([0x01]), signalStrength: 7 });
     }, 0);
-    return () => globalThis.clearTimeout(timerId);
   }, [project, onRadioConfigHint, onRadioPacket]);
 
   return <div aria-label="MicroPython runtime host" />;
@@ -1774,14 +2170,13 @@ function DuplicateRadioPacketHost({ project, onRadioConfigHint, onRadioPacket }:
       return;
     }
     emitted.current = true;
-    const timerId = globalThis.setTimeout(() => {
+    globalThis.setTimeout(() => {
       onRadioConfigHint?.('device-1', { group: 42 });
       onRadioConfigHint?.('device-2', { group: 42 });
       const packet = { data: new Uint8Array([0x01]), signalStrength: 7 };
       onRadioPacket('device-1', packet);
       onRadioPacket('device-1', packet);
     }, 0);
-    return () => globalThis.clearTimeout(timerId);
   }, [project, onRadioConfigHint, onRadioPacket]);
 
   return <div aria-label="MicroPython runtime host" />;
@@ -1795,12 +2190,11 @@ function LockedSenderRadioHost({ project, onRadioConfigHint, onRadioPacket }: Mi
       return;
     }
     emitted.current = true;
-    const timerId = globalThis.setTimeout(() => {
+    globalThis.setTimeout(() => {
       onRadioConfigHint?.('device-1', { group: 42 });
       onRadioConfigHint?.('device-2', { group: 42 });
       onRadioPacket('device-2', { data: new TextEncoder().encode('secret lesson'), signalStrength: 7 });
     }, 0);
-    return () => globalThis.clearTimeout(timerId);
   }, [project, onRadioConfigHint, onRadioPacket]);
 
   return <div aria-label="MicroPython runtime host" />;
@@ -1828,8 +2222,15 @@ function MicroPythonToMakeCodeDeliveryProbeHost({
   onRadioConfigHint,
   onRadioPacket,
   onDeliveries,
-}: MicroPythonRuntimeHostProps & { onDeliveries: (deliveries: RoutedRadioDelivery[]) => void }) {
+  onProject,
+}: MicroPythonRuntimeHostProps & {
+  onDeliveries: (deliveries: RoutedRadioDelivery[]) => void;
+  onProject?: (project: SwarmProject) => void;
+}) {
   const emitted = useRef(false);
+  useEffect(() => {
+    onProject?.(project);
+  }, [onProject, project]);
   useEffect(() => {
     const alpha = project.devices.find((device) => device.id === 'device-1');
     const node2 = project.devices.find((device) => device.id === 'device-2');
@@ -1838,7 +2239,7 @@ function MicroPythonToMakeCodeDeliveryProbeHost({
     }
 
     emitted.current = true;
-    const timerId = globalThis.setTimeout(() => {
+    globalThis.setTimeout(() => {
       onRadioConfigHint?.('device-1', { group: 42 });
       onRadioConfigHint?.('device-2', { group: 42 });
       onDeliveries(
@@ -1847,7 +2248,6 @@ function MicroPythonToMakeCodeDeliveryProbeHost({
         }),
       );
     }, 0);
-    return () => globalThis.clearTimeout(timerId);
   }, [project, onRadioConfigHint, onRadioPacket, onDeliveries]);
 
   return <div aria-label="MicroPython runtime host" />;
