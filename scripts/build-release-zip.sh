@@ -11,6 +11,22 @@ VERSION="$(node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8'
 OUTPUT_DIR="${REPO_ROOT}/release"
 ARCHIVE_NAME="${PACKAGE_NAME}-v${VERSION}.zip"
 ARCHIVE_PATH="${OUTPUT_DIR}/${ARCHIVE_NAME}"
+TAG="v${VERSION}"
+
+if ! git diff-index --quiet HEAD --; then
+  echo "Refusing to package: worktree has uncommitted tracked changes." >&2
+  exit 1
+fi
+
+if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+  echo "Refusing to package: missing tag ${TAG}. Create it with: git tag -a ${TAG} -m \"${TAG}\"" >&2
+  exit 1
+fi
+
+if [ "$(git rev-parse "${TAG}^{commit}")" != "$(git rev-parse HEAD)" ]; then
+  echo "Refusing to package: HEAD is not at ${TAG}. Check out the release commit first." >&2
+  exit 1
+fi
 
 echo "Building ${PACKAGE_NAME} v${VERSION}..."
 npm run build

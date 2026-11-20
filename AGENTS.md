@@ -31,7 +31,20 @@ Do not move low-level edge-case assertions from Vitest into Playwright; keep Pla
   - bug fix -> patch
   - backward-compatible feature -> minor
   - breaking change -> major
-- If a change includes bug fixes or new features, update the project version in `package.json` as part of that change.
+- If a change includes bug fixes or new features, update the project version as part of that change.
+
+### Bumping the version
+
+- Bump with `npm version patch|minor|major` on `main` with a clean worktree. Never hand-edit `version` in `package.json`: `npm version` updates `package.json` and `package-lock.json` together, commits `v<version>`, and creates the annotated tag.
+- If `package.json` was bumped by hand, resync the lockfile with `npm install --package-lock-only` and commit both files together. The `version` fields in `package-lock.json` are a snapshot of `package.json` and go stale otherwise (npm ignores them for resolution, so drift is silent).
+- Tag only released commits: annotated tags named `v<version>`, created on the release commit on `main` (normally the merge commit of the release PR), after tests pass. Never move or re-point a tag that has been pushed.
+- Push releases with `git push --follow-tags` (lightweight tags are not pushed by this flag).
+
+### Packaging
+
+- `npm run release:zip` only packages the current checkout into `release/<name>-v<version>.zip`; it does not bump the version or create tags.
+- The script refuses to run unless the worktree is clean and `HEAD` is exactly at tag `v<version>`, so a zip always corresponds to a tagged commit.
+- Rebuilding the same version is safe only while the tag stays on the same commit; a rebuild on a different commit must use a new version.
 
 ## Authoring conventions for new tests
 
